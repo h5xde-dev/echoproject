@@ -1,0 +1,1155 @@
+import { GameAudio } from '../core/audio';
+import { Input } from '../core/input';
+import { clamp } from '../core/math';
+import { Net } from '../net/net';
+import type { ActorState, EventMsg, HostMessage, RoundState, SnapshotMsg, WelcomeMsg } from '../net/protocol';
+import { Renderer } from '../render/renderer';
+import { buildArena } from './arenas';
+import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
+import { CONFIG, COLORS } from './config';
+import { generateMap } from './levelgen';
+import { GUN_LADDER, isArena, modeInfo, SHOP } from './modes';
+import { Sim, type PlayerInput } from './sim';
+import type { Buffs, Bullet, GameEvent, GameMode as MatchMode, MapData, PowerupKind, ShopItem } from './types';
+import { WEAPONS, type WeaponId } from './weapons';
+import type { Hud, HudPlate, HudScore } from '../ui/hud';
+
+export type GameMode = 'solo' | 'host' | 'client';
+
+export interface MatchOptions {
+  mode?: MatchMode;
+  /** Arena id (see arenas.ts). */
+  arena?: string;
+  /** Arena head count including humans (bots fill the rest). */
+  fighters?: number;
+}
+
+export interface DisplayActor {
+  id: number;
+  kind: 'player' | 'enemy';
+  name: string;
+  x: number;
+  z: number;
+  ang: number;
+  hp: number;
+  maxHp: number;
+  armor: number;
+  alive: boolean;
+  weapon: WeaponId;
+  weapons: WeaponId[];
+  buffs: Buffs;
+  shield: number;
+  grenades: number;
+  money: number;
+  tier: number;
+  tierKills: number;
+  ammo: number;
+  reloading: boolean;
+  flashOn: boolean;
+  slot: number;
+  isLocal: boolean;
+  moving: boolean;
+}
+
+interface PendingInput {
+  seq: number;
+  input: PlayerInput;
+}
+
+interface SnapFrame {
+  time: number;
+  actors: Map<number, ActorState>;
+}
+
+const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
+
+const POWERUP_TEXT: Record<PowerupKind, string> = {
+  medkit: 'Аптечка +' + CONFIG.powerups.medkitHeal,
+  armor: 'Броня +' + CONFIG.powerups.armorAmount,
+  damage: 'Усиленный урон',
+  speed: 'Скорость',
+  rapid: 'Скорострельность',
+};
+
+/** Error below this is smoothed out; above it the player snaps (teleport). */
+const SNAP_DISTANCE = 2.5;
+
+export class Game {
+  readonly renderer: Renderer;
+  readonly input = new Input();
+  readonly audio = new GameAudio();
+  readonly net = new Net();
+
+  mode: GameMode = 'solo';
+  matchMode: MatchMode = 'coop';
+  isAuthority = true;
+  localId = 1;
+  localName = 'оператор';
+  map!: MapData;
+  sim!: Sim;
+  roomCode = '';
+
+  private hud: Hud;
+  private running = false;
+  private lastTime = 0;
+  private accumulator = 0;
+  private tick = 0;
+  private inputSeq = 0;
+  private arena = 'sklad';
+
+  private display = new Map<number, DisplayActor>();
+  private clientBullets: Bullet[] = [];
+  private latestActors = new Map<number, ActorState>();
+  private snapBuffer: SnapFrame[] = [];
+  private pendingInputs: PendingInput[] = [];
+  private clientInputs = new Map<string, { input: PlayerInput; lastAck: number }>();
+  private clientNames = new Map<number, string>();
+  private frameMove = { x: 0, z: 0 };
+  private frameAim = 0;
+  private frameFire = false;
+  private pending = { reload: false, interact: false, flashlight: false, slot: -1, grenade: false, buy: '' as ShopItem | '' };
+  private frameThrow = 10;
+  private buyOpen = false;
+  private gameOver = false;
+  private lastFootstep = 0;
+  private enemyCount = 0;
+  private scores: [number, number, number, number][] = [];
+  private timeLeft = 0;
+  private roundState: RoundState | null = null;
+
+  // Interpolation state.
+  /** Authority: positions at the previous fixed tick, for render blending. */
+  private prevTick = new Map<number, { x: number; z: number; ang: number }>();
+  /** Client: estimated (host time - local time), smoothed. */
+  private clockOffset = 0;
+  private clockReady = false;
+  private renderTime = 0;
+  /** Client: local player's position at the previous prediction tick. */
+  private mirrorPrev = { x: 0, z: 0 };
+  /** Client: visual offset left by a reconciliation correction; decays. */
+  private correction = { x: 0, z: 0 };
+
+  constructor(container: HTMLElement, hud: Hud, opts: { shadows?: boolean } = {}) {
+    this.hud = hud;
+    this.renderer = new Renderer(container, opts);
+    this.input.attach(container);
+  }
+
+  // ------------------------------------------------------------- lifecycle
+
+  startSolo(name: string, opts: MatchOptions = {}): void {
+    this.mode = 'solo';
+    this.isAuthority = true;
+    this.localName = name;
+    this.localId = 1;
+    this.beginAuthoritySession(opts);
+  }
+
+  async startHost(name: string, opts: MatchOptions = {}): Promise<string> {
+    this.mode = 'host';
+    this.isAuthority = true;
+    this.localName = name;
+    this.localId = 1;
+    this.beginAuthoritySession(opts);
+
+    this.roomCode = await this.net.host({
+      onClientInput: (input, playerId) => {
+        const state = this.clientInputs.get(String(playerId));
+        if (state) {
+          state.input = input;
+          state.lastAck = input.seq;
+        }
+      },
+      onClientHello: (name, playerId) => this.onClientHello(name, playerId),
+      onClientLeave: (playerId) => this.onClientLeave(playerId),
+      onStatus: (text) => this.hud.setStatus(text),
+      onError: (text) => this.hud.setError(text),
+    });
+    this.hud.setStatus(`Комната ${this.roomCode} — ждём напарника`);
+    return this.roomCode;
+  }
+
+  async startClient(name: string, code: string): Promise<void> {
+    this.mode = 'client';
+    this.isAuthority = false;
+    this.localName = name;
+
+    await this.net.join(code, {
+      onWelcome: (msg) => this.onWelcome(msg),
+      onSnapshot: (msg) => this.onSnapshot(msg),
+      onEvent: (msg) => this.onEvent(msg),
+      onStart: () => undefined,
+      // Co-op outcome is shared; deathmatch outcome comes per player from the victory event.
+      onOver: (msg) => {
+        if (this.matchMode === 'coop') this.endGame(msg.win, msg.text);
+      },
+      onJoined: (msg) => {
+        this.clientNames.set(msg.playerId, msg.name);
+        this.hud.message(`${msg.name} в эфире`, 'info');
+      },
+      onLeft: (msg) => {
+        this.clientNames.delete(msg.playerId);
+        this.hud.message('Оператор вышел из эфира', 'warn');
+      },
+      onStatus: (text) => this.hud.setStatus(text),
+      onError: (text) => this.hud.setError(text),
+      onLatency: (ms) => this.hud.setLatency(ms),
+    });
+
+    this.net.send({ t: 'hello', name });
+  }
+
+  private beginAuthoritySession(opts: MatchOptions): void {
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    this.matchMode = opts.mode ?? 'coop';
+    this.arena = opts.arena ?? 'sklad';
+    this.map = isArena(this.matchMode) ? buildArena(this.arena, seed, this.matchMode) : generateMap(seed);
+    this.sim = new Sim(this.map);
+    if (opts.fighters) this.sim.fighters = opts.fighters;
+    this.sim.addPlayer('local', this.localName, this.localId);
+    this.sim.fillBots();
+    this.setupWorld();
+    this.startLoop();
+  }
+
+  private setupWorld(): void {
+    this.renderer.buildMap(this.map);
+    this.renderer.setHostility((id) => this.isHostile(id));
+    this.hud.setRooms(this.map.rooms.length);
+    this.hud.setMode(this.matchMode, this.map.name, modeInfo(this.matchMode).title);
+    this.hud.onBuy = (item) => {
+      this.pending.buy = item;
+    };
+  }
+
+  /** Starts the render/simulation loop exactly once. */
+  private startLoop(): void {
+    this.running = true;
+    this.lastTime = performance.now();
+    if (this.loopHandle === null) {
+      this.loopHandle = requestAnimationFrame(this.loop);
+    }
+  }
+
+  private loopHandle: number | null = null;
+
+  /** Whose soldiers the fog of war hides from this player. */
+  private isHostile(id: number): boolean {
+    if (id === this.localId) return false;
+    if (isArena(this.matchMode)) return true;
+    return id >= 1000;
+  }
+
+  // ------------------------------------------------------------------ host
+
+  private onClientHello(name: string, playerId: number): void {
+    this.sim.addPlayer(`c${playerId}`, name, playerId);
+    this.sim.fillBots();
+    this.clientNames.set(playerId, name);
+    this.clientInputs.set(String(playerId), {
+      input: {
+        seq: 0,
+        moveX: 0,
+        moveZ: 0,
+        aim: 0,
+        fire: false,
+        reload: false,
+        interact: false,
+        flashlight: false,
+        slot: -1,
+        dt: CONFIG.tickDt,
+      },
+      lastAck: 0,
+    });
+
+    const welcome: WelcomeMsg = {
+      t: 'welcome',
+      playerId,
+      name,
+      seed: this.map.seed,
+      map: this.map,
+      snapshot: this.buildSnapshot(),
+      colors: { [String(playerId)]: PLAYER_COLORS[(playerId - 1) % PLAYER_COLORS.length] },
+    };
+    this.net.sendTo(playerId, welcome);
+
+    const joined: HostMessage = { t: 'joined', playerId, name };
+    this.net.broadcast(joined);
+    this.hud.message(`${name} подключился`, 'good');
+  }
+
+  private onClientLeave(playerId: number): void {
+    this.sim.removeActor(playerId);
+    this.sim.fillBots();
+    this.clientNames.delete(playerId);
+    this.clientInputs.delete(String(playerId));
+    this.net.broadcast({ t: 'left', playerId });
+    this.hud.message('Оператор отключился', 'warn');
+  }
+
+  private buildSnapshot(): SnapshotMsg {
+    const actors: ActorState[] = [];
+    for (const a of this.sim.actors.values()) {
+      actors.push({
+        id: a.id,
+        kind: a.kind,
+        peerId: a.peerId,
+        name: a.name,
+        x: a.x,
+        z: a.z,
+        ang: a.ang,
+        hp: a.hp,
+        maxHp: a.maxHp,
+        armor: a.armor,
+        alive: a.alive,
+        weapon: a.weapon,
+        weapons: a.weapons,
+        buffs: a.buffs,
+        shield: a.shield,
+        grenades: a.grenades,
+        money: a.money,
+        tier: a.tier,
+        tierKills: a.tierKills,
+        ammo: a.ammo,
+        reloading: a.reloading,
+        flashOn: a.flashOn,
+        slot: a.slot,
+      });
+    }
+    const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
+    const props = this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive }));
+    const doors = this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT }));
+    const ack: Record<string, number> = {};
+    for (const [key, state] of this.clientInputs) ack[key] = state.lastAck;
+
+    return {
+      t: 'snap',
+      tick: this.tick,
+      time: this.sim.time,
+      room: this.sim.roomIndex,
+      phase: this.sim.roomPhase,
+      actors,
+      bullets,
+      props,
+      doors,
+      pickups: this.sim.pickups.map((p) => ({ id: p.id, weapon: p.weapon, x: p.x, z: p.z })),
+      powerups: this.sim.powerups.map((p) => ({ id: p.id, kind: p.kind, x: p.x, z: p.z, active: p.active })),
+      grenades: this.sim.grenades,
+      mode: this.matchMode,
+      scores: this.scoreRows(),
+      round: this.localRoundState(),
+      timeLeft: this.sim.timeLeft,
+      ack,
+    };
+  }
+
+  private scoreRows(): [number, number, number, number][] {
+    return [...this.sim.scores].map(([id, s]) => [id, s.kills, s.deaths, s.rounds]);
+  }
+
+  /** Competitive round info (host: from the sim; client: from snapshots). */
+  private localRoundState(): RoundState | null {
+    if (!this.isAuthority) return this.roundState;
+    if (this.matchMode !== 'comp') return null;
+    return { n: this.sim.round, phase: this.sim.roundPhase, t: Math.max(0, this.sim.roundT), canBuy: this.sim.canBuy };
+  }
+
+  // ---------------------------------------------------------------- client
+
+  private onWelcome(msg: WelcomeMsg): void {
+    this.map = msg.map;
+    this.matchMode = msg.map.mode ?? 'coop';
+    this.localId = msg.playerId;
+    this.sim = new Sim(this.map);
+    const actor = this.sim.addPlayer('local', this.localName, msg.playerId);
+    const me = msg.snapshot.actors.find((a) => a.id === msg.playerId);
+    if (me) {
+      actor.x = me.x;
+      actor.z = me.z;
+    }
+    this.mirrorPrev = { x: actor.x, z: actor.z };
+    this.setupWorld();
+    this.startLoop();
+    this.onSnapshot(msg.snapshot);
+    this.hud.message('Соединение установлено', 'good');
+  }
+
+  private onSnapshot(msg: SnapshotMsg): void {
+    this.latestActors.clear();
+    for (const a of msg.actors) this.latestActors.set(a.id, a);
+
+    // Clock: estimate host time as local time + offset. The offset follows
+    // new samples slowly, so jittery packets do not make remote players jump.
+    const nowSec = performance.now() / 1000;
+    const sample = msg.time - nowSec;
+    if (!this.clockReady) {
+      this.clockOffset = sample;
+      this.clockReady = true;
+      this.renderTime = msg.time - CONFIG.interpDelayMs / 1000;
+    } else if (Math.abs(sample - this.clockOffset) > 0.5) {
+      this.clockOffset = sample; // big stall or tab switch: resync
+    } else {
+      // Packets that arrive late only pull the clock back gently.
+      this.clockOffset += (sample - this.clockOffset) * (sample > this.clockOffset ? 0.12 : 0.04);
+    }
+
+    const frame: SnapFrame = { time: msg.time, actors: new Map() };
+    for (const a of msg.actors) frame.actors.set(a.id, a);
+    this.snapBuffer.push(frame);
+    if (this.snapBuffer.length > 40) this.snapBuffer.shift();
+
+    this.sim.syncProps(msg.props);
+    this.sim.syncDoors(msg.doors);
+    this.sim.syncItems(msg.pickups ?? [], msg.powerups ?? [], msg.grenades ?? []);
+    this.roundState = msg.round ?? null;
+    this.sim.roomIndex = msg.room;
+    this.sim.roomPhase = msg.phase;
+    this.scores = msg.scores ?? [];
+    this.timeLeft = msg.timeLeft ?? 0;
+
+    // Reconcile the locally predicted player: rewind to the host state,
+    // replay unacknowledged input, and keep the visual jump as a decaying
+    // correction offset instead of snapping.
+    const local = msg.actors.find((a) => a.id === this.localId);
+    const mirror = this.sim.actors.get(this.localId);
+    if (local && mirror) {
+      const beforeX = mirror.x;
+      const beforeZ = mirror.z;
+      const acked = msg.ack[String(this.localId)] ?? 0;
+      this.pendingInputs = this.pendingInputs.filter((p) => p.seq > acked);
+      mirror.x = local.x;
+      mirror.z = local.z;
+      mirror.vx = 0;
+      mirror.vz = 0;
+      mirror.alive = local.alive;
+      mirror.buffs = { ...local.buffs };
+      this.sim.applySpeed(mirror);
+      for (const p of this.pendingInputs) {
+        this.sim.moveActor(mirror, p.input.moveX, p.input.moveZ, p.input.dt);
+      }
+      const ex = beforeX - mirror.x;
+      const ez = beforeZ - mirror.z;
+      if (Math.hypot(ex, ez) < SNAP_DISTANCE) {
+        // Shift both blend endpoints, so the drawn position does not move
+        // this frame; the correction then fades out over a few frames.
+        this.correction.x += ex;
+        this.correction.z += ez;
+        this.mirrorPrev.x -= ex;
+        this.mirrorPrev.z -= ez;
+      } else {
+        this.correction.x = 0;
+        this.correction.z = 0;
+        this.mirrorPrev = { x: mirror.x, z: mirror.z };
+      }
+    }
+
+    // Bullets that no longer exist on the host are dropped locally.
+    const alive = new Set(msg.bullets.map((b) => b.id));
+    this.clientBullets = this.clientBullets.filter((b) => alive.has(b.id));
+  }
+
+  private onEvent(msg: EventMsg): void {
+    this.applyEvent(msg.event);
+  }
+
+  // ---------------------------------------------------------------- events
+
+  private nameOf(id: number | undefined): string {
+    if (id === undefined) return '';
+    if (id === this.localId) return 'вы';
+    const d = this.display.get(id) ?? this.sim.actors.get(id);
+    return d?.name ?? '';
+  }
+
+  private applyEvent(event: GameEvent): void {
+    switch (event.type) {
+      case 'shot': {
+        const weapon = event.weapon ?? 'pistol';
+        const def = WEAPONS[weapon];
+        const owner = event.ownerId ?? 0;
+        const isLocalPlayer = owner === this.localId;
+        const size = def.flashSize;
+        this.renderer.muzzleFlash(event.x ?? 0, event.z ?? 0, event.dirX ?? 0, event.dirZ ?? 0, size);
+        this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
+        const dist = this.localActorPosition(event.x ?? 0, event.z ?? 0);
+        this.audio.shot(size, dist);
+        if (isLocalPlayer) {
+          this.renderer.shake(def.shake);
+          this.hud.kick(0.25 + def.shake * 0.5);
+        }
+        this.renderer.ensureActor(owner, this.colorFor(owner), this.isPlayerId(owner)).triggerFlash();
+        if (!this.isAuthority) this.spawnClientBullets(event);
+        break;
+      }
+      case 'impact':
+        this.renderer.impact(event.x ?? 0, event.z ?? 0);
+        this.audio.impact();
+        break;
+      case 'explosion':
+        this.renderer.explosion(event.x ?? 0, event.z ?? 0);
+        this.renderer.blastRagdolls(event.x ?? 0, event.z ?? 0);
+        this.audio.explosion();
+        this.renderer.shake(1.1);
+        break;
+      case 'hurt': {
+        this.renderer.blood(event.x ?? 0, event.z ?? 0);
+        this.audio.hurt();
+        if (event.by === this.localId && event.ownerId !== this.localId) this.hud.hitMarker(false);
+        if (event.ownerId === this.localId) {
+          this.renderer.shake(0.35);
+          const self = this.localDisplay();
+          const src = event.by !== undefined ? this.display.get(event.by) : undefined;
+          if (self && src && src.id !== self.id) {
+            // Top-down camera: screen x = world x, screen y (down) = world z.
+            this.hud.damageFrom(Math.atan2(src.z - self.z, src.x - self.x));
+          }
+        }
+        break;
+      }
+      case 'death': {
+        this.renderer.blood(event.x ?? 0, event.z ?? 0);
+        // Throw the body away from whoever (or whatever) dealt the blow.
+        const victim = event.ownerId !== undefined ? this.display.get(event.ownerId) : undefined;
+        const killer = event.by !== undefined ? this.display.get(event.by) : undefined;
+        if (victim && killer && killer.id !== victim.id) {
+          const weapon = WEAPONS[killer.weapon];
+          const power = 2.5 + weapon.damage * 0.06;
+          this.renderer
+            .ensureActor(victim.id, this.colorFor(victim.id), victim.kind === 'player')
+            .setDeathImpulse(victim.x - killer.x, victim.z - killer.z, Math.min(7, power));
+        }
+        this.audio.death();
+        if (event.by === this.localId && event.ownerId !== this.localId) this.hud.hitMarker(true);
+        if (isArena(this.matchMode)) {
+          const by = event.by === event.ownerId ? '' : this.nameOf(event.by);
+          this.hud.killFeed(by, this.nameOf(event.ownerId), event.by === this.localId, event.ownerId === this.localId);
+        } else if (event.by === this.localId && event.ownerId !== this.localId) {
+          this.hud.message('Противник нейтрализован', 'good');
+        } else if (event.ownerId === this.localId) {
+          this.hud.message('Вы ранены — эвакуация на безопасную точку', 'warn');
+        }
+        break;
+      }
+      case 'throw':
+        this.audio.pickup();
+        break;
+      case 'buy':
+        if (event.ownerId === this.localId) {
+          this.audio.pickup();
+          this.hud.message(`Куплено: ${SHOP.find((e) => e.item === event.text)?.name ?? ''}`, 'good');
+        }
+        break;
+      case 'ladder':
+        if (event.ownerId === this.localId) {
+          this.audio.powerup();
+          this.hud.banner(`${WEAPONS[event.weapon ?? 'pistol'].name.toUpperCase()}`, `Ступень ${Number(event.text) + 1} из ${GUN_LADDER.length}`);
+        } else {
+          this.hud.message(`${this.nameOf(event.ownerId)}: ${WEAPONS[event.weapon ?? 'pistol'].name}`, 'warn');
+        }
+        break;
+      case 'round': {
+        const st = this.localRoundState();
+        if (event.text === 'start') {
+          this.renderer.resetCamera();
+          this.hud.banner(`РАУНД ${st?.n ?? ''}`, 'Закупка — B');
+        } else if (event.text === 'live') {
+          this.buyOpen = false;
+          this.hud.banner('В БОЙ', '');
+        } else if (event.text === 'end') {
+          const me = event.ownerId === this.localId;
+          this.hud.banner(me ? 'РАУНД ЗА ВАМИ' : event.ownerId !== undefined ? `РАУНД: ${this.nameOf(event.ownerId).toUpperCase()}` : 'НИЧЬЯ', '');
+          if (me) this.audio.powerup();
+        }
+        break;
+      }
+      case 'respawn':
+        if (event.ownerId === this.localId) {
+          this.renderer.resetCamera();
+          this.audio.pickup();
+        }
+        break;
+      case 'reload':
+        if (event.ownerId === this.localId || this.localActorPosition(event.x ?? 0, event.z ?? 0) < 12) this.audio.reload();
+        break;
+      case 'pickup':
+        if (event.ownerId === this.localId) {
+          this.audio.pickup();
+          this.hud.message(`Получено: ${WEAPONS[event.weapon ?? 'pistol'].name}`, 'good');
+        }
+        break;
+      case 'powerup':
+        this.renderer.powerupTaken(event.x ?? 0, event.z ?? 0, event.powerup ?? 'medkit');
+        if (event.ownerId === this.localId) {
+          this.audio.powerup();
+          this.hud.message(POWERUP_TEXT[event.powerup ?? 'medkit'], 'good');
+        }
+        break;
+      case 'roomClear':
+        this.audio.door();
+        this.hud.message(event.text === '1' ? 'Выдвигайтесь — дверь открыта' : 'Комната зачищена — дверь открыта', 'good');
+        break;
+      case 'roomEnter':
+        this.hud.message(`Комната ${event.text}`, 'warn');
+        break;
+      case 'victory':
+        if (isArena(this.matchMode)) {
+          const win = event.ownerId === this.localId;
+          this.endGame(win, event.text ?? '', win ? 'ПОБЕДА' : 'МАТЧ ОКОНЧЕН');
+        } else {
+          this.endGame(true, event.text ?? 'ОБЪЕКТ ЗАЧИЩЕН');
+        }
+        break;
+    }
+  }
+
+  private spawnClientBullets(event: GameEvent): void {
+    const owner = event.ownerId ?? 0;
+    const weapon = event.weapon ?? 'pistol';
+    const def = WEAPONS[weapon];
+    const list = event.pellets ?? [];
+    const count = list.length;
+    for (let i = 0; i < count; i++) {
+      const p = list[i];
+      // Bullet ids must match the host exactly, otherwise the snapshot
+      // reconciliation drops the local replica right after it is created.
+      const baseId = event.id ?? `c${owner}-${this.clientBullets.length}`;
+      this.clientBullets.push({
+        id: count > 1 ? `${baseId}-${i}` : baseId,
+        ownerId: owner,
+        ownerKind: owner >= 1000 ? 'enemy' : 'player',
+        x: (event.x ?? 0) + p.dx * 0.4,
+        z: (event.z ?? 0) + p.dz * 0.4,
+        vx: p.dx * p.speed,
+        vz: p.dz * p.speed,
+        speed: p.speed,
+        damage: def.damage,
+        damageMul: 1,
+        life: 3,
+        weapon,
+        color: owner >= 1000 ? 0xff7a5c : def.color,
+        range: 0,
+      });
+    }
+  }
+
+  private endGame(win: boolean, text: string, title?: string): void {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    this.hud.showGameOver(win, text, title, isArena(this.matchMode) ? this.scoreTable() : null);
+    if (this.isAuthority) this.net.broadcast({ t: 'over', win, text });
+  }
+
+  // ------------------------------------------------------------------ loop
+
+  private loop = (now: number): void => {
+    this.loopHandle = requestAnimationFrame(this.loop);
+    if (!this.running) {
+      this.lastTime = now;
+      return;
+    }
+
+    const dt = Math.min(0.1, (now - this.lastTime) / 1000);
+    this.lastTime = now;
+
+    this.sampleInput();
+    this.accumulator += dt;
+    let steps = 0;
+    while (this.accumulator >= CONFIG.tickDt && steps < 5) {
+      this.accumulator -= CONFIG.tickDt;
+      this.fixedStep(CONFIG.tickDt);
+      steps++;
+    }
+    if (steps === 5) this.accumulator = 0;
+
+    this.updateDisplay(dt);
+    this.renderer.update(dt, this.playerLights(), isArena(this.matchMode) ? 1 : 2, this.beams());
+    this.renderer.render();
+    this.updateHud();
+    this.updateFootsteps(dt);
+    this.hud.tick(dt);
+    this.input.endFrame();
+  };
+
+  private sampleInput(): void {
+    const move = this.input.moveVector();
+    this.frameMove.x = move.x;
+    this.frameMove.z = move.z;
+    this.frameFire = this.input.mouseDown && !this.buyOpen;
+
+    if (this.input.consume('reload')) this.pending.reload = true;
+    if (this.input.consume('interact')) this.pending.interact = true;
+    if (this.input.consume('flashlight')) this.pending.flashlight = true;
+    if (this.input.consume('grenade')) this.pending.grenade = true;
+
+    // Competitive shop: B toggles it during the buy window; while open,
+    // number keys buy instead of switching weapons.
+    const round = this.localRoundState();
+    const canBuy = !!round?.canBuy && !!this.localDisplay()?.alive;
+    if (this.input.consume('buy') && canBuy) this.buyOpen = !this.buyOpen;
+    if (!canBuy) this.buyOpen = false;
+    for (let i = 0; i < 6; i++) {
+      if (!this.input.consume(`slot${i + 1}` as never)) continue;
+      if (this.buyOpen) this.pending.buy = SHOP[i].item;
+      else if (i < 5) this.pending.slot = i;
+    }
+    this.hud.showBuyMenu(this.buyOpen, this.localDisplay()?.money ?? 0, round?.canBuy ? round : null);
+    this.hud.showScores(this.input.keys.has('Tab'));
+
+    this.renderer.setPointer(this.input.mouseX, this.input.mouseY);
+    const self = this.localDisplay();
+    if (self) {
+      const ground = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
+      this.frameAim = Math.atan2(ground.z - self.z, ground.x - self.x);
+      this.frameThrow = Math.hypot(ground.z - self.z, ground.x - self.x);
+    }
+  }
+
+  private buildInput(): PlayerInput {
+    const input: PlayerInput = {
+      seq: ++this.inputSeq,
+      moveX: this.frameMove.x,
+      moveZ: this.frameMove.z,
+      aim: this.frameAim,
+      fire: this.frameFire,
+      reload: this.pending.reload,
+      interact: this.pending.interact,
+      flashlight: this.pending.flashlight,
+      slot: this.pending.slot,
+      dt: CONFIG.tickDt,
+      grenade: this.pending.grenade,
+      throwDist: this.frameThrow,
+      buy: this.pending.buy,
+    };
+    this.pending.reload = false;
+    this.pending.interact = false;
+    this.pending.flashlight = false;
+    this.pending.slot = -1;
+    this.pending.grenade = false;
+    this.pending.buy = '';
+    return input;
+  }
+
+  private fixedStep(dt: number): void {
+    const input = this.buildInput();
+    this.tick++;
+
+    if (this.isAuthority) {
+      // Remember where everyone was, so frames between ticks can blend.
+      for (const a of this.sim.actors.values()) {
+        const p = this.prevTick.get(a.id);
+        if (p) {
+          p.x = a.x;
+          p.z = a.z;
+          p.ang = a.ang;
+        } else {
+          this.prevTick.set(a.id, { x: a.x, z: a.z, ang: a.ang });
+        }
+      }
+
+      const local = this.sim.actors.get(this.localId);
+      if (local) this.sim.applyInput(local, input);
+
+      for (const [key, state] of this.clientInputs) {
+        const actor = this.sim.actors.get(Number(key));
+        if (actor) this.sim.applyInput(actor, state.input);
+      }
+
+      this.sim.step(dt);
+      this.drainSimEvents();
+
+      if (this.tick % Math.round(1 / CONFIG.snapshotRate / CONFIG.tickDt) === 0) {
+        this.net.broadcast(this.buildSnapshot());
+      }
+    } else {
+      const mirror = this.sim.actors.get(this.localId);
+      if (mirror) {
+        this.mirrorPrev.x = mirror.x;
+        this.mirrorPrev.z = mirror.z;
+        mirror.ang = input.aim;
+        if (mirror.alive) this.sim.moveActor(mirror, input.moveX, input.moveZ, dt);
+      }
+      this.pendingInputs.push({ seq: input.seq, input });
+      if (this.pendingInputs.length > 240) this.pendingInputs.shift();
+      this.net.send({ t: 'input', ...input });
+
+      this.simulateClientBullets(dt);
+    }
+  }
+
+  private drainSimEvents(): void {
+    const events = this.sim.drainEvents();
+    for (const event of events) {
+      this.applyEvent(event);
+      this.net.broadcast({ t: 'evt', event });
+    }
+  }
+
+  private simulateClientBullets(dt: number): void {
+    const actors = new Map<number, BulletActor>();
+    for (const st of this.latestActors.values()) {
+      actors.set(st.id, {
+        id: st.id,
+        x: st.x,
+        z: st.z,
+        radius: st.kind === 'player' ? CONFIG.player.radius : CONFIG.enemy.radius,
+        alive: st.alive,
+      });
+    }
+    const ctx: BulletCtx = {
+      world: this.sim.world,
+      props: this.sim.props,
+      actors,
+      scratch: [],
+    };
+    for (const hit of updateBullets(this.clientBullets, ctx, dt)) {
+      if (hit.kind === 'static') {
+        this.renderer.impact(hit.x, hit.z);
+        this.audio.impact();
+      } else if (hit.kind === 'actor') {
+        this.renderer.blood(hit.x, hit.z);
+      }
+    }
+  }
+
+  // --------------------------------------------------------------- display
+
+  private updateDisplay(dt: number): void {
+    // Fraction of the way to the next fixed tick: frames between ticks blend.
+    const alpha = clamp(this.accumulator / CONFIG.tickDt, 0, 1);
+
+    if (this.isAuthority) {
+      this.display.clear();
+      for (const a of this.sim.actors.values()) {
+        const prev = this.prevTick.get(a.id);
+        // Teleports (spawns) are not blended.
+        const blend = prev && Math.hypot(prev.x - a.x, prev.z - a.z) < 3;
+        const isLocal = a.id === this.localId;
+        this.display.set(a.id, {
+          id: a.id,
+          kind: a.kind,
+          name: a.name,
+          x: blend ? prev!.x + (a.x - prev!.x) * alpha : a.x,
+          z: blend ? prev!.z + (a.z - prev!.z) * alpha : a.z,
+          // The local aim is shown as it is right now, not as of the last tick.
+          ang: isLocal ? this.frameAim : blend ? prev!.ang + shortestAngle(prev!.ang, a.ang) * alpha : a.ang,
+          hp: a.hp,
+          maxHp: a.maxHp,
+          armor: a.armor,
+          alive: a.alive,
+          weapon: a.weapon,
+          weapons: a.weapons,
+          buffs: a.buffs,
+          shield: a.shield,
+          grenades: a.grenades,
+          money: a.money,
+          tier: a.tier,
+          tierKills: a.tierKills,
+          ammo: a.ammo,
+          reloading: a.reloading,
+          flashOn: a.flashOn,
+          slot: a.slot,
+          isLocal,
+          moving: a.moving,
+        });
+      }
+      for (const id of this.prevTick.keys()) if (!this.sim.actors.has(id)) this.prevTick.delete(id);
+    } else {
+      this.interpolate(dt, alpha);
+    }
+
+    for (const d of this.display.values()) {
+      const visual = this.renderer.ensureActor(d.id, this.colorFor(d.id), d.kind === 'player');
+      visual.update(d, dt);
+    }
+    // Actors gone from the simulation (left, cleared bodies) leave the scene.
+    this.renderer.pruneActors(this.display);
+
+    // Bullets advance between ticks too.
+    const ahead = this.accumulator;
+    const src = this.isAuthority ? this.sim.bullets : this.clientBullets;
+    this.renderer.syncTracers(
+      src.map((b) => ({ x: b.x + b.vx * ahead, z: b.z + b.vz * ahead, vx: b.vx, vz: b.vz, color: b.color })),
+    );
+    this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive })));
+    this.renderer.syncDoors(this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT })));
+    this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
+    this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
+  }
+
+  /**
+   * Client view: remote actors are drawn `interpDelay` in the past, blended
+   * between the two snapshots around that time (briefly extrapolated if the
+   * next one is late). The local player is the prediction, blended between
+   * prediction ticks plus a decaying correction offset.
+   */
+  private interpolate(dt: number, alpha: number): void {
+    if (this.snapBuffer.length === 0) return;
+    const nowSec = performance.now() / 1000;
+    const target = nowSec + this.clockOffset - CONFIG.interpDelayMs / 1000;
+    // Advance smoothly; never go backwards, catch up gradually.
+    this.renderTime = Math.max(this.renderTime + dt * 0.5, Math.min(this.renderTime + dt * 1.5, target));
+    if (Math.abs(this.renderTime - target) > 0.3) this.renderTime = target;
+    const t = this.renderTime;
+
+    const buf = this.snapBuffer;
+    let older = buf[0];
+    let newer = buf[0];
+    for (let i = buf.length - 1; i > 0; i--) {
+      if (buf[i - 1].time <= t) {
+        older = buf[i - 1];
+        newer = buf[i];
+        break;
+      }
+    }
+    let k: number;
+    if (t >= buf[buf.length - 1].time && buf.length >= 2) {
+      // Late snapshot: extrapolate along the last motion, at most 100 ms.
+      older = buf[buf.length - 2];
+      newer = buf[buf.length - 1];
+      const span = newer.time - older.time;
+      k = span > 1e-6 ? 1 + Math.min(0.1, t - newer.time) / span : 1;
+    } else {
+      const span = newer.time - older.time;
+      k = span > 1e-6 ? clamp((t - older.time) / span, 0, 1) : 1;
+    }
+
+    const decay = Math.exp(-12 * dt);
+    this.correction.x *= decay;
+    this.correction.z *= decay;
+
+    this.display.clear();
+    for (const [id, b] of newer.actors) {
+      const a = older.actors.get(id) ?? b;
+      // No blending across deaths/respawns (teleports).
+      const jump = a.alive !== b.alive || Math.hypot(a.x - b.x, a.z - b.z) > 4;
+      const kk = jump ? 1 : k;
+      const d: DisplayActor = {
+        id,
+        kind: b.kind,
+        name: b.name,
+        x: a.x + (b.x - a.x) * kk,
+        z: a.z + (b.z - a.z) * kk,
+        ang: a.ang + shortestAngle(a.ang, b.ang) * Math.min(1, kk),
+        hp: b.hp,
+        maxHp: b.maxHp,
+        armor: b.armor ?? 0,
+        alive: b.alive,
+        weapon: b.weapon,
+        weapons: b.weapons ?? [b.weapon],
+        buffs: b.buffs ?? { damage: 0, speed: 0, rapid: 0 },
+        shield: b.shield ?? 0,
+        grenades: b.grenades ?? 0,
+        money: b.money ?? 0,
+        tier: b.tier ?? 0,
+        tierKills: b.tierKills ?? 0,
+        ammo: b.ammo,
+        reloading: b.reloading,
+        flashOn: b.flashOn,
+        slot: b.slot,
+        isLocal: id === this.localId,
+        moving: false,
+      };
+      if (d.isLocal) {
+        const mirror = this.sim.actors.get(this.localId);
+        const latest = this.latestActors.get(this.localId);
+        if (mirror) {
+          d.x = this.mirrorPrev.x + (mirror.x - this.mirrorPrev.x) * alpha + this.correction.x;
+          d.z = this.mirrorPrev.z + (mirror.z - this.mirrorPrev.z) * alpha + this.correction.z;
+        }
+        d.ang = this.frameAim;
+        // Own stats: newest values, not the interpolation-delayed ones.
+        if (latest) {
+          d.hp = latest.hp;
+          d.alive = latest.alive;
+          d.ammo = latest.ammo;
+          d.reloading = latest.reloading;
+          d.weapon = latest.weapon;
+          d.flashOn = latest.flashOn;
+          d.money = latest.money ?? 0;
+          d.grenades = latest.grenades ?? 0;
+        }
+      }
+      this.display.set(id, d);
+    }
+  }
+
+  private isPlayerId(id: number): boolean {
+    return id < 1000;
+  }
+
+  private colorFor(id: number): number {
+    if (id >= 1000) return COLORS.enemy;
+    return PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length];
+  }
+
+  private localDisplay(): DisplayActor | null {
+    return this.display.get(this.localId) ?? null;
+  }
+
+  private localActorPosition(x: number, z: number): number {
+    const self = this.localDisplay();
+    if (!self) return 0;
+    return Math.hypot(self.x - x, self.z - z);
+  }
+
+  /**
+   * Flashlights to draw (local first: the renderer pairs spotlights by
+   * index). In deathmatch only the local player's sight counts as vision.
+   */
+  private playerLights(): { x: number; z: number; ang: number; flashOn: boolean; alive: boolean }[] {
+    const out: { id: number; x: number; z: number; ang: number; flashOn: boolean; alive: boolean }[] = [];
+    for (const d of this.display.values()) {
+      if (d.kind !== 'player') continue;
+      out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive });
+    }
+    out.sort((a, b) => (a.id === this.localId ? 0 : 1) - (b.id === this.localId ? 0 : 1));
+    return out.slice(0, 2);
+  }
+
+  /**
+   * Flashlight beams of hostile soldiers: drawn above the fog of war, so a
+   * lit flashlight gives its owner away even when the body is hidden.
+   */
+  private beams(): { x: number; z: number; ang: number }[] {
+    const out: { x: number; z: number; ang: number }[] = [];
+    for (const d of this.display.values()) {
+      if (d.alive && d.flashOn && this.isHostile(d.id)) out.push({ x: d.x, z: d.z, ang: d.ang });
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------------- hud
+
+  private updateFootsteps(dt: number): void {
+    const self = this.localDisplay();
+    const moving = self && this.frameMove.x * this.frameMove.x + this.frameMove.z * this.frameMove.z > 0.01;
+    if (!self || !self.alive || !moving) {
+      this.lastFootstep = 0;
+      return;
+    }
+    this.lastFootstep -= dt;
+    if (this.lastFootstep <= 0) {
+      this.audio.step();
+      this.lastFootstep = self.buffs.speed > 0 ? 0.32 : 0.42;
+    }
+  }
+
+  private scoreTable(): HudScore[] {
+    const rows = this.isAuthority ? this.scoreRows() : this.scores;
+    return rows
+      .map(([id, kills, deaths, rounds]) => ({
+        name: id === this.localId ? `${this.nameOf(id) === 'вы' ? this.localName : this.nameOf(id)} (вы)` : this.nameOf(id),
+        kills,
+        deaths,
+        rounds: rounds ?? 0,
+        tier: this.tierOf(id),
+        isLocal: id === this.localId,
+        isBot: id >= 1000,
+      }))
+      .sort((a, b) =>
+        this.matchMode === 'comp'
+          ? b.rounds - a.rounds || b.kills - a.kills
+          : this.matchMode === 'gun'
+            ? b.tier - a.tier || b.kills - a.kills
+            : b.kills - a.kills || a.deaths - b.deaths,
+      );
+  }
+
+  private tierOf(id: number): number {
+    const a = this.display.get(id);
+    return a ? a.tier * 10 + a.tierKills : 0;
+  }
+
+  private updateHud(): void {
+    const self = this.localDisplay();
+    const cameraTarget = self ?? { x: this.map.spawnX, z: this.map.spawnZ };
+    this.renderer.setCameraTarget(cameraTarget.x, cameraTarget.z);
+
+    if (!self) return;
+
+    const def = WEAPONS[self.weapon];
+    const players = [...this.display.values()]
+      .filter((d) => d.kind === 'player' && (this.matchMode === 'coop' || d.isLocal))
+      .map((d) => ({
+        name: d.isLocal ? `${d.name} (вы)` : d.name,
+        hp: d.hp,
+        maxHp: d.maxHp,
+        alive: d.alive,
+        isLocal: d.isLocal,
+        color: this.colorFor(d.id),
+      }));
+
+    let enemiesLeft = 0;
+    for (const d of this.display.values()) if (d.kind === 'enemy' && d.alive) enemiesLeft++;
+    this.enemyCount = enemiesLeft;
+
+    const respawnIn = !self.alive ? this.sim.actors.get(this.localId)?.respawnT ?? 0 : 0;
+    const scores = isArena(this.matchMode) ? this.scoreTable() : [];
+    this.hud.update({
+      hp: self.hp,
+      maxHp: self.maxHp,
+      armor: self.armor,
+      alive: self.alive,
+      weapon: self.weapon,
+      weapons: self.weapons,
+      ammo: self.ammo,
+      mag: def.mag,
+      reloading: self.reloading,
+      room: this.sim.roomIndex,
+      rooms: this.map.rooms.length,
+      phase: this.sim.roomPhase,
+      players,
+      enemiesLeft,
+      flashOn: self.flashOn,
+      buffs: self.buffs,
+      shield: self.shield,
+      respawnIn: this.isAuthority && Number.isFinite(respawnIn) ? respawnIn : 0,
+      timeLeft: this.isAuthority ? this.sim.timeLeft : this.timeLeft,
+      scores,
+      grenades: self.grenades,
+      money: self.money,
+      tier: self.tier,
+      tierKills: self.tierKills,
+      round: this.localRoundState(),
+      modeTitle: modeInfo(this.matchMode).title,
+    });
+
+    // Fog of war applies to the minimap too: only hostiles that are seen.
+    const known = [...this.display.values()].filter((d) => !this.isHostile(d.id) || this.renderer.isRevealed(d.id));
+    this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined);
+    this.updatePlates();
+  }
+
+  private updatePlates(): void {
+    const plates: HudPlate[] = [];
+    for (const d of this.display.values()) {
+      if (!d.alive) continue;
+      const hostile = this.isHostile(d.id);
+      if (hostile && !this.renderer.isRevealed(d.id)) continue;
+      const p = this.renderer.project(d.x, 2.55, d.z);
+      if (!p.visible) continue;
+      plates.push({
+        id: d.id,
+        x: p.x,
+        y: p.y,
+        // Arena bots and players have names worth showing.
+        name: d.kind === 'enemy' && this.matchMode === 'coop' ? '' : d.name,
+        hpRatio: d.hp / d.maxHp,
+        armorRatio: d.armor / CONFIG.powerups.maxArmor,
+        kind: d.isLocal ? 'self' : hostile ? 'enemy' : 'ally',
+      });
+    }
+    this.hud.updatePlates(plates);
+  }
+
+  get enemiesLeft(): number {
+    return this.enemyCount;
+  }
+}
+
+function shortestAngle(a: number, b: number): number {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}

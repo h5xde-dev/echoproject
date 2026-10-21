@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>ЭХО — тактический шутер</title>
+    <meta name="description" content="ЭХО — кооперативный top-down шутер про свет, тени и пули с реальным временем полёта." />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305070c'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%233fd6c8' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%23ffb066'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Rajdhani:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport"></div>
+
+      <div id="hud" class="hud hidden">
+        <div class="vignette"></div>
+        <div class="plates"></div>
+        <div class="dmg-dirs"></div>
+        <div class="crosshair"><i></i><i></i><i></i><i></i><b></b><u></u><s></s><s></s><s></s><s></s></div>
+
+        <div class="panel panel-topleft">
+          <div class="panel-title">ОПЕРАТОРЫ</div>
+          <div class="squad"></div>
+          <div class="latency">— мс</div>
+        </div>
+
+        <div class="panel panel-topcenter">
+          <div class="objective-room">КОМНАТА 1 / 1</div>
+          <div class="objective-text">ЗАЧИСТИТЕ КОМНАТУ</div>
+        </div>
+
+        <div class="panel panel-topright">
+          <canvas class="minimap" width="184" height="184"></canvas>
+          <div class="flashlight-tag">ФОНАРЬ ВКЛ</div>
+        </div>
+
+        <div class="panel panel-room hidden">
+          <div class="panel-title">КОД КОМНАТЫ</div>
+          <div class="room-code-inline">-----</div>
+          <div class="room-hint">Нажмите, чтобы скопировать</div>
+        </div>
+
+        <div class="panel panel-bottomleft">
+          <div class="hp-track"><i class="hp-fill"></i></div>
+          <div class="armor-track"><i class="armor-fill"></i></div>
+          <div class="hp-readout">
+            <span class="hp-label">HP</span><span class="hp-text">100</span>
+            <span class="armor-label">БРОНЯ</span><span class="armor-text">0</span>
+          </div>
+          <div class="buffs"></div>
+        </div>
+
+        <div class="panel panel-bottomright">
+          <div class="weapon-name">M9</div>
+          <div class="ammo"><span class="ammo-current">12</span><span class="ammo-mag">/12</span></div>
+          <div class="ammo-pips"></div>
+          <div class="weapon-slots"></div>
+          <div class="weapon-extra"></div>
+          <div class="reload-bar"><i></i></div>
+        </div>
+
+        <div class="feed"></div>
+        <div class="killfeed"></div>
+        <div class="respawn-banner"></div>
+        <div class="banner"></div>
+        <div class="ladder"></div>
+        <div class="shop"></div>
+        <div class="scoreboard">
+          <div class="scoreboard-title">ТАБЛИЦА</div>
+          <table class="scoreboard-table"></table>
+        </div>
+
+        <div class="panel panel-hints">
+          <span><b>WASD</b> движение</span>
+          <span><b>ЛКМ</b> огонь</span>
+          <span><b>R</b> перезарядка</span>
+          <span><b>F</b> фонарь</span>
+          <span><b>1-5</b> оружие</span>
+          <span><b>G</b> граната</span>
+          <span class="hint-comp"><b>B</b> магазин</span>
+          <span class="hint-dm"><b>Tab</b> счёт</span>
+        </div>
+
+        <div class="status-line"></div>
+
+        <div class="gameover">
+          <div class="gameover-title">ОБЪЕКТ ЗАЧИЩЕН</div>
+          <div class="gameover-text"></div>
+          <table class="gameover-scores"></table>
+          <button class="btn primary gameover-again"><span class="btn-title">ЕЩЁ РАЗ</span></button>
+        </div>
+      </div>
+
+      <div id="menu" class="menu">
+        <div class="menu-bg"></div>
+        <div class="menu-card wide">
+          <section class="menu-left">
+            <div class="logo">
+              <span class="logo-main">ЭХО</span>
+              <span class="logo-sub">ТАКТИЧЕСКИЙ ШУТЕР · СВЕТ И ТЕНИ</span>
+            </div>
+            <p class="tagline">
+              Пули летят по-настоящему. В темноте тебя не видно — но и ты не видишь никого.
+              Включённый фонарь даёт обзор, но выдаёт тебя.
+            </p>
+
+            <label class="field">
+              <span>Позывной</span>
+              <input id="player-name" type="text" maxlength="14" value="оператор" autocomplete="off" />
+            </label>
+
+            <span class="field-label">Режим</span>
+            <div class="mode-grid" role="radiogroup" aria-label="Режим">
+              <button class="mode-card active" data-mode="coop" role="radio" aria-checked="true">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 5-5s5 2 5 5M11 20c0-3 2.5-5 5-5s5 2 5 5"/></svg>
+                <b>Кооператив</b><small>Зачистка объекта</small>
+              </button>
+              <button class="mode-card" data-mode="dm" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>
+                <b>Deathmatch</b><small>Каждый сам за себя</small>
+              </button>
+              <button class="mode-card" data-mode="gun" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h4v-4h4v-4h4V6h4"/><path d="M17 3l3 3-3 3"/></svg>
+                <b>Гонка вооружений</b><small>Убийства дают стволы</small>
+              </button>
+              <button class="mode-card" data-mode="comp" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+                <b>Соревнование</b><small>Раунды и закупка</small>
+              </button>
+            </div>
+          </section>
+
+          <section class="menu-right">
+            <div class="mode-detail">
+              <div class="mode-detail-title">Кооператив</div>
+              <p class="mode-detail-desc"></p>
+            </div>
+
+            <div class="arena-select hidden">
+              <span class="field-label">Арена</span>
+              <div class="arena-row">
+                <canvas class="arena-preview" width="246" height="130"></canvas>
+                <div class="arena-list">
+                  <button class="arena-btn active" data-arena="sklad">Склад</button>
+                  <button class="arena-btn" data-arena="dvor">Двор</button>
+                  <button class="arena-btn" data-arena="bunker">Бункер</button>
+                </div>
+              </div>
+              <label class="fighters">
+                <span class="field-label">Бойцов на арене: <b class="fighters-value">6</b></span>
+                <input class="fighters-range" type="range" min="2" max="8" value="6" />
+              </label>
+            </div>
+
+            <div class="loading" id="loading">
+              <div class="loading-track"><i id="loading-fill"></i></div>
+              <span id="loading-text">Загрузка снаряжения… 0%</span>
+            </div>
+
+            <div class="menu-actions">
+              <button id="btn-solo" class="btn primary" disabled>
+                <span class="btn-title">ИГРАТЬ</span>
+                <span class="btn-desc">Пройти объект в одиночку</span>
+              </button>
+              <button id="btn-host" class="btn" disabled>
+                <span class="btn-title">СОЗДАТЬ КОМНАТУ</span>
+                <span class="btn-desc">Позвать друзей по коду</span>
+              </button>
+            </div>
+
+            <div class="join-block">
+              <label class="field">
+                <span>Код комнаты друга</span>
+                <input id="room-code" type="text" maxlength="8" placeholder="ABCDE" autocomplete="off" />
+              </label>
+              <button id="btn-join" class="btn" disabled>
+                <span class="btn-title">ВОЙТИ</span>
+              </button>
+            </div>
+
+            <div id="room-result" class="room-result hidden">
+              <div class="room-code-label">КОД КОМНАТЫ</div>
+              <div id="room-code-value" class="room-code-value">-----</div>
+              <div class="room-hint">Отправьте код — друг введёт его в поле «Код комнаты».</div>
+            </div>
+
+            <div class="menu-keys">
+              <span><kbd>WASD</kbd> движение</span><span><kbd>ЛКМ</kbd> огонь</span><span><kbd>F</kbd> фонарь</span>
+              <span><kbd>G</kbd> граната</span><span><kbd>R</kbd> перезарядка</span><span><kbd>B</kbd> магазин</span><span><kbd>Tab</kbd> счёт</span>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
