@@ -15,7 +15,7 @@ export const VISION = {
   rays: 360,
   range: 24,
   halfAngle: (44 * Math.PI) / 180,
-  nearRadius: 4.2,
+  nearRadius: 1,
   /** Rays stop slightly inside walls so the wall face itself is lit. */
   wallBite: 0.35,
   /** Fraction of the range after which sight fades out toward the edge. */
