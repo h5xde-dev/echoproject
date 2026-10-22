@@ -132,6 +132,30 @@ function enterGame(): void {
   hudRoot.classList.remove('hidden');
 }
 
+/** Leave the session and show the main menu again. */
+function backToMenu(): void {
+  game.returnToMenu();
+  menu.classList.remove('hidden');
+  hudRoot.classList.add('hidden');
+  roomResult.classList.add('hidden');
+  codeInput.value = '';
+  nameInput.focus();
+  nameInput.select();
+}
+
+// Escape opens the pause overlay; the second Escape closes it.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!menu.classList.contains('hidden')) return;
+  if (!game.inSession) return;
+  e.preventDefault();
+  if (game.isPaused) game.resume();
+  else game.pause();
+});
+
+hud.onPauseResume = () => game.resume();
+hud.onPauseMenu = () => backToMenu();
+
 function showError(message: string): void {
   const status = document.createElement('div');
   status.className = 'menu-error';

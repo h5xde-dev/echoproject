@@ -33,10 +33,23 @@ export class Input {
   mouseX = 0;
   mouseY = 0;
   wheel = 0;
+  /**
+   * The game only takes the keyboard while a session is running. In the
+   * menu the text fields keep their keys.
+   */
+  enabled = false;
 
   private el: HTMLElement | null = null;
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.repeat) return;
+    // A field the user is typing into keeps its keys.
+    //
+    // The listener sits on window, and `e.code` does not depend on the
+    // keyboard layout: a Cyrillic "К" produces KeyR, which is a game
+    // action. Without this check, typing a nickname silently eats every
+    // letter that happens to sit under R/E/F/G/B — and the digits, which
+    // are weapon slots.
+    if (!this.enabled || isTypingTarget(e.target)) return;
     this.keys.add(e.code);
     const action = ACTION_KEYS[e.code];
     if (action) {
@@ -127,4 +140,18 @@ export class Input {
     }
     return { x, z };
   }
+}
+
+/**
+ * True when the event comes from a field the user is typing into.
+ *
+ * The menu has text inputs and the game listens on window, so without this
+ * check the game eats characters out of whatever the player types.
+ */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
+  );
 }

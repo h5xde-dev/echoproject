@@ -91,6 +91,8 @@ export class Game {
 
   private hud: Hud;
   private running = false;
+  /** The pause overlay is up: the world is frozen. */
+  private paused = false;
   private lastTime = 0;
   private accumulator = 0;
   private tick = 0;
@@ -225,6 +227,10 @@ export class Game {
   /** Starts the render/simulation loop exactly once. */
   private startLoop(): void {
     this.running = true;
+    this.paused = false;
+    // The keyboard belongs to the game only while a session is running; in
+    // the menu the text fields need it.
+    this.input.enabled = true;
     this.lastTime = performance.now();
     if (this.loopHandle === null) {
       this.loopHandle = requestAnimationFrame(this.loop);
@@ -639,6 +645,60 @@ export class Game {
     if (this.isAuthority) this.net.broadcast({ t: 'over', win, text });
   }
 
+  // ------------------------------------------------------------- pause & exit
+
+  /** True while the pause overlay is up. */
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
+  /** True when there is a session to leave. */
+  get inSession(): boolean {
+    return this.running;
+  }
+
+  /** Freeze the simulation and show the pause overlay. */
+  pause(): void {
+    if (!this.running || this.paused) return;
+    this.paused = true;
+    this.input.enabled = false;
+    this.hud.showPause();
+  }
+
+  /** Resume from the pause overlay. */
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.input.enabled = true;
+    this.hud.hidePause();
+    this.lastTime = performance.now();
+  }
+
+  /**
+   * Leave the session and hand the player back to the menu.
+   *
+   * The net connection is closed, the simulation is dropped and the keyboard
+   * is released — otherwise the menu fields would lose characters to the
+   * game.
+   */
+  returnToMenu(): void {
+    this.paused = false;
+    this.running = false;
+    this.input.enabled = false;
+    this.net.disconnect();
+    this.hud.hidePause();
+    this.hud.hideGameOver();
+    this.display.clear();
+    this.clientBullets = [];
+    this.latestActors.clear();
+    this.snapBuffer = [];
+    this.pendingInputs = [];
+    this.clientInputs.clear();
+    this.clientNames.clear();
+    this.buyOpen = false;
+    this.roomCode = '';
+  }
+
   // ------------------------------------------------------------------ loop
 
   private loop = (now: number): void => {
@@ -651,17 +711,21 @@ export class Game {
     const dt = Math.min(0.1, (now - this.lastTime) / 1000);
     this.lastTime = now;
 
-    this.sampleInput();
-    this.accumulator += dt;
-    let steps = 0;
-    while (this.accumulator >= CONFIG.tickDt && steps < 5) {
-      this.accumulator -= CONFIG.tickDt;
-      this.fixedStep(CONFIG.tickDt);
-      steps++;
-    }
-    if (steps === 5) this.accumulator = 0;
+    // While paused the world is frozen: the player reads the menu instead of
+    // dying in it. The frame is still drawn.
+    if (!this.paused) {
+      this.sampleInput();
+      this.accumulator += dt;
+      let steps = 0;
+      while (this.accumulator >= CONFIG.tickDt && steps < 5) {
+        this.accumulator -= CONFIG.tickDt;
+        this.fixedStep(CONFIG.tickDt);
+        steps++;
+      }
+      if (steps === 5) this.accumulator = 0;
 
-    this.updateDisplay(dt);
+      this.updateDisplay(dt);
+    }
     this.renderer.update(dt, this.playerLights(), isArena(this.matchMode) ? 1 : 2, this.beams());
     this.renderer.render();
     this.updateHud();

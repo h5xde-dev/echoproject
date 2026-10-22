@@ -503,6 +503,46 @@ body {
   color: rgba(111, 132, 150, 0.7);
 }
 
+.pause {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: rgba(4, 6, 10, 0.72);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease-out;
+}
+
+.pause.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pause-title {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: var(--ink);
+  text-shadow: 0 0 24px rgba(63, 214, 200, 0.3);
+}
+
+.pause-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.pause-actions .btn {
+  min-width: 190px;
+  align-items: center;
+  text-align: center;
+}
+
 /* ----------------------------------------------------------------- menu */
 
 .menu {

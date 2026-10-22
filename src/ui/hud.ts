@@ -103,6 +103,7 @@ export class Hud {
   private flashEl: HTMLElement;
   private roomCodePanel: HTMLElement;
   private roomCodeEl: HTMLElement;
+  private pauseEl: HTMLElement;
 
   private platesEl: HTMLElement;
   private dmgEl: HTMLElement;
@@ -135,6 +136,10 @@ export class Hud {
   private ladderKey = '';
   /** Called when a shop item is clicked. */
   onBuy: (item: ShopItem) => void = () => undefined;
+  /** The pause overlay was closed with "продолжить". */
+  onPauseResume: () => void = () => undefined;
+  /** The pause overlay asked to leave for the main menu. */
+  onPauseMenu: () => void = () => undefined;
   private buffsKey = '';
   private scoresKey = '';
 
@@ -186,6 +191,9 @@ export class Hud {
       if (btn && !btn.classList.contains('locked')) this.onBuy(btn.dataset.item as ShopItem);
     });
     must(root, '.gameover-again').addEventListener('click', () => location.reload());
+    this.pauseEl = must(root, '.pause');
+    must(root, '.pause-resume').addEventListener('click', () => this.onPauseResume());
+    must(root, '.pause-menu').addEventListener('click', () => this.onPauseMenu());
   }
 
   setMode(mode: GameMode, arenaName: string, title = ''): void {
@@ -561,6 +569,16 @@ export class Hud {
 
   hideGameOver(): void {
     this.overEl.classList.remove('visible');
+  }
+
+  /** Show the pause overlay. */
+  showPause(): void {
+    this.pauseEl.classList.add('visible');
+  }
+
+  /** Hide the pause overlay. */
+  hidePause(): void {
+    this.pauseEl.classList.remove('visible');
   }
 
   drawMinimap(
