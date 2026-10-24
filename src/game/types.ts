@@ -294,6 +294,8 @@ export interface Actor {
   /** Who knocked them down (credited if they bleed out). */
   downBy: number;
   role: EnemyRole;
+  /** Seconds standing still (a sniper rifle settles on target). */
+  stillT: number;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */

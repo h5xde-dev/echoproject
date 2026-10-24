@@ -396,6 +396,7 @@ export class Sim {
       reviveT: 0,
       downBy: -1,
       role: 'grunt',
+      stillT: 0,
     };
   }
 
@@ -755,6 +756,7 @@ export class Sim {
     actor.blind = Math.max(0, actor.blind - dt);
     actor.revealT = Math.max(0, actor.revealT - dt);
     actor.markCd = Math.max(0, actor.markCd - dt);
+    actor.stillT = Math.hypot(actor.vx, actor.vz) < 0.4 ? actor.stillT + dt : 0;
     const b = actor.buffs;
     b.damage = Math.max(0, b.damage - dt);
     b.rapid = Math.max(0, b.rapid - dt);
@@ -904,7 +906,9 @@ export class Sim {
   spreadMul(actor: Actor): number {
     const G = CONFIG.gait;
     const speedFrac = clamp(Math.hypot(actor.vx, actor.vz) / CONFIG.player.maxSpeed, 0, 1);
-    return G.spreadStance[actor.gait] * (G.spreadStill + G.spreadMove * speedFrac) * (1 + G.spreadRecoil * actor.recoil);
+    // A sniper rifle needs a moment to settle: snap shots go wild.
+    const settle = actor.weapon === 'sniper' && actor.stillT < G.sniperSettle ? G.sniperUnsettled : 1;
+    return G.spreadStance[actor.gait] * (G.spreadStill + G.spreadMove * speedFrac) * (1 + G.spreadRecoil * actor.recoil) * settle;
   }
 
   /** Max speed from the base value and the speed buff (also used by prediction). */
@@ -939,10 +943,14 @@ export class Sim {
 
     const oldX = actor.x;
     const oldZ = actor.z;
-    actor.x += actor.vx * dt;
-    actor.z += actor.vz * dt;
-
-    this.resolveActorCollision(actor);
+    // In small steps: a blast's knockback could otherwise carry a soldier
+    // more than half way into a wall in one tick and out the far side.
+    const steps = Math.max(1, Math.ceil((Math.hypot(actor.vx, actor.vz) * dt) / 0.25));
+    for (let i = 0; i < steps; i++) {
+      actor.x += (actor.vx * dt) / steps;
+      actor.z += (actor.vz * dt) / steps;
+      this.resolveActorCollision(actor);
+    }
     actor.vx = (actor.x - oldX) / dt;
     actor.vz = (actor.z - oldZ) / dt;
     actor.moving = Math.hypot(actor.vx, actor.vz) > 0.4;

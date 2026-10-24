@@ -8,6 +8,7 @@ import { ARENAS, buildArena } from '../src/game/arenas';
 import { CONFIG } from '../src/game/config';
 import { generateMap, pickPowerup } from '../src/game/levelgen';
 import { Sim } from '../src/game/sim';
+import { WEAPON_ORDER, type WeaponId } from '../src/game/weapons';
 import type { GameMode } from '../src/game/types';
 
 const out: string[] = [];
@@ -39,6 +40,7 @@ for (const info of ARENAS) {
     let rounds = 0;
     let ladder = 0;
     let flagsTaken = 0;
+    let escaped = 0;
     let plants = 0;
     let attackWins = 0;
     let attacking = 0;
@@ -67,6 +69,7 @@ for (const info of ARENAS) {
         if (e.type === 'bomb' && (e.text === 'exploded' || e.text === 'defused')) bombEnds++;
       }
       for (const b of s.actors.values()) {
+        if (b.alive && (b.x < s.map.minX || b.x > s.map.maxX || b.z < s.map.minZ || b.z > s.map.maxZ)) escaped++;
         const l = last.get(b.id) ?? { x: b.x, z: b.z, still: 0 };
         const moved = Math.hypot(b.x - l.x, b.z - l.z) > 0.05;
         // Planting or defusing is standing still on purpose.
@@ -82,6 +85,7 @@ for (const info of ARENAS) {
     check(deaths >= (mode === 'bomb' ? rounds : 8), `${tag}: ${deaths} deaths`);
     check(!!ended, `${tag}: match ended — ${ended || 'no'}`);
     check(maxStill < 9, `${tag}: longest idle bot ${maxStill.toFixed(1)} s`);
+    check(escaped === 0, `${tag}: nobody pushed out of the map (${escaped} ticks outside)`);
     check(throws > 0, `${tag}: ${throws} grenades thrown`);
     if (mode === 'gun') check(ladder >= 2, `${tag}: best ladder tier ${ladder + 1}`);
     if (mode === 'bomb') check(plants > 0, `${tag}: ${plants} plants, ${bombEnds} blasts/defuses, ${rounds} rounds, attack ${attackWins} : ${defenceWins} defence`);
@@ -844,6 +848,56 @@ for (const info of ARENAS) {
   s.step(dt);
   const carrier = s.actors.get(s.bomb?.carrier ?? -1);
   check(carrier?.team === 1, 'the bomb now goes to the red team');
+}
+
+// Weapon balance: time to kill a standing 100 hp target at range, real
+// shooting (spread, falloff, cooldown, reloads), on an empty floor.
+{
+  const ranges = [5, 10, 15, 20, 30];
+  const ttk = (weapon: WeaponId, range: number): number => {
+    const base = buildArena('sklad', 2222, 'dm');
+    // Nothing on the floor: an armour pickup under the target skewed the 20 m column.
+    const map = { ...base, walls: [], props: [], lamps: [], bushes: [], pickups: [], powerups: [] };
+    let total = 0;
+    const trials = 20;
+    for (let k = 0; k < trials; k++) {
+      const s = new Sim({ ...map, seed: 1000 + k });
+      const p = s.addPlayer('a', 'a', 1);
+      const t = s.addPlayer('b', 'b', 2);
+      p.weapons = [weapon];
+      (s as unknown as { equip(a: unknown, w: WeaponId): void }).equip(p, weapon);
+      p.x = 20;
+      p.z = 20;
+      t.x = p.x + range;
+      t.z = p.z;
+      const dt = CONFIG.tickDt;
+      let time = 0;
+      while (t.alive && time < 8) {
+        p.shield = t.shield = 0;
+        t.x = p.x + range;
+        t.z = p.z;
+        t.vx = t.vz = 0;
+        // A sensible shooter: with a sniper rifle, wait for the aim to settle.
+        const fire = weapon !== 'sniper' || p.stillT >= CONFIG.gait.sniperSettle;
+        s.applyInput(p, { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire, reload: false, interact: false, flashlight: false, slot: -1, dt });
+        s.step(dt);
+        time += dt;
+      }
+      total += time;
+    }
+    return total / trials;
+  };
+  const table: Record<string, number[]> = {};
+  for (const w of WEAPON_ORDER) table[w] = ranges.map((r) => ttk(w, r));
+  out.push('TTK, s (to kill 100 hp) at ' + ranges.map((r) => `${r} m`).join(' / '));
+  for (const w of WEAPON_ORDER) out.push(`  ${w.padEnd(8)} ${table[w].map((v) => v.toFixed(2).padStart(5)).join('  ')}`);
+  // Every gun has a range where it is the best, and the starting pistol has none.
+  const best = (i: number) => WEAPON_ORDER.reduce((a, b) => (table[b][i] < table[a][i] ? b : a));
+  check(best(0) === 'shotgun', `5 m: the shotgun kills fastest (best: ${best(0)})`);
+  check(best(1) === 'smg', `10 m: the SMG (best: ${best(1)})`);
+  check(best(3) === 'rifle', `20 m: the rifle (best: ${best(3)})`);
+  check(best(4) === 'sniper', `30 m: the sniper rifle (best: ${best(4)})`);
+  check(ranges.every((_, i) => best(i) !== 'pistol'), 'the starting pistol is never the best');
 }
 
 out.push(`${failures} failures`);

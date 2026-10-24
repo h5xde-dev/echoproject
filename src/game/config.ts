@@ -46,6 +46,12 @@ export const CONFIG = {
     spreadMove: 1.1,
     /** Extra spread per unit of accumulated recoil (recoil caps at 0.5). */
     spreadRecoil: 2,
+    /**
+     * A sniper rifle is wild until you have stood still this long: its
+     * spread grows about to a shotgun's (the rifle's own is tiny).
+     */
+    sniperSettle: 0.7,
+    sniperUnsettled: 60,
   },
 
   player: {
