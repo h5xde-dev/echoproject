@@ -307,6 +307,8 @@ export interface Actor {
   cls: PlayerClass | null;
   /** Engineer: the shield placed this life (one at a time). */
   shieldUsed: boolean;
+  /** Player's chosen ring colour (-1: the default palette). */
+  color: number;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */

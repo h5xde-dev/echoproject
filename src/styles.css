@@ -1114,3 +1114,17 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
 
 /* The player's class, first in the weapon panel's bottom row. */
 .weapon-extra .cls-tag { font-size: 9px; letter-spacing: 0.16em; opacity: 0.7; margin-right: auto; }
+
+/* Experience banked at the end of a match. */
+.gameover-progress { font-size: 12px; letter-spacing: 0.16em; color: var(--accent); text-align: center; }
+
+/* Rank: level, experience bar, unlockable ring colours. */
+.rank { display: flex; flex-direction: column; gap: 6px; margin: -4px 0 14px; }
+.rank-line { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.1em; }
+.rank-level { color: var(--accent); font-weight: 600; letter-spacing: 0.18em; }
+.rank-track { height: 3px; background: rgba(255, 255, 255, 0.06); }
+.rank-fill { display: block; height: 100%; width: 0; background: var(--accent); }
+.ring-colors { display: flex; gap: 6px; flex-wrap: wrap; }
+.ring-color { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--ring); background: transparent; cursor: pointer; padding: 0; }
+.ring-color.active { background: var(--ring); }
+.ring-color.locked { opacity: 0.25; cursor: default; }

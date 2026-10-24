@@ -13,6 +13,7 @@ import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
+import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
 
 export type GameMode = 'solo' | 'host' | 'client';
 
@@ -63,6 +64,7 @@ export interface DisplayActor {
   aiming: boolean;
   cls: PlayerClass | null;
   shieldUsed: boolean;
+  color: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -130,6 +132,11 @@ export class Game {
   playerClass: PlayerClass = 'assault';
   /** Host: each client's class, kept for a match restart from the lobby. */
   private clientClasses = new Map<number, PlayerClass | null>();
+  private clientColors = new Map<number, number>();
+  /** This player's ring colour (an unlocked one; -1 the default). */
+  playerColor = -1;
+  /** What the local player did this match, for experience at the end. */
+  private tally: MatchTally = { kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 };
   /** Client: last measured round trip to the host (ms). */
   private rttMs = 0;
   /** Client: the room code joined, reused to reconnect. */
@@ -224,7 +231,7 @@ export class Game {
           mergeOnce(state.once, input);
         }
       },
-      onClientHello: (name, playerId, cls) => this.onClientHello(name, playerId, cls),
+      onClientHello: (name, playerId, cls, color) => this.onClientHello(name, playerId, cls, color),
       onClientLeave: (playerId) => this.onClientLeave(playerId),
       onClientReady: (playerId, ready) => {
         if (!this.lobby || this.lobby.started) return;
@@ -274,7 +281,7 @@ export class Game {
       onLobby: (msg) => this.showLobby(msg),
     });
 
-    this.net.send({ t: 'hello', name: this.localName, cls: this.playerClass });
+    this.net.send({ t: 'hello', name: this.localName, cls: this.playerClass, color: this.playerColor });
   }
 
   /**
@@ -317,7 +324,8 @@ export class Game {
     this.sim = new Sim(this.map);
     if (opts.fighters) this.sim.fighters = opts.fighters;
     if (opts.difficulty) this.sim.difficulty = opts.difficulty;
-    this.sim.addPlayer('local', this.localName, this.localId, this.playerClass);
+    this.sim.addPlayer('local', this.localName, this.localId, this.playerClass, this.playerColor);
+    this.tally = { kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 };
     this.sim.fillBots();
     this.setupWorld();
     this.startLoop();
@@ -365,9 +373,10 @@ export class Game {
 
   // ------------------------------------------------------------------ host
 
-  private onClientHello(name: string, playerId: number, cls: PlayerClass | null): void {
+  private onClientHello(name: string, playerId: number, cls: PlayerClass | null, color: number): void {
     this.clientClasses.set(playerId, cls);
-    this.sim.addPlayer(`c${playerId}`, name, playerId, cls);
+    this.clientColors.set(playerId, color);
+    this.sim.addPlayer(`c${playerId}`, name, playerId, cls, color);
     this.sim.fillBots();
     this.clientNames.set(playerId, name);
     this.clientInputs.set(String(playerId), {
@@ -457,7 +466,9 @@ export class Game {
     this.hud.hideGameOver();
     this.prevTick.clear();
     this.beginAuthoritySession(this.matchOpts);
-    for (const [id, name] of this.clientNames) this.sim.addPlayer(`c${id}`, name, id, this.clientClasses.get(id) ?? null);
+    for (const [id, name] of this.clientNames) {
+      this.sim.addPlayer(`c${id}`, name, id, this.clientClasses.get(id) ?? null, this.clientColors.get(id) ?? -1);
+    }
     this.sim.fillBots();
     for (const [id, name] of this.clientNames) this.sendWelcome(id, name);
     this.broadcastLobby();
@@ -517,6 +528,7 @@ export class Game {
         aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
         cls: a.cls,
         shieldUsed: a.shieldUsed,
+        color: a.color,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -796,7 +808,10 @@ export class Game {
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.death());
         // Our own death: watch the killer for a moment, then an ally.
         if (event.ownerId === this.localId) this.spectate = { killer: event.by ?? -1, at: performance.now() };
-        if (event.by === this.localId && event.ownerId !== this.localId) this.hud.hitMarker(true);
+        if (event.by === this.localId && event.ownerId !== this.localId) {
+          this.hud.hitMarker(true);
+          if (this.isHostile(event.ownerId ?? -1)) this.tally.kills++;
+        }
         if (isArena(this.matchMode)) {
           const by = event.by === event.ownerId ? '' : this.nameOf(event.by);
           this.hud.killFeed(by, this.nameOf(event.ownerId), event.by === this.localId, event.ownerId === this.localId);
@@ -872,6 +887,7 @@ export class Game {
         }
         break;
       case 'roomClear':
+        this.tally.rooms++;
         this.audio.door();
         this.hud.message(event.text === '1' ? 'Выдвигайтесь — дверь открыта' : 'Комната зачищена — дверь открыта', 'good');
         break;
@@ -905,7 +921,10 @@ export class Game {
         };
         const [text, kind] = lines[event.text ?? ''] ?? ['', 'info'];
         if (text) this.hud.message(text, kind as 'good' | 'warn');
-        if (event.text === 'hacked' || event.text === 'defused') this.audio.powerup();
+        if (event.text === 'hacked' || event.text === 'defused') {
+          this.audio.powerup();
+          if (event.ownerId === this.localId) this.tally.objectives++;
+        }
         break;
       }
       case 'down': {
@@ -914,12 +933,14 @@ export class Game {
         break;
       }
       case 'revive':
+        if (event.by === this.localId) this.tally.revives++;
         this.hud.message(event.ownerId === this.localId ? 'Вас подняли' : `${this.nameOf(event.ownerId)} снова в строю`, 'good');
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.powerup());
         break;
       case 'bomb': {
         const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
         const site = event.id === '1' ? 'B' : 'A';
+        if ((event.text === 'planted' || event.text === 'defused') && event.ownerId === this.localId) this.tally.objectives++;
         if (event.text === 'planted') {
           this.hud.banner(`БОМБА НА ${site}`, `${CONFIG.bomb.timer} секунд`);
           this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.flashBang(d + 20));
@@ -943,6 +964,7 @@ export class Game {
           captured: `${who} — захват!`,
         };
         const text = lines[event.text ?? ''] ?? '';
+        if (event.text === 'captured' && event.ownerId === this.localId) this.tally.objectives++;
         if (event.text === 'captured') {
           // The flag that was captured belongs to the losing side.
           this.hud.banner(ours ? 'ФЛАГ ПОТЕРЯН' : 'ЗАХВАТ', text);
@@ -958,11 +980,12 @@ export class Game {
       case 'wave':
         if (event.text === 'start') {
           this.hud.banner(`ВОЛНА ${event.id ?? ''}`, 'Они идут на шум и свет');
-        } else if (event.text === 'boss') {
-          this.hud.banner(`ВОЛНА ${event.id ?? ''} — КОМЕНДАНТ`, 'Тяжёлая броня, много здоровья');
-        } else {
+        } else if (event.text === 'clear') {
+          this.tally.waves++;
           this.hud.banner('ВОЛНА ОТБИТА', `Передышка ${CONFIG.waves.breakTime} с · магазин — B · павшие возвращаются`);
           this.audio.powerup();
+        } else if (event.text === 'boss') {
+          this.hud.banner(`ВОЛНА ${event.id ?? ''} — КОМЕНДАНТ`, 'Тяжёлая броня, много здоровья');
         }
         break;
       case 'gameOver':
@@ -1015,7 +1038,13 @@ export class Game {
   private endGame(win: boolean, text: string, title?: string): void {
     if (this.gameOver) return;
     this.gameOver = true;
-    this.hud.showGameOver(win, text, title, isArena(this.matchMode) ? this.scoreTable() : null);
+    // Bank the match: experience, level, anything it unlocked.
+    const got = addMatch(this.tally, win);
+    const lvl = levelOf(loadProgress().xp);
+    const up = got.after > got.before ? ` · НОВЫЙ УРОВЕНЬ ${got.after}!` : '';
+    const unlocked = got.unlocked.length > 0 ? ` · ОТКРЫТ ЦВЕТ: ${got.unlocked.join(', ').toUpperCase()}` : '';
+    const progress = `+${got.gained} ОПЫТА · УРОВЕНЬ ${lvl.level} (${lvl.into}/${lvl.need})${up}${unlocked}`;
+    this.hud.showGameOver(win, text, title, isArena(this.matchMode) ? this.scoreTable() : null, progress);
     if (this.isAuthority) this.net.broadcast({ t: 'over', win, text });
   }
 
@@ -1335,6 +1364,7 @@ export class Game {
           aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
           cls: a.cls,
           shieldUsed: a.shieldUsed,
+          color: a.color,
           isLocal,
           moving: a.moving,
         });
@@ -1467,6 +1497,7 @@ export class Game {
         aiming: b.aiming ?? false,
         cls: b.cls ?? null,
         shieldUsed: b.shieldUsed ?? false,
+        color: b.color ?? -1,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1504,6 +1535,8 @@ export class Game {
       if (team >= 0) return TEAM_COLORS[team];
     }
     if (id >= 1000) return ROLE_COLORS[this.display.get(id)?.role ?? 'grunt'];
+    const chosen = this.display.get(id)?.color ?? -1;
+    if (chosen >= 0) return chosen;
     return PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length];
   }
 

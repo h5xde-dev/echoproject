@@ -2,6 +2,7 @@ import './styles.css';
 import { Game } from './game/game';
 import { Hud } from './ui/hud';
 import { loadSettings, saveSettings, type Settings } from './ui/settings';
+import { levelOf, loadProgress, RING_COLORS } from './ui/progress';
 import { assets } from './render/assets';
 import { ARENAS, arenaGrid } from './game/arenas';
 import { modeInfo } from './game/modes';
@@ -149,6 +150,7 @@ function enterGame(): void {
 /** Leave the session and show the main menu again. */
 function backToMenu(): void {
   game.returnToMenu();
+  refreshRank();
   menu.classList.remove('hidden');
   hudRoot.classList.add('hidden');
   roomResult.classList.add('hidden');
@@ -235,6 +237,35 @@ clsButtons.forEach((b) =>
   }),
 );
 showClass();
+
+// Rank and ring colours: level from banked experience, colours it unlocks.
+const ringBox = must<HTMLElement>('.ring-colors');
+function refreshRank(): void {
+  const lvl = levelOf(loadProgress().xp);
+  must<HTMLElement>('.rank-level').textContent = `УРОВЕНЬ ${lvl.level}`;
+  must<HTMLElement>('.rank-xp').textContent = `${lvl.into} / ${lvl.need} опыта`;
+  must<HTMLElement>('.rank-fill').style.width = `${(lvl.into / lvl.need) * 100}%`;
+  // A colour only counts once it is unlocked.
+  const open = (c: number) => RING_COLORS.some((r) => r.color === c && r.level <= lvl.level);
+  if (settings.color >= 0 && !open(settings.color)) settings.color = -1;
+  game.playerColor = settings.color;
+  ringBox.innerHTML = '';
+  for (const r of RING_COLORS) {
+    const b = document.createElement('button');
+    const locked = r.level > lvl.level;
+    b.className = `ring-color${locked ? ' locked' : ''}${r.color === settings.color || (settings.color < 0 && r.level === 1) ? ' active' : ''}`;
+    b.style.setProperty('--ring', `#${r.color.toString(16).padStart(6, '0')}`);
+    b.title = locked ? `${r.name} — с уровня ${r.level}` : r.name;
+    b.disabled = locked;
+    b.addEventListener('click', () => {
+      settings.color = r.level === 1 ? -1 : r.color;
+      saveSettings(settings);
+      refreshRank();
+    });
+    ringBox.appendChild(b);
+  }
+}
+refreshRank();
 hud.onPauseMenu = () => backToMenu();
 
 function showError(message: string): void {

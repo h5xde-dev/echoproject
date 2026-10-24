@@ -417,10 +417,11 @@ export class Sim {
       lossStreak: 0,
       cls: null,
       shieldUsed: false,
+      color: -1,
     };
   }
 
-  addPlayer(peerId: string, name: string, id: number, cls: PlayerClass | null = null): Actor {
+  addPlayer(peerId: string, name: string, id: number, cls: PlayerClass | null = null, color = -1): Actor {
     let x = this.map.spawnX + (id === 1 ? -1.6 : 1.6);
     let z = this.map.spawnZ;
     const team = this.teams ? this.teamFor(true) : -1;
@@ -437,6 +438,7 @@ export class Sim {
     actor.peerId = peerId;
     actor.team = team;
     actor.cls = cls;
+    actor.color = color;
     this.classKit(actor);
     if (this.arena && !this.rounds) actor.shield = CONFIG.dm.spawnShield;
     // Joining a competitive round already under way: wait for the next one.

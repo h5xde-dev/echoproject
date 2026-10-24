@@ -17,11 +17,13 @@ export interface Settings {
   difficulty: Difficulty;
   /** Your class. */
   cls: PlayerClass;
+  /** Ring colour picked from the unlocked ones (-1: default). */
+  color: number;
 }
 
 const KEY = 'echo.settings';
 
-export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault' };
+export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault', color: -1 };
 
 export function loadSettings(): Settings {
   try {
@@ -35,6 +37,7 @@ export function loadSettings(): Settings {
       stats: typeof s.stats === 'boolean' ? s.stats : DEFAULT_SETTINGS.stats,
       difficulty: s.difficulty === 'easy' || s.difficulty === 'hard' ? s.difficulty : 'normal',
       cls: s.cls === 'scout' || s.cls === 'medic' || s.cls === 'engineer' ? s.cls : 'assault',
+      color: typeof s.color === 'number' ? s.color : -1,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

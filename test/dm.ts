@@ -8,6 +8,7 @@ import { ARENAS, buildArena } from '../src/game/arenas';
 import { CONFIG } from '../src/game/config';
 import { generateMap, pickPowerup } from '../src/game/levelgen';
 import { Sim } from '../src/game/sim';
+import { addMatch, levelOf, loadProgress, matchXp } from '../src/ui/progress';
 import { WEAPON_ORDER, WEAPONS, type WeaponId } from '../src/game/weapons';
 import type { GameMode } from '../src/game/types';
 
@@ -1043,6 +1044,27 @@ for (const info of ARENAS) {
   (s as unknown as { equip(x: unknown, w: string): void }).equip(a, 'rifle');
   s.applySpeed(a);
   check(lmgSpeed < a.speed, 'the LMG slows you down');
+}
+
+// Progress between matches.
+{
+  check(levelOf(0).level === 1 && levelOf(399).level === 1 && levelOf(400).level === 2 && levelOf(1000).level === 3, 'levels: 400 xp for the first, 200 more each after');
+  const tally = { kills: 5, objectives: 1, revives: 1, rooms: 0, waves: 0 };
+  check(matchXp(tally, true) === 50 + 100 + 100 + 40 + 200, `a match's experience adds up (${matchXp(tally, true)})`);
+  try {
+    localStorage.removeItem('echo.progress');
+  } catch {
+    /* no storage in this browser */
+  }
+  const first = addMatch(tally, true);
+  const second = addMatch({ kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 }, false);
+  check(first.after === 2 && first.unlocked.includes('Янтарь'), `banking a match levels up and unlocks a colour (${first.unlocked.join(', ')})`);
+  check(second.gained === 50 && loadProgress().matches === 2, 'even a lost match counts');
+  try {
+    localStorage.removeItem('echo.progress');
+  } catch {
+    /* no storage */
+  }
 }
 
 out.push(`${failures} failures`);

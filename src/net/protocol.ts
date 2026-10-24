@@ -44,6 +44,7 @@ export interface ActorState {
   aiming?: boolean;
   cls?: PlayerClass | null;
   shieldUsed?: boolean;
+  color?: number;
 }
 
 export interface BulletState {
@@ -199,6 +200,8 @@ export interface HelloMsg {
   t: 'hello';
   name: string;
   cls?: PlayerClass;
+  /** Unlocked ring colour the player picked. */
+  color?: number;
 }
 
 export interface PlayerJoinedMsg {

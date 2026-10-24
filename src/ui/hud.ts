@@ -730,8 +730,9 @@ export class Hud {
     this.crosshair.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
   }
 
-  showGameOver(win: boolean, text: string, title?: string, scores: HudScore[] | null = null): void {
+  showGameOver(win: boolean, text: string, title?: string, scores: HudScore[] | null = null, progress = ''): void {
     this.overTitle.textContent = title ?? (win ? 'ОБЪЕКТ ЗАЧИЩЕН' : 'ОПЕРАЦИЯ ПРОВАЛЕНА');
+    must(this.overEl, '.gameover-progress').textContent = progress;
     if (scores) this.fillScores(this.overScores, scores);
     this.overScores.style.display = scores ? '' : 'none';
     this.overTitle.classList.toggle('win', win);
