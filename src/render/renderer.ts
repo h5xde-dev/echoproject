@@ -399,33 +399,7 @@ export class Renderer {
     });
 
     // Props: asset models fitted to the collision boxes, primitives otherwise.
-    const barrelMat = new THREE.MeshStandardMaterial({ map: makeBarrelTexture(), roughness: 0.6, metalness: 0.25 });
-    const boxMat = new THREE.MeshStandardMaterial({ color: 0x6a5434, roughness: 0.9 });
-    for (const p of map.props) {
-      const group = new THREE.Group();
-      group.position.set(p.x, 0, p.z);
-      // Long props standing along Z are the model turned by 90°.
-      const turned = p.hh > p.hw && LONG_PROPS.has(p.kind);
-      const model = turned ? assets.prop(p.kind, p.hh * 2, p.hw * 2) : assets.prop(p.kind, p.hw * 2, p.hh * 2);
-      if (model) {
-        if (turned) model.rotation.y = Math.PI / 2;
-        // A little variety: same props, slightly different turns.
-        else if (!LONG_PROPS.has(p.kind)) model.rotation.y = ((p.id * 7919) % 4) * (Math.PI / 2);
-        group.add(model);
-      } else {
-        const h = p.kind === 'table' ? 0.85 : p.kind === 'cover' ? 1.15 : 1.35;
-        const mesh = new THREE.Mesh(
-          p.kind === 'barrel' ? new THREE.CylinderGeometry(p.hw, p.hw, h, 16) : new THREE.BoxGeometry(p.hw * 2, h, p.hh * 2),
-          p.kind === 'barrel' ? barrelMat : boxMat,
-        );
-        mesh.position.y = h / 2;
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        group.add(mesh);
-      }
-      g.add(group);
-      this.propVisuals.push({ id: p.id, group, maxHp: p.fixed ? 0 : p.hp, tilt: ((p.id * 7919) % 628) / 100 });
-    }
+    for (const p of map.props) this.addPropVisual(p);
 
     // Doors: steel shutters matching the sim's door bodies (see Sim ctor).
     const doorMat = new THREE.MeshStandardMaterial({ color: 0x59606b, roughness: 0.5, metalness: 0.7 });
@@ -935,7 +909,47 @@ export class Renderer {
     if (v && this.hostile(ownerId) && !this.isRevealed(ownerId)) this.pings.spawn(x, z, 0.45, 0.4);
   }
 
-  syncProps(props: { id: number; x: number; z: number; alive: boolean; hp?: number }[]): void {
+  /** One prop: its asset model fitted to the collision box (a primitive otherwise). */
+  private addPropVisual(p: { id: number; kind: PropKind; x: number; z: number; hw: number; hh: number; fixed: boolean; hp: number }): void {
+    const group = new THREE.Group();
+    group.position.set(p.x, 0, p.z);
+    // Long props standing along Z are the model turned by 90°.
+    const turned = p.hh > p.hw && LONG_PROPS.has(p.kind);
+    const model = turned ? assets.prop(p.kind, p.hh * 2, p.hw * 2) : assets.prop(p.kind, p.hw * 2, p.hh * 2);
+    if (model) {
+      if (turned) model.rotation.y = Math.PI / 2;
+      // A little variety: same props, slightly different turns.
+      else if (!LONG_PROPS.has(p.kind)) model.rotation.y = ((p.id * 7919) % 4) * (Math.PI / 2);
+      group.add(model);
+    } else {
+      const h = p.kind === 'table' ? 0.85 : p.kind === 'cover' ? 1.15 : 1.35;
+      const mesh = new THREE.Mesh(
+        p.kind === 'barrel' ? new THREE.CylinderGeometry(p.hw, p.hw, h, 16) : new THREE.BoxGeometry(p.hw * 2, h, p.hh * 2),
+        p.kind === 'barrel' ? this.barrelMat() : this.boxMat,
+      );
+      mesh.position.y = h / 2;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+    this.mapGroup.add(group);
+    this.propVisuals.push({ id: p.id, group, maxHp: p.fixed ? 0 : p.hp, tilt: ((p.id * 7919) % 628) / 100 });
+  }
+
+  private barrelMatCache: THREE.MeshStandardMaterial | null = null;
+  private barrelMat(): THREE.MeshStandardMaterial {
+    this.barrelMatCache ??= new THREE.MeshStandardMaterial({ map: makeBarrelTexture(), roughness: 0.6, metalness: 0.25 });
+    return this.barrelMatCache;
+  }
+
+  private boxMat = new THREE.MeshStandardMaterial({ color: 0x6a5434, roughness: 0.9 });
+
+  syncProps(props: { id: number; x: number; z: number; alive: boolean; hp?: number; kind?: PropKind; hw?: number; hh?: number }[]): void {
+    // Props placed mid-match (shields) get a visual the first time they show up.
+    for (const p of props) {
+      if (!p.kind || this.propVisuals.some((pv) => pv.id === p.id)) continue;
+      this.addPropVisual({ id: p.id, kind: p.kind, x: p.x, z: p.z, hw: p.hw ?? 1, hh: p.hh ?? 1, fixed: false, hp: p.hp ?? 1 });
+    }
     for (const pv of this.propVisuals) {
       const p = props.find((x) => x.id === pv.id);
       if (!p) continue;

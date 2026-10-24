@@ -1,4 +1,4 @@
-import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, RoomDef, RoomObjective, ShopItem } from '../game/types';
+import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, PlayerClass, RoomDef, RoomObjective, ShopItem } from '../game/types';
 import { GUN_LADDER, isArena, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
 import type { RoundState, WaveState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
@@ -64,6 +64,9 @@ export interface HudState {
   bombCarrier: boolean;
   /** Bomb: the attacking team (swaps at halftime). */
   attackTeam: number;
+  cls: PlayerClass | null;
+  /** Engineer: the shield is still to place this life. */
+  shieldReady: boolean;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -601,7 +604,9 @@ export class Hud {
       .join('');
     const nades = `<span class="nades">${groups}<kbd>Q</kbd><kbd>G</kbd></span>`;
     const light = `<span class="light${state.flashOn ? ' on' : ''}"><kbd>F</kbd>${state.flashOn ? 'свет' : 'тьма'}</span>`;
-    const extra = `${money}${nades}${light}`;
+    const clsName = state.cls ? CLASS_LABEL[state.cls] : '';
+    const shield = state.cls === 'engineer' ? `<span class="light${state.shieldReady ? ' on' : ''}"><kbd>V</kbd>${state.shieldReady ? 'щит' : 'щит стоит'}</span>` : '';
+    const extra = `${clsName ? `<span class="cls-tag">${clsName}</span>` : ''}${money}${nades}${shield}${light}`;
     if (this.extraEl.innerHTML !== extra) this.extraEl.innerHTML = extra;
 
     // Gun game ladder.
@@ -854,4 +859,11 @@ const GAIT_LABEL: Record<Gait, string> = {
   run: 'БЕГ · СЛЫШНО',
   walk: 'ШАГ · ТИХО',
   crouch: 'ПРИСЕД · БЕСШУМНО',
+};
+
+const CLASS_LABEL: Record<PlayerClass, string> = {
+  assault: 'ШТУРМОВИК',
+  scout: 'РАЗВЕДЧИК',
+  medic: 'МЕДИК',
+  engineer: 'ИНЖЕНЕР',
 };

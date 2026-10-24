@@ -928,6 +928,86 @@ for (const info of ARENAS) {
   check(b.money === CONFIG.comp.roundLossBonus, `a win resets the streak ($${b.money} for the next loss)`);
 }
 
+// Player classes.
+{
+  const dt = CONFIG.tickDt;
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  {
+    const s = new Sim(buildArena('sklad', 3131, 'dm'));
+    const plain = s.addPlayer('a', 'a', 1, null);
+    const assault = s.addPlayer('b', 'b', 2, 'assault');
+    const scout = s.addPlayer('c', 'c', 3, 'scout');
+    check(assault.grenades === plain.grenades + CONFIG.classes.assault.extraFrags, 'assault: an extra frag');
+    for (const a of [plain, assault]) {
+      a.ammo = 1;
+      (s as unknown as { startReload(x: unknown): void }).startReload(a);
+    }
+    check(assault.reloadT < plain.reloadT, 'assault: faster reload');
+    check(scout.buffs.nv > 0, 'scout: night vision on spawn');
+    // Footsteps: run both a plain player and a scout and compare the noise.
+    const stepNoise = (who: typeof plain) => {
+      s.noises = [];
+      who.stepDist = CONFIG.gait.stepLength;
+      who.vx = 5;
+      (s as unknown as { updateFootsteps(a: unknown, dt: number): void }).updateFootsteps(who, dt);
+      return s.noises.find((n) => n.ownerId === who.id)?.radius ?? 0;
+    };
+    check(stepNoise(scout) < stepNoise(plain), `scout: quieter steps (${stepNoise(scout)} m vs ${stepNoise(plain)} m)`);
+  }
+  {
+    const s = new Sim(generateMap(6262));
+    const medic = s.addPlayer('a', 'медик', 1, 'medic');
+    const hurt = s.addPlayer('b', 'раненый', 2, 'assault');
+    hurt.hp = 40;
+    hurt.x = medic.x + 2;
+    hurt.z = medic.z;
+    for (let t = 0; t < 2; t += dt) s.step(dt);
+    check(hurt.hp > 44, `medic: heals an ally nearby (${hurt.hp.toFixed(1)} hp after 2 s)`);
+    // Revive in half the time.
+    hurt.shield = 0;
+    (s as unknown as { damageActor(x: unknown, d: number, b: number): void }).damageActor(hurt, 999, 1000);
+    let t = 0;
+    while (hurt.downed && t < 5) {
+      medic.x = hurt.x + 0.8;
+      medic.z = hurt.z;
+      s.applyInput(medic, { ...input, use: true });
+      medic.x = hurt.x + 0.8;
+      medic.z = hurt.z;
+      s.step(dt);
+      t += dt;
+    }
+    check(!hurt.downed && t < CONFIG.down.reviveTime * 0.6, `medic: revives in ${t.toFixed(1)} s`);
+  }
+  {
+    const s = new Sim(buildArena('sklad', 3232, 'dm'));
+    const eng = s.addPlayer('a', 'инженер', 1, 'engineer');
+    eng.x = s.map.spawns[0].x;
+    eng.z = s.map.spawns[0].z;
+    const dir = [0, Math.PI / 2, Math.PI, -Math.PI / 2].find((a) =>
+      s.world.lineOfSight(eng.x, eng.z, eng.x + Math.cos(a) * 3, eng.z + Math.sin(a) * 3, []),
+    )!;
+    const before = s.props.length;
+    s.applyInput(eng, { ...input, aim: dir, deploy: true });
+    s.applyInput(eng, { ...input, aim: dir, deploy: true });
+    const shields = s.props.slice(before);
+    check(shields.length === 1 && shields[0].deployed === true, 'engineer: one shield per life');
+    // A bullet through it stops on the shield.
+    const shield = shields[0];
+    const target = s.addPlayer('b', 'b', 2, null);
+    target.x = eng.x + Math.cos(dir) * 4;
+    target.z = eng.z + Math.sin(dir) * 4;
+    target.shield = 0;
+    const hpBefore = target.hp;
+    s.bullets.push({
+      // From just past the engineer (a foreign bullet would hit him first).
+      id: 'eng', ownerId: 99, ownerKind: 'enemy', x: eng.x + Math.cos(dir) * 0.8, z: eng.z + Math.sin(dir) * 0.8, vx: Math.cos(dir) * 80, vz: Math.sin(dir) * 80, speed: 80,
+      damage: 30, damageMul: 1, life: 0.2, weapon: 'rifle', color: 0, range: 0,
+    });
+    for (let i = 0; i < 6; i++) s.step(dt);
+    check(target.hp === hpBefore && shield.hp < CONFIG.classes.engineer.shieldHp, 'the shield takes the bullet');
+  }
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

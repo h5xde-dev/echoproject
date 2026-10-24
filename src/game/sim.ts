@@ -12,6 +12,7 @@ import type {
   BombState,
   Difficulty,
   EnemyRole,
+  PlayerClass,
   Bullet,
   FlagState,
   Gait,
@@ -22,6 +23,7 @@ import type {
   GrenadeKind,
   MapData,
   PowerupKind,
+  PropKind,
   RoomDef,
   ShopItem,
   SimProp,
@@ -68,8 +70,22 @@ export interface PlayerInput {
   grenadeKind?: GrenadeKind;
   /** Use key held (E): plant or defuse the bomb. */
   use?: boolean;
+  /** Engineer: place the portable shield this tick (V). */
+  deploy?: boolean;
   /** Team marker placed this tick (middle mouse / Z), at a ground point. */
   mark?: { x: number; z: number };
+}
+
+/** A prop as snapshots carry it; shape only for props placed mid-match. */
+export interface PropSync {
+  id: number;
+  x: number;
+  z: number;
+  alive: boolean;
+  hp?: number;
+  kind?: PropKind;
+  hw?: number;
+  hh?: number;
 }
 
 /** Radius of a smoke cloud of this age: it billows out, then thins away. */
@@ -398,10 +414,12 @@ export class Sim {
       role: 'grunt',
       stillT: 0,
       lossStreak: 0,
+      cls: null,
+      shieldUsed: false,
     };
   }
 
-  addPlayer(peerId: string, name: string, id: number): Actor {
+  addPlayer(peerId: string, name: string, id: number, cls: PlayerClass | null = null): Actor {
     let x = this.map.spawnX + (id === 1 ? -1.6 : 1.6);
     let z = this.map.spawnZ;
     const team = this.teams ? this.teamFor(true) : -1;
@@ -417,6 +435,8 @@ export class Sim {
     const actor = this.newActor(id, 'player', name, x, z);
     actor.peerId = peerId;
     actor.team = team;
+    actor.cls = cls;
+    this.classKit(actor);
     if (this.arena && !this.rounds) actor.shield = CONFIG.dm.spawnShield;
     // Joining a competitive round already under way: wait for the next one.
     if (this.rounds && this.roundPhase !== 'freeze') {
@@ -595,6 +615,7 @@ export class Sim {
       return;
     }
     actor.using = !!input.use;
+    if (input.deploy) this.deployShield(actor);
     // Markers go to everyone; clients show them to the marker's allies only.
     if (input.mark && actor.markCd <= 0) {
       actor.markCd = 0.6;
@@ -635,7 +656,8 @@ export class Sim {
     const def = WEAPONS[actor.weapon];
     if (actor.reloading || actor.ammo >= def.mag) return;
     actor.reloading = true;
-    actor.reloadT = def.reloadTime * (actor.buffs.rapid > 0 ? CONFIG.powerups.rapidMul : 1);
+    const assault = actor.cls === 'assault' ? CONFIG.classes.assault.reloadMul : 1;
+    actor.reloadT = def.reloadTime * (actor.buffs.rapid > 0 ? CONFIG.powerups.rapidMul : 1) * assault;
     this.events.push({ type: 'reload', ownerId: actor.id });
   }
 
@@ -739,6 +761,7 @@ export class Sim {
     this.updateGrenades(dt);
     this.updateSmokes(dt);
     this.updateDowned(dt);
+    this.updateMedics(dt);
     this.updateProps(dt);
     this.updateItems(dt);
     if (this.mode === 'coop') this.updateRoomProgress();
@@ -854,7 +877,7 @@ export class Sim {
         (h) => h !== p && h.alive && !h.downed && h.using && dist(h.x, h.z, p.x, p.z) < D.reach,
       );
       if (helper) {
-        p.reviveT += dt;
+        p.reviveT += dt * (helper.cls === 'medic' ? CONFIG.classes.medic.reviveMul : 1);
         helper.useT = p.reviveT;
         if (p.reviveT >= D.reviveTime) {
           p.downed = false;
@@ -880,6 +903,47 @@ export class Sim {
     }
   }
 
+  /** What a class starts each life with. */
+  classKit(actor: Actor): void {
+    actor.shieldUsed = false;
+    if (actor.cls === 'assault') actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + CONFIG.classes.assault.extraFrags);
+    if (actor.cls === 'scout' && CONFIG.classes.scout.nvOnSpawn) actor.buffs.nv = CONFIG.powerups.nvTime;
+  }
+
+  /** Medics slowly patch up allies standing near them (not themselves). */
+  private updateMedics(dt: number): void {
+    const M = CONFIG.classes.medic;
+    for (const medic of this.actors.values()) {
+      if (medic.cls !== 'medic' || !medic.alive || medic.downed) continue;
+      for (const a of this.actors.values()) {
+        if (a === medic || !a.alive || a.downed || a.hp >= a.maxHp) continue;
+        if (this.hostileTo(medic, a) || this.hostileTo(a, medic)) continue;
+        if (a.kind !== 'player' || dist(a.x, a.z, medic.x, medic.z) > M.healRadius) continue;
+        a.hp = Math.min(a.maxHp, a.hp + M.healRate * dt);
+      }
+    }
+  }
+
+  /** Engineer: a portable shield in front of them, one per life. */
+  private deployShield(actor: Actor): void {
+    if (actor.cls !== 'engineer' || actor.shieldUsed || !actor.alive || actor.downed) return;
+    const E = CONFIG.classes.engineer;
+    const x = actor.x + Math.cos(actor.ang) * E.shieldDist;
+    const z = actor.z + Math.sin(actor.ang) * E.shieldDist;
+    // Broadside to where they look.
+    const alongX = Math.abs(Math.sin(actor.ang)) > Math.abs(Math.cos(actor.ang));
+    const hw = alongX ? E.shieldHw : E.shieldHh;
+    const hh = alongX ? E.shieldHh : E.shieldHw;
+    if (!this.world.lineOfSight(actor.x, actor.z, x, z, this.scratch)) return;
+    actor.shieldUsed = true;
+    const id = this.props.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+    this.props.push({
+      id, kind: 'cover', x, z, vx: 0, vz: 0, hw, hh, hp: E.shieldHp,
+      explosive: false, fixed: false, alive: true, room: this.roomIndex, mass: 4, deployed: true,
+    });
+    this.events.push({ type: 'deploy', ownerId: actor.id, x, z });
+  }
+
   /** Hidden while in a bush and quiet (not running, not just fired). */
   private updateConcealment(actor: Actor): void {
     const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
@@ -894,7 +958,7 @@ export class Sim {
     actor.stepDist += v * dt;
     if (actor.stepDist < CONFIG.gait.stepLength) return;
     actor.stepDist = 0;
-    const radius = CONFIG.gait.stepNoise[actor.gait];
+    const radius = CONFIG.gait.stepNoise[actor.gait] * (actor.cls === 'scout' ? CONFIG.classes.scout.stepNoiseMul : 1);
     if (radius <= 0) return;
     this.noises.push({ x: actor.x, z: actor.z, radius, time: this.time, ownerId: actor.id, step: true });
     this.events.push({ type: 'step', ownerId: actor.id, x: actor.x, z: actor.z });
@@ -926,9 +990,11 @@ export class Sim {
   moveActor(actor: Actor, moveX: number, moveZ: number, dt: number): void {
     const hasInput = Math.abs(moveX) + Math.abs(moveZ) > 0.01;
     if (hasInput) {
+      const gaitSpeed =
+        actor.gait === 'crouch' && actor.cls === 'scout' ? CONFIG.classes.scout.crouchSpeed : CONFIG.gait.speed[actor.gait];
       const speed =
         actor.speed *
-        CONFIG.gait.speed[actor.gait] *
+        gaitSpeed *
         (actor.carrying >= 0 ? CONFIG.ctf.carrySpeed : 1) *
         (actor.downed ? CONFIG.down.crawl : 1);
       const tvx = moveX * speed;
@@ -2031,6 +2097,7 @@ export class Sim {
     actor.buffs.damage = actor.buffs.speed = actor.buffs.rapid = actor.buffs.nv = 0;
     actor.carrying = -1;
     actor.downed = false;
+    this.classKit(actor);
     if (this.arena) {
       actor.hp = actor.maxHp;
       actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
@@ -2644,6 +2711,7 @@ export class Sim {
       a.hp = a.maxHp;
       a.respawnT = 0;
       a.buffs.damage = a.buffs.speed = a.buffs.rapid = a.buffs.nv = 0;
+      this.classKit(a);
       if (!survived) {
         a.weapons = ['pistol'];
         a.armor = 0;
@@ -2691,7 +2759,15 @@ export class Sim {
   // ------------------------------------------------------ client mirroring
 
   /** Applies authoritative prop transforms (used by the client-side mirror). */
-  syncProps(states: { id: number; x: number; z: number; alive: boolean; hp?: number }[]): void {
+  syncProps(states: PropSync[]): void {
+    // Props placed during the match (shields) arrive with their shape.
+    for (const s of states) {
+      if (!s.kind || this.props.some((p) => p.id === s.id)) continue;
+      this.props.push({
+        id: s.id, kind: s.kind, x: s.x, z: s.z, vx: 0, vz: 0, hw: s.hw ?? 1, hh: s.hh ?? 1, hp: s.hp ?? 1,
+        explosive: false, fixed: false, alive: s.alive, room: 0, mass: 4, deployed: true,
+      });
+    }
     for (const p of this.props) {
       const s = states.find((x) => x.id === p.id);
       if (!s) continue;

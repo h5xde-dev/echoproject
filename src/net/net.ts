@@ -1,5 +1,6 @@
 import Peer, { type PeerOptions } from 'peerjs';
 import { makeRoomCode } from '../core/rng';
+import type { PlayerClass } from '../game/types';
 import type {
   ClientMessage,
   EventMsg,
@@ -22,7 +23,7 @@ export interface HostClient {
 
 export interface NetHostHandlers {
   onClientInput(input: InputMsg, playerId: number): void;
-  onClientHello(name: string, playerId: number): void;
+  onClientHello(name: string, playerId: number, cls: PlayerClass | null): void;
   onClientLeave(playerId: number): void;
   onClientReady(playerId: number, ready: boolean): void;
   onStatus(text: string): void;
@@ -221,7 +222,7 @@ export class Net {
       case 'hello':
         client.name = msg.name.slice(0, 14) || 'оператор';
         client.ready = true;
-        this.hostHandlers?.onClientHello(client.name, client.playerId);
+        this.hostHandlers?.onClientHello(client.name, client.playerId, msg.cls ?? null);
         break;
       case 'input':
         this.hostHandlers?.onClientInput(msg, client.playerId);

@@ -72,6 +72,8 @@ export interface SimProp {
   alive: boolean;
   room: number;
   mass: number;
+  /** Placed during the match (an engineer's shield): clients learn its shape from snapshots. */
+  deployed?: boolean;
 }
 
 export interface PropDef {
@@ -160,6 +162,9 @@ export type ActorKind = 'player' | 'enemy';
 
 /** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
 export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss';
+
+/** A player's speciality (bots have none). */
+export type PlayerClass = 'assault' | 'scout' | 'medic' | 'engineer';
 
 /** How sharp bots and guards are. */
 export type Difficulty = 'easy' | 'normal' | 'hard';
@@ -298,6 +303,10 @@ export interface Actor {
   stillT: number;
   /** Competitive: rounds lost in a row (more money for the next one). */
   lossStreak: number;
+  /** Player class (null for bots and guards). */
+  cls: PlayerClass | null;
+  /** Engineer: the shield placed this life (one at a time). */
+  shieldUsed: boolean;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */
@@ -402,6 +411,7 @@ export interface GameEvent {
     | 'down'
     | 'revive'
     | 'objective'
+    | 'deploy'
     | 'smoke'
     | 'flash'
     | 'impact'

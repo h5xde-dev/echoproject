@@ -210,7 +210,7 @@ setStats.addEventListener('change', () => {
 applySettings();
 
 // Bot difficulty (menu), remembered with the other settings.
-const diffButtons = document.querySelectorAll<HTMLButtonElement>('.diff-btn');
+const diffButtons = document.querySelectorAll<HTMLButtonElement>('.diff-btn[data-difficulty]');
 const showDifficulty = () => diffButtons.forEach((b) => b.classList.toggle('active', b.dataset.difficulty === settings.difficulty));
 diffButtons.forEach((b) =>
   b.addEventListener('click', () => {
@@ -220,6 +220,21 @@ diffButtons.forEach((b) =>
   }),
 );
 showDifficulty();
+
+// Class (menu), remembered too; applied when a game starts or is joined.
+const clsButtons = document.querySelectorAll<HTMLButtonElement>('.cls-btn');
+const showClass = () => {
+  clsButtons.forEach((b) => b.classList.toggle('active', b.dataset.cls === settings.cls));
+  game.playerClass = settings.cls;
+};
+clsButtons.forEach((b) =>
+  b.addEventListener('click', () => {
+    settings.cls = (b.dataset.cls as Settings['cls']) ?? 'assault';
+    saveSettings(settings);
+    showClass();
+  }),
+);
+showClass();
 hud.onPauseMenu = () => backToMenu();
 
 function showError(message: string): void {

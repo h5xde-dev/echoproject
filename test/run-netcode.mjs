@@ -216,6 +216,28 @@ await page.keyboard.up('KeyE');
 await page.evaluate(() => clearInterval(window.__pinRevive));
 check('the host revives the client by holding E', revived);
 
+// Engineer's shield placed by the client shows up for both, as a prop.
+const shieldBefore = await page.evaluate(() => window.__net.gameA.sim.props.length);
+await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  gameA.sim.actors.get(gameB.localId).cls = 'engineer';
+  gameA.sim.actors.get(gameB.localId).shieldUsed = false;
+  gameB.pending.deploy = true;
+});
+const shieldSeen = await page
+  .waitForFunction(
+    (n) => {
+      const { gameA, gameB } = window.__net;
+      const id = gameA.sim.props.length > n ? gameA.sim.props[gameA.sim.props.length - 1].id : -1;
+      return id >= 0 && gameB.sim.props.some((p) => p.id === id) && gameB.renderer.propVisuals.some((v) => v.id === id);
+    },
+    shieldBefore,
+    { timeout: 10000 },
+  )
+  .then(() => true)
+  .catch(() => false);
+check("an engineer's shield appears for host and client", shieldSeen);
+
 // Lobby: a hosted room starts as a warm-up; the client says ready, the host
 // starts the match on a fresh map with everyone in it.
 const lobbyBefore = await page.evaluate(() => {

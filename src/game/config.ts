@@ -264,6 +264,14 @@ export const CONFIG = {
     blastDamage: 120,
   },
 
+  /** Player classes. */
+  classes: {
+    assault: { extraFrags: 1, reloadMul: 0.8 },
+    scout: { stepNoiseMul: 0.5, crouchSpeed: 0.5, nvOnSpawn: true },
+    medic: { reviveMul: 2, healRadius: 4, healRate: 3 },
+    engineer: { shieldHp: 160, shieldHw: 1.0, shieldHh: 0.35, shieldDist: 1.6 },
+  },
+
   /** Co-op with two or more players: knocked down instead of killed. */
   down: {
     /** Health of a downed player: the next burst finishes them. */

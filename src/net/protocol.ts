@@ -1,4 +1,4 @@
-import type { BombState, Buffs, EnemyRole, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, EnemyRole, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -42,6 +42,8 @@ export interface ActorState {
   /** Guard type (drawn differently) and a sniper's laser when on target. */
   role?: EnemyRole;
   aiming?: boolean;
+  cls?: PlayerClass | null;
+  shieldUsed?: boolean;
 }
 
 export interface BulletState {
@@ -59,6 +61,10 @@ export interface PropState {
   z: number;
   alive: boolean;
   hp?: number;
+  /** Shape, only for props placed mid-match (an engineer's shield). */
+  kind?: PropKind;
+  hw?: number;
+  hh?: number;
 }
 
 export interface PickupState {
@@ -168,6 +174,7 @@ export interface InputMsg {
   grenadeKind?: GrenadeKind;
   use?: boolean;
   mark?: { x: number; z: number };
+  deploy?: boolean;
 }
 
 export interface EventMsg {
@@ -191,6 +198,7 @@ export interface OverMsg {
 export interface HelloMsg {
   t: 'hello';
   name: string;
+  cls?: PlayerClass;
 }
 
 export interface PlayerJoinedMsg {

@@ -1,4 +1,4 @@
-import type { Difficulty } from '../game/types';
+import type { Difficulty, PlayerClass } from '../game/types';
 
 /**
  * Player settings, kept in localStorage. Storage can be missing (private
@@ -15,11 +15,13 @@ export interface Settings {
   stats: boolean;
   /** Bot difficulty for games you host or play solo. */
   difficulty: Difficulty;
+  /** Your class. */
+  cls: PlayerClass;
 }
 
 const KEY = 'echo.settings';
 
-export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal' };
+export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault' };
 
 export function loadSettings(): Settings {
   try {
@@ -32,6 +34,7 @@ export function loadSettings(): Settings {
       shake: typeof s.shake === 'boolean' ? s.shake : DEFAULT_SETTINGS.shake,
       stats: typeof s.stats === 'boolean' ? s.stats : DEFAULT_SETTINGS.stats,
       difficulty: s.difficulty === 'easy' || s.difficulty === 'hard' ? s.difficulty : 'normal',
+      cls: s.cls === 'scout' || s.cls === 'medic' || s.cls === 'engineer' ? s.cls : 'assault',
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

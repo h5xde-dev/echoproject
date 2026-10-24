@@ -10,7 +10,7 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
+import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 
@@ -61,6 +61,8 @@ export interface DisplayActor {
   reviveT: number;
   role: EnemyRole;
   aiming: boolean;
+  cls: PlayerClass | null;
+  shieldUsed: boolean;
   isLocal: boolean;
   moving: boolean;
 }
@@ -124,6 +126,10 @@ export class Game {
   private snapBuffer: SnapFrame[] = [];
   private pendingInputs: PendingInput[] = [];
   private clientInputs = new Map<string, { input: PlayerInput; once: OnceInput; lastAck: number }>();
+  /** This player's class (set from the menu before a game starts). */
+  playerClass: PlayerClass = 'assault';
+  /** Host: each client's class, kept for a match restart from the lobby. */
+  private clientClasses = new Map<number, PlayerClass | null>();
   /** Client: last measured round trip to the host (ms). */
   private rttMs = 0;
   /** Client: the room code joined, reused to reconnect. */
@@ -145,6 +151,7 @@ export class Game {
     grenade: false,
     buy: '' as ShopItem | '',
     mark: null as { x: number; z: number } | null,
+    deploy: false,
   };
   /** Minimap: recent noises of unseen enemies and team markers (ms timestamps). */
   private noiseBlips: { x: number; z: number; at: number }[] = [];
@@ -217,7 +224,7 @@ export class Game {
           mergeOnce(state.once, input);
         }
       },
-      onClientHello: (name, playerId) => this.onClientHello(name, playerId),
+      onClientHello: (name, playerId, cls) => this.onClientHello(name, playerId, cls),
       onClientLeave: (playerId) => this.onClientLeave(playerId),
       onClientReady: (playerId, ready) => {
         if (!this.lobby || this.lobby.started) return;
@@ -267,7 +274,7 @@ export class Game {
       onLobby: (msg) => this.showLobby(msg),
     });
 
-    this.net.send({ t: 'hello', name: this.localName });
+    this.net.send({ t: 'hello', name: this.localName, cls: this.playerClass });
   }
 
   /**
@@ -310,7 +317,7 @@ export class Game {
     this.sim = new Sim(this.map);
     if (opts.fighters) this.sim.fighters = opts.fighters;
     if (opts.difficulty) this.sim.difficulty = opts.difficulty;
-    this.sim.addPlayer('local', this.localName, this.localId);
+    this.sim.addPlayer('local', this.localName, this.localId, this.playerClass);
     this.sim.fillBots();
     this.setupWorld();
     this.startLoop();
@@ -358,8 +365,9 @@ export class Game {
 
   // ------------------------------------------------------------------ host
 
-  private onClientHello(name: string, playerId: number): void {
-    this.sim.addPlayer(`c${playerId}`, name, playerId);
+  private onClientHello(name: string, playerId: number, cls: PlayerClass | null): void {
+    this.clientClasses.set(playerId, cls);
+    this.sim.addPlayer(`c${playerId}`, name, playerId, cls);
     this.sim.fillBots();
     this.clientNames.set(playerId, name);
     this.clientInputs.set(String(playerId), {
@@ -449,7 +457,7 @@ export class Game {
     this.hud.hideGameOver();
     this.prevTick.clear();
     this.beginAuthoritySession(this.matchOpts);
-    for (const [id, name] of this.clientNames) this.sim.addPlayer(`c${id}`, name, id);
+    for (const [id, name] of this.clientNames) this.sim.addPlayer(`c${id}`, name, id, this.clientClasses.get(id) ?? null);
     this.sim.fillBots();
     for (const [id, name] of this.clientNames) this.sendWelcome(id, name);
     this.broadcastLobby();
@@ -507,10 +515,19 @@ export class Game {
         reviveT: a.reviveT,
         role: a.role,
         aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
+        cls: a.cls,
+        shieldUsed: a.shieldUsed,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
-    const props = this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: Math.round(p.hp) }));
+    const props = this.sim.props.map((p) => ({
+      id: p.id,
+      x: p.x,
+      z: p.z,
+      alive: p.alive,
+      hp: Math.round(p.hp),
+      ...(p.deployed ? { kind: p.kind, hw: p.hw, hh: p.hh } : {}),
+    }));
     const doors = this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT }));
     const ack: Record<string, number> = {};
     for (const [key, state] of this.clientInputs) ack[key] = state.lastAck;
@@ -858,6 +875,10 @@ export class Game {
       case 'roomEnter':
         this.hud.message(`Комната ${event.text}`, 'warn');
         break;
+      case 'deploy':
+        this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.door());
+        if (event.ownerId === this.localId) this.hud.message('Щит установлен', 'good');
+        break;
       case 'mark': {
         // Our own side's markers only.
         const owner = event.ownerId ?? -1;
@@ -1093,6 +1114,7 @@ export class Game {
     if (this.input.consume('flashlight')) this.pending.flashlight = true;
     if (this.input.consume('grenade')) this.pending.grenade = true;
     if (this.input.consume('nade')) this.nadeKind = this.nextNadeKind();
+    if (this.input.consume('deploy')) this.pending.deploy = true;
     if (this.input.consume('mark')) {
       const g = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
       this.pending.mark = { x: g.x, z: g.z };
@@ -1143,8 +1165,10 @@ export class Game {
       // Held, not pressed: planting and defusing take seconds.
       use: this.input.keys.has('KeyE'),
       mark: this.pending.mark ?? undefined,
+      deploy: this.pending.deploy,
     };
     this.pending.mark = null;
+    this.pending.deploy = false;
     this.pending.reload = false;
     this.pending.interact = false;
     this.pending.flashlight = false;
@@ -1301,6 +1325,8 @@ export class Game {
           reviveT: a.reviveT,
           role: a.role,
           aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
+          cls: a.cls,
+          shieldUsed: a.shieldUsed,
           isLocal,
           moving: a.moving,
         });
@@ -1324,7 +1350,7 @@ export class Game {
     this.renderer.syncTracers(
       src.map((b) => ({ x: b.x + b.vx * ahead, z: b.z + b.vz * ahead, vx: b.vx, vz: b.vz, color: b.color })),
     );
-    this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: p.hp })));
+    this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: p.hp, kind: p.kind, hw: p.hw, hh: p.hh })));
     this.renderer.syncDoors(this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT })));
     this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
@@ -1431,6 +1457,8 @@ export class Game {
         reviveT: b.reviveT ?? 0,
         role: b.role ?? 'grunt',
         aiming: b.aiming ?? false,
+        cls: b.cls ?? null,
+        shieldUsed: b.shieldUsed ?? false,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1719,6 +1747,8 @@ export class Game {
       useT: self.useT,
       bombCarrier: this.sim.bomb?.carrier === this.localId,
       attackTeam: this.sim.attackTeam,
+      cls: self.cls,
+      shieldReady: self.cls === 'engineer' && !self.shieldUsed,
       blind: self.blind,
       money: self.money,
       tier: self.tier,
@@ -1776,7 +1806,7 @@ function shortestAngle(a: number, b: number): number {
 }
 
 /** The parts of an input that happen once per press, not every tick. */
-type OnceInput = Pick<PlayerInput, 'reload' | 'interact' | 'flashlight' | 'slot' | 'grenade' | 'throwDist' | 'grenadeKind' | 'buy' | 'mark'>;
+type OnceInput = Pick<PlayerInput, 'reload' | 'interact' | 'flashlight' | 'slot' | 'grenade' | 'throwDist' | 'grenadeKind' | 'buy' | 'mark' | 'deploy'>;
 
 const NO_ONCE: OnceInput = {
   reload: false,
@@ -1788,6 +1818,7 @@ const NO_ONCE: OnceInput = {
   grenadeKind: undefined,
   buy: '',
   mark: undefined,
+  deploy: false,
 };
 
 /** Folds a packet's one-shot actions into those not yet applied. */
@@ -1804,4 +1835,5 @@ function mergeOnce(once: OnceInput, input: PlayerInput): void {
   }
   if (input.buy) once.buy = input.buy;
   if (input.mark) once.mark = input.mark;
+  if (input.deploy) once.deploy = true;
 }
