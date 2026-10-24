@@ -1,7 +1,7 @@
 import './styles.css';
 import { Game } from './game/game';
 import { Hud } from './ui/hud';
-import { loadSettings, saveSettings } from './ui/settings';
+import { loadSettings, saveSettings, type Settings } from './ui/settings';
 import { assets } from './render/assets';
 import { ARENAS, arenaGrid } from './game/arenas';
 import { modeInfo } from './game/modes';
@@ -208,6 +208,18 @@ setStats.addEventListener('change', () => {
   saveSettings(settings);
 });
 applySettings();
+
+// Bot difficulty (menu), remembered with the other settings.
+const diffButtons = document.querySelectorAll<HTMLButtonElement>('.diff-btn');
+const showDifficulty = () => diffButtons.forEach((b) => b.classList.toggle('active', b.dataset.difficulty === settings.difficulty));
+diffButtons.forEach((b) =>
+  b.addEventListener('click', () => {
+    settings.difficulty = (b.dataset.difficulty as Settings['difficulty']) ?? 'normal';
+    saveSettings(settings);
+    showDifficulty();
+  }),
+);
+showDifficulty();
 hud.onPauseMenu = () => backToMenu();
 
 function showError(message: string): void {
@@ -220,7 +232,7 @@ function showError(message: string): void {
 
 btnSolo.addEventListener('click', () => {
   game.audio.init();
-  game.startSolo(playerName(), { mode: matchMode, arena, fighters });
+  game.startSolo(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty });
   enterGame();
 });
 
@@ -229,7 +241,7 @@ btnHost.addEventListener('click', async () => {
   btnHost.disabled = true;
   btnHost.querySelector('.btn-title')!.textContent = 'СОЗДАЁМ...';
   try {
-    const code = await game.startHost(playerName(), { mode: matchMode, arena, fighters });
+    const code = await game.startHost(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty });
     roomCodeValue.textContent = code;
     roomResult.classList.remove('hidden');
     hud.showRoomCode(code);

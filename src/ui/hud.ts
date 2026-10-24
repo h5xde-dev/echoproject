@@ -771,6 +771,14 @@ export class Hud {
       }
     }
 
+    // Bushes: where you can hide.
+    ctx.fillStyle = 'rgba(70, 120, 55, 0.45)';
+    for (const b of map.bushes ?? []) {
+      ctx.beginPath();
+      ctx.arc(px(b.x), pz(b.z), Math.max(1.5, b.r * scale), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // Noise radar: unseen enemies' shots and steps; team markers.
     for (const b of blips.noise) {
       ctx.fillStyle = `rgba(255, 70, 90, ${0.75 * b.life})`;

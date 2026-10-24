@@ -602,6 +602,34 @@ for (const info of ARENAS) {
   check(s.bomb?.carrier === mate.id, 'another attacker picks it up');
 }
 
+// Bot difficulty: a hard guard spots the same player sooner than an easy one.
+{
+  const spotTime = (difficulty: 'easy' | 'hard') => {
+    const s = new Sim(generateMap(2024));
+    s.difficulty = difficulty;
+    const priv = s as unknown as { populateRoom(i: number): void; updateAi(a: unknown, dt: number): void };
+    priv.populateRoom(1);
+    const guard = [...s.actors.values()].find((a) => a.kind === 'enemy')!;
+    const p = s.addPlayer('local', 'тест', 1);
+    s.time = 30;
+    for (let t = 0; t < 6; t += CONFIG.tickDt) {
+      guard.ang = 0;
+      guard.x = s.map.rooms[1].wx;
+      guard.z = s.map.rooms[1].wz;
+      p.x = guard.x + 6;
+      p.z = guard.z;
+      p.alive = true;
+      p.hp = p.maxHp;
+      priv.updateAi(guard, CONFIG.tickDt);
+      if (guard.ai!.awareness >= 1) return t;
+    }
+    return Infinity;
+  };
+  const easy = spotTime('easy');
+  const hard = spotTime('hard');
+  check(hard < easy, `hard guards spot you sooner: ${hard.toFixed(2)} s vs ${easy.toFixed(2)} s on easy`);
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

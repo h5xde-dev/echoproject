@@ -102,6 +102,16 @@ export const CONFIG = {
     reactRand: 0.6,
   },
 
+  /**
+   * Bot difficulty, as factors on the AI: reaction delay, how fast they
+   * notice you, how wide their shots spread, how far they see.
+   */
+  difficulty: {
+    easy: { react: 1.6, awareness: 0.6, spread: 1.5, range: 0.85 },
+    normal: { react: 1, awareness: 1, spread: 1, range: 1 },
+    hard: { react: 0.6, awareness: 1.5, spread: 0.65, range: 1.15 },
+  },
+
   respawnDelay: 5.0,
 
   powerups: {

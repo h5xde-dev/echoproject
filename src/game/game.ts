@@ -10,7 +10,7 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
+import type { Buffs, Bullet, Difficulty, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 
@@ -22,6 +22,7 @@ export interface MatchOptions {
   arena?: string;
   /** Arena head count including humans (bots fill the rest). */
   fighters?: number;
+  difficulty?: Difficulty;
 }
 
 export interface DisplayActor {
@@ -54,6 +55,7 @@ export interface DisplayActor {
   team: number;
   carrying: number;
   useT: number;
+  crouched: boolean;
   isLocal: boolean;
   moving: boolean;
 }
@@ -300,6 +302,7 @@ export class Game {
     this.map = isArena(this.matchMode) ? buildArena(this.arena, seed, this.matchMode) : generateMap(seed);
     this.sim = new Sim(this.map);
     if (opts.fighters) this.sim.fighters = opts.fighters;
+    if (opts.difficulty) this.sim.difficulty = opts.difficulty;
     this.sim.addPlayer('local', this.localName, this.localId);
     this.sim.fillBots();
     this.setupWorld();
@@ -491,10 +494,11 @@ export class Game {
         team: a.team,
         carrying: a.carrying,
         useT: a.useT,
+        crouched: a.gait === 'crouch',
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
-    const props = this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive }));
+    const props = this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: Math.round(p.hp) }));
     const doors = this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT }));
     const ack: Record<string, number> = {};
     for (const [key, state] of this.clientInputs) ack[key] = state.lastAck;
@@ -682,8 +686,7 @@ export class Game {
         this.renderer.muzzleFlash(event.x ?? 0, event.z ?? 0, event.dirX ?? 0, event.dirZ ?? 0, size);
         this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
         this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
-        const dist = this.localActorPosition(event.x ?? 0, event.z ?? 0);
-        this.audio.shot(size, dist);
+        this.soundAt(event.x ?? 0, event.z ?? 0, (dist) => this.audio.shot(size, dist));
         if (isLocalPlayer) {
           this.renderer.shake(def.shake);
           this.hud.kick(0.25 + def.shake * 0.5);
@@ -694,16 +697,16 @@ export class Game {
       }
       case 'smoke':
         this.renderer.smokePop(event.x ?? 0, event.z ?? 0);
-        this.audio.smokePop(this.localActorPosition(event.x ?? 0, event.z ?? 0));
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.smokePop(d));
         break;
       case 'flash':
         this.renderer.flashBang(event.x ?? 0, event.z ?? 0);
-        this.audio.flashBang(this.localActorPosition(event.x ?? 0, event.z ?? 0));
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.flashBang(d));
         break;
       case 'lampBreak':
         this.renderer.breakLamp(Number(event.id));
         if (this.isAuthority) this.renderer.syncLamps(this.sim.lampAlive);
-        this.audio.glass(this.localActorPosition(event.x ?? 0, event.z ?? 0));
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.glass(d));
         break;
       case 'step': {
         // Own steps are played from local input (no network delay).
@@ -711,18 +714,19 @@ export class Game {
         if (owner === this.localId) break;
         this.renderer.stepFrom(owner, event.x ?? 0, event.z ?? 0);
         this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
-        const d = this.localActorPosition(event.x ?? 0, event.z ?? 0);
-        if (d < 16) this.audio.step(0.9 * (1 - d / 16));
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => {
+          if (d < 16) this.audio.step(0.9 * (1 - d / 16));
+        });
         break;
       }
       case 'impact':
         this.renderer.impact(event.x ?? 0, event.z ?? 0);
-        this.audio.impact();
+        this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.impact());
         break;
       case 'explosion':
         this.renderer.explosion(event.x ?? 0, event.z ?? 0);
         this.renderer.blastRagdolls(event.x ?? 0, event.z ?? 0);
-        this.audio.explosion();
+        this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.explosion());
         this.renderer.shake(1.1);
         break;
       case 'hurt': {
@@ -752,7 +756,7 @@ export class Game {
             .ensureActor(victim.id, this.colorFor(victim.id), victim.kind === 'player')
             .setDeathImpulse(victim.x - killer.x, victim.z - killer.z, Math.min(7, power));
         }
-        this.audio.death();
+        this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.death());
         // Our own death: watch the killer for a moment, then an ally.
         if (event.ownerId === this.localId) this.spectate = { killer: event.by ?? -1, at: performance.now() };
         if (event.by === this.localId && event.ownerId !== this.localId) this.hud.hitMarker(true);
@@ -810,7 +814,9 @@ export class Game {
         }
         break;
       case 'reload':
-        if (event.ownerId === this.localId || this.localActorPosition(event.x ?? 0, event.z ?? 0) < 12) this.audio.reload();
+        if (event.ownerId === this.localId || this.localActorPosition(event.x ?? 0, event.z ?? 0) < 12) {
+          this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.reload());
+        }
         break;
       case 'pickup':
         if (event.ownerId === this.localId) {
@@ -846,7 +852,7 @@ export class Game {
         const site = event.id === '1' ? 'B' : 'A';
         if (event.text === 'planted') {
           this.hud.banner(`БОМБА НА ${site}`, `${CONFIG.bomb.timer} секунд`);
-          this.audio.flashBang(this.localActorPosition(event.x ?? 0, event.z ?? 0) + 20);
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.flashBang(d + 20));
         } else if (event.text === 'defused') {
           this.hud.message(`${who}: бомба обезврежена`, this.localTeam() === 1 ? 'good' : 'warn');
         } else if (event.text === 'dropped') {
@@ -1193,7 +1199,7 @@ export class Game {
     for (const hit of updateBullets(this.clientBullets, ctx, dt)) {
       if (hit.kind === 'static') {
         this.renderer.impact(hit.x, hit.z);
-        this.audio.impact();
+        this.soundAt(hit.x, hit.z, () => this.audio.impact());
       } else if (hit.kind === 'actor') {
         this.renderer.blood(hit.x, hit.z);
       }
@@ -1244,6 +1250,8 @@ export class Game {
           team: a.team,
           carrying: a.carrying,
           useT: a.useT,
+          // The local player's own stance is known now, not a tick later.
+          crouched: isLocal ? this.frameGait === 'crouch' : a.gait === 'crouch',
           isLocal,
           moving: a.moving,
         });
@@ -1267,7 +1275,7 @@ export class Game {
     this.renderer.syncTracers(
       src.map((b) => ({ x: b.x + b.vx * ahead, z: b.z + b.vz * ahead, vx: b.vx, vz: b.vz, color: b.color })),
     );
-    this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive })));
+    this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: p.hp })));
     this.renderer.syncDoors(this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT })));
     this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
@@ -1362,6 +1370,7 @@ export class Game {
         team: b.team ?? -1,
         carrying: b.carrying ?? -1,
         useT: b.useT ?? 0,
+        crouched: b.id === this.localId ? this.frameGait === 'crouch' : (b.crouched ?? false),
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1458,6 +1467,19 @@ export class Game {
     return actor ? this.sim.spreadMul(actor) : 1;
   }
 
+  /**
+   * Plays a sound from a world point: `play` gets the distance to the
+   * listener and the sound comes from that side of the screen.
+   */
+  private soundAt(x: number, z: number, play: (dist: number) => void): void {
+    const self = this.localDisplay();
+    const dist = self ? Math.hypot(self.x - x, self.z - z) : 0;
+    // Pure direction, not loudness (distance already sets that); right next
+    // to you a sound is centred.
+    const pan = self && dist > 1.5 ? ((x - self.x) / dist) * 0.85 : 0;
+    this.audio.from(pan, () => play(dist));
+  }
+
   private localActorPosition(x: number, z: number): number {
     const self = this.localDisplay();
     if (!self) return 0;
@@ -1468,14 +1490,14 @@ export class Game {
    * Flashlights to draw (local first: the renderer pairs spotlights by
    * index). In deathmatch only the local player's sight counts as vision.
    */
-  private playerLights(): { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean }[] {
-    const out: { id: number; x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean }[] = [];
+  private playerLights(): { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean; blind: number }[] {
+    const out: { id: number; x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean; blind: number }[] = [];
     const team = this.localTeam();
     for (const d of this.display.values()) {
       if (d.kind !== 'player') continue;
       // Team modes: the other side's humans are not your eyes.
       if (isTeamMode(this.matchMode) && d.team !== team) continue;
-      out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive, nv: d.buffs.nv > 0 });
+      out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive, nv: d.buffs.nv > 0, blind: d.blind });
     }
     out.sort((a, b) => (a.id === this.localId ? 0 : 1) - (b.id === this.localId ? 0 : 1));
     return out.slice(0, 2);

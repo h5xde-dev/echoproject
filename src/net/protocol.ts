@@ -33,6 +33,8 @@ export interface ActorState {
   carrying?: number;
   /** Bomb: seconds the use key has been held (plant / defuse progress). */
   useT?: number;
+  /** Crouched: drawn lower for everyone. */
+  crouched?: boolean;
 }
 
 export interface BulletState {
@@ -49,6 +51,7 @@ export interface PropState {
   x: number;
   z: number;
   alive: boolean;
+  hp?: number;
 }
 
 export interface PickupState {

@@ -74,7 +74,7 @@ export class GameAudio {
     lp.frequency.value = lowpass;
     const g = ctx.createGain();
     g.gain.value = gain;
-    src.connect(lp).connect(g).connect(master);
+    src.connect(lp).connect(g).connect(this.out(master));
     src.start();
   }
 
@@ -93,6 +93,31 @@ export class GameAudio {
 
   private applyGain(): void {
     if (this.master) this.master.gain.value = this.muted ? 0 : 0.5 * this.volume;
+  }
+
+  /**
+   * Plays whatever `play` schedules from a direction on screen: -1 hard
+   * left, 1 hard right. The camera looks straight down, so world X is
+   * screen X.
+   */
+  from(pan: number, play: () => void): void {
+    this.panNow = clamp(pan, -1, 1);
+    try {
+      play();
+    } finally {
+      this.panNow = 0;
+    }
+  }
+
+  private panNow = 0;
+
+  /** Where a new sound connects: the master, through a panner when aimed. */
+  private out(master: GainNode): AudioNode {
+    if (!this.ctx || this.panNow === 0) return master;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = this.panNow;
+    p.connect(master);
+    return p;
   }
 
   private get now(): number {
@@ -114,7 +139,7 @@ export class GameAudio {
     const t = this.now;
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-    src.connect(bp).connect(g).connect(master);
+    src.connect(bp).connect(g).connect(this.out(master));
     src.start(t);
     src.stop(t + duration + 0.02);
   }
@@ -131,7 +156,7 @@ export class GameAudio {
     const g = ctx.createGain();
     g.gain.setValueAtTime(gain, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-    osc.connect(g).connect(master);
+    osc.connect(g).connect(this.out(master));
     osc.start(t);
     osc.stop(t + duration + 0.02);
   }

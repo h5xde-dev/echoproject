@@ -158,6 +158,9 @@ export interface MapData {
 
 export type ActorKind = 'player' | 'enemy';
 
+/** How sharp bots and guards are. */
+export type Difficulty = 'easy' | 'normal' | 'hard';
+
 /** How a soldier moves: speed, noise and accuracy depend on it. */
 export type Gait = 'run' | 'walk' | 'crouch';
 

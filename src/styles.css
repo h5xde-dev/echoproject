@@ -862,14 +862,14 @@ body {
 
 /* ---------------------------------------------------------- mode select */
 .mode-select { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
-.mode-btn, .arena-btn {
+.mode-btn, .arena-btn, .diff-btn {
   font: inherit; color: var(--ink-dim); text-align: left; cursor: pointer;
   background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-line);
   padding: 9px 12px; display: flex; flex-direction: column; gap: 3px;
   transition: border-color 150ms, color 150ms, background 150ms;
 }
-.mode-btn:hover, .arena-btn:hover { border-color: rgba(63, 214, 200, 0.45); color: var(--ink); }
-.mode-btn.active, .arena-btn.active { border-color: var(--accent); color: var(--ink); background: rgba(63, 214, 200, 0.08); }
+.mode-btn:hover, .arena-btn:hover, .diff-btn:hover { border-color: rgba(63, 214, 200, 0.45); color: var(--ink); }
+.mode-btn.active, .arena-btn.active, .diff-btn.active { border-color: var(--accent); color: var(--ink); background: rgba(63, 214, 200, 0.08); }
 .mode-btn .btn-title { font-size: 14px; letter-spacing: 0.14em; font-weight: 700; }
 .mode-btn .btn-desc { font-size: 11px; letter-spacing: 0.04em; opacity: 0.8; }
 .arena-select { margin-bottom: 12px; }
@@ -1105,3 +1105,8 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
 .lobby-row.ready b { color: var(--accent); }
 .lobby-action { padding: 8px 10px; }
 .lobby-hint { font-size: 10px; color: var(--ink-dim); opacity: 0.8; }
+
+/* Bot difficulty in the menu. */
+.difficulty { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.difficulty-row { display: flex; gap: 6px; }
+.diff-btn { flex: 1; text-align: center; font-size: 13px; letter-spacing: 0.1em; padding: 7px 8px; }

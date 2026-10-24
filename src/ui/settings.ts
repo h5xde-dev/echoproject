@@ -1,3 +1,5 @@
+import type { Difficulty } from '../game/types';
+
 /**
  * Player settings, kept in localStorage. Storage can be missing (private
  * windows, blocked site data): then the defaults simply apply each session.
@@ -11,11 +13,13 @@ export interface Settings {
   shake: boolean;
   /** FPS and ping counter in the corner. */
   stats: boolean;
+  /** Bot difficulty for games you host or play solo. */
+  difficulty: Difficulty;
 }
 
 const KEY = 'echo.settings';
 
-export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false };
+export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal' };
 
 export function loadSettings(): Settings {
   try {
@@ -27,6 +31,7 @@ export function loadSettings(): Settings {
       quality: s.quality === 'low' ? 'low' : 'high',
       shake: typeof s.shake === 'boolean' ? s.shake : DEFAULT_SETTINGS.shake,
       stats: typeof s.stats === 'boolean' ? s.stats : DEFAULT_SETTINGS.stats,
+      difficulty: s.difficulty === 'easy' || s.difficulty === 'hard' ? s.difficulty : 'normal',
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

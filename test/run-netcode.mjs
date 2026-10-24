@@ -128,6 +128,15 @@ check(
 );
 check('prediction agrees while walking', walking.error < 1.5, `error ${walking.error.toFixed(2)} units`);
 
+// Crouching shows for others: the host draws the client's soldier crouched.
+await page.keyboard.down('KeyC');
+const crouchSeen = await page
+  .waitForFunction(() => window.__net.gameA.display.get(window.__net.gameB.localId)?.crouched === true, null, { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+await page.keyboard.up('KeyC');
+check('the host sees the client crouch', crouchSeen);
+
 // The client fires; the host must spawn bullets and the client must see them.
 // Bullets are short-lived, so track the peak count on both peers.
 // Bullets are short-lived, so sample the peak count on both peers while the

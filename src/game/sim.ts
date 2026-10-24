@@ -10,6 +10,7 @@ import type {
   Actor,
   AiState,
   BombState,
+  Difficulty,
   Bullet,
   FlagState,
   Gait,
@@ -151,6 +152,8 @@ export class Sim {
   matchOver = false;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
+  /** Bot and guard sharpness (host setting). */
+  difficulty: Difficulty = 'normal';
   /** Bomb planting: this round's bomb, the two sites, the site attackers aim for. */
   bomb: BombState | null = null;
   sites: { x: number; z: number }[] = [];
@@ -1179,6 +1182,7 @@ export class Sim {
       detectRange = P.darkRange;
       if (nearest.flashOn) detectRange = P.flashRange;
       if (lit) detectRange = Math.max(detectRange, P.litRange);
+      detectRange *= CONFIG.difficulty[this.difficulty].range;
       const toTarget = Math.atan2(nearest.z - actor.z, nearest.x - actor.x);
       const facing = Math.cos(toTarget - actor.ang);
       const inFov = facing > Math.cos(P.fovHalf) || d < P.nearSense;
@@ -1192,7 +1196,8 @@ export class Sim {
     const alerted = ai.mode === 'alert' || ai.mode === 'chase' || ai.mode === 'attack';
     if (inSight && nearest) {
       const closeness = 1 - nearestD / detectRange;
-      const rate = P.awarenessRate * (0.35 + closeness * 1.3) * (alerted ? 2.5 : 1) * (this.arena ? 1.6 : 1);
+      const rate =
+        P.awarenessRate * (0.35 + closeness * 1.3) * (alerted ? 2.5 : 1) * (this.arena ? 1.6 : 1) * CONFIG.difficulty[this.difficulty].awareness;
       ai.awareness = Math.min(1, ai.awareness + rate * dt);
     } else {
       ai.awareness = Math.max(0, ai.awareness - P.awarenessDecay * dt);
@@ -1223,7 +1228,7 @@ export class Sim {
       ai.aimT += dt;
       if (!ai.sawTarget) {
         ai.sawTarget = true;
-        ai.reactT = P.reactMin + this.rng.next() * P.reactRand;
+        ai.reactT = (P.reactMin + this.rng.next() * P.reactRand) * CONFIG.difficulty[this.difficulty].react;
       }
       ai.mode = 'attack';
       ai.lastKnownX = nearest.x;
@@ -1720,7 +1725,7 @@ export class Sim {
     // Accuracy settles in over the first second on target.
     const settle = clamp(0.35 + (actor.ai?.aimT ?? 1) * 0.65, 0.35, 1);
     const accuracy = clamp(0.42 - dist(actor.x, actor.z, target.x, target.z) * 0.02, 0.06, 0.36) * settle;
-    const spread = def.spread * (1 + (1 - accuracy) * 10);
+    const spread = def.spread * (1 + (1 - accuracy) * 10) * CONFIG.difficulty[this.difficulty].spread;
     const shotSeq = actor.shotSeq++;
     const srng = new Rng(shotSeed(actor.id, shotSeq, this.map.seed));
     const pellets: { dx: number; dz: number; speed: number }[] = [];
@@ -2359,13 +2364,14 @@ export class Sim {
   // ------------------------------------------------------ client mirroring
 
   /** Applies authoritative prop transforms (used by the client-side mirror). */
-  syncProps(states: { id: number; x: number; z: number; alive: boolean }[]): void {
+  syncProps(states: { id: number; x: number; z: number; alive: boolean; hp?: number }[]): void {
     for (const p of this.props) {
       const s = states.find((x) => x.id === p.id);
       if (!s) continue;
       p.x = s.x;
       p.z = s.z;
       p.alive = s.alive;
+      if (s.hp !== undefined) p.hp = s.hp;
       p.vx = 0;
       p.vz = 0;
     }

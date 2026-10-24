@@ -22,6 +22,8 @@ export interface ActorView {
   weapon: WeaponId;
   buffs?: { damage: number; speed: number; rapid: number };
   shield?: number;
+  /** Crouched soldiers are drawn lower (others can tell they are sneaking). */
+  crouched?: boolean;
 }
 
 interface HoldSpec {
@@ -202,7 +204,12 @@ export class ActorVisual {
     return !this.dead;
   }
 
+  /** 0 standing … 1 fully crouched, eased. */
+  private crouch = 0;
+
   update(actor: ActorView, dt: number): void {
+    this.crouch += ((actor.crouched && actor.alive ? 1 : 0) - this.crouch) * Math.min(1, dt * 10);
+    this.bodyGroup.scale.y = 1 - 0.22 * this.crouch;
     // Velocity from positions works for local, simulated and interpolated actors.
     if (Number.isNaN(this.prevX) || dt <= 0) {
       this.prevX = actor.x;

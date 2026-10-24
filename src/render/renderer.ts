@@ -33,6 +33,10 @@ export const GUN_HEIGHT = 1.4;
 interface PropVisual {
   id: number;
   group: THREE.Group;
+  /** Starting health (breakable props); damage shows as sagging. */
+  maxHp: number;
+  /** A fixed per-prop tilt direction, so wear does not look uniform. */
+  tilt: number;
 }
 
 interface DoorVisual {
@@ -374,7 +378,8 @@ export class Renderer {
 
     // Bushes: a clump of leafy blobs each; see-through while you stand in one.
     this.bushVisuals = (map.bushes ?? []).map((b, i) => {
-      const material = new THREE.MeshStandardMaterial({ color: 0x2c4424, roughness: 0.95, transparent: true });
+      // A faint glow of their own: in the dark a bush still reads as a shape.
+      const material = new THREE.MeshStandardMaterial({ color: 0x2c4424, emissive: 0x0e1c0a, roughness: 0.95, transparent: true });
       const group = new THREE.Group();
       group.position.set(b.x, 0, b.z);
       const blobs = 6;
@@ -419,7 +424,7 @@ export class Renderer {
         group.add(mesh);
       }
       g.add(group);
-      this.propVisuals.push({ id: p.id, group });
+      this.propVisuals.push({ id: p.id, group, maxHp: p.fixed ? 0 : p.hp, tilt: ((p.id * 7919) % 628) / 100 });
     }
 
     // Doors: steel shutters matching the sim's door bodies (see Sim ctor).
@@ -930,12 +935,19 @@ export class Renderer {
     if (v && this.hostile(ownerId) && !this.isRevealed(ownerId)) this.pings.spawn(x, z, 0.45, 0.4);
   }
 
-  syncProps(props: { id: number; x: number; z: number; alive: boolean }[]): void {
+  syncProps(props: { id: number; x: number; z: number; alive: boolean; hp?: number }[]): void {
     for (const pv of this.propVisuals) {
       const p = props.find((x) => x.id === pv.id);
       if (!p) continue;
       pv.group.visible = p.alive;
       pv.group.position.set(p.x, 0, p.z);
+      // Wear: a battered crate sags and leans before it gives way.
+      if (pv.maxHp > 0 && p.hp !== undefined) {
+        const wear = Math.min(1, Math.max(0, 1 - p.hp / pv.maxHp));
+        pv.group.scale.y = 1 - 0.28 * wear;
+        pv.group.rotation.x = Math.cos(pv.tilt) * 0.14 * wear;
+        pv.group.rotation.z = Math.sin(pv.tilt) * 0.14 * wear;
+      }
     }
   }
 
@@ -1139,7 +1151,7 @@ export class Renderer {
    */
   update(
     dt: number,
-    players: { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv?: boolean }[],
+    players: { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv?: boolean; blind?: number }[],
     viewerCount = 2,
     beams: { x: number; z: number; ang: number }[] = [],
   ): void {
@@ -1261,7 +1273,7 @@ export class Renderer {
     }
   }
 
-  private updateVision(dt: number, players: { x: number; z: number; ang: number; alive: boolean; flashOn: boolean; nv?: boolean }[]): void {
+  private updateVision(dt: number, players: { x: number; z: number; ang: number; alive: boolean; flashOn: boolean; nv?: boolean; blind?: number }[]): void {
     const map = this.map;
     for (let i = 0; i < this.viewers.length; i++) {
       const v = this.viewers[i];
@@ -1273,6 +1285,8 @@ export class Renderer {
       // Flashlight on: long sight; off: eyes adjust, but you see less.
       // Night vision gives the long sight without the giveaway beam.
       v.range = p.flashOn || p.nv ? CONFIG.flashlight.visionOn : CONFIG.flashlight.visionOff;
+      // Flashed: sight shrinks to a few metres and opens up as it wears off.
+      v.range *= 1 - 0.8 * Math.min(1, p.blind ?? 0);
       // Only walls (and closed doors) that can intersect the sight radius.
       const r = VISION.range + 2;
       const near = this.visionWalls;
