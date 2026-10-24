@@ -201,8 +201,13 @@ export const CONFIG = {
   comp: {
     startMoney: 800,
     killReward: 300,
+    /** Kill money by weapon: close-range guns pay for the risk, the sniper rifle hardly. */
+    killRewardBy: { pistol: 300, smg: 600, shotgun: 900, rifle: 300, sniper: 100 },
     roundWinBonus: 1500,
     roundLossBonus: 900,
+    /** Each round lost in a row adds this to the loss money, up to lossStreakMax times. */
+    lossStreakBonus: 500,
+    lossStreakMax: 3,
     maxMoney: 9000,
     freezeTime: 3,
     buyTime: 15,

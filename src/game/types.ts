@@ -296,6 +296,8 @@ export interface Actor {
   role: EnemyRole;
   /** Seconds standing still (a sniper rifle settles on target). */
   stillT: number;
+  /** Competitive: rounds lost in a row (more money for the next one). */
+  lossStreak: number;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */

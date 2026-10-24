@@ -397,6 +397,7 @@ export class Sim {
       downBy: -1,
       role: 'grunt',
       stillT: 0,
+      lossStreak: 0,
     };
   }
 
@@ -1210,7 +1211,8 @@ export class Sim {
     if (this.mode === 'waves' && killer.kind === 'player') {
       killer.money = Math.min(CONFIG.comp.maxMoney, killer.money + CONFIG.waves.killReward);
     } else if (this.rounds) {
-      killer.money = Math.min(CONFIG.comp.maxMoney, killer.money + CONFIG.comp.killReward);
+      const reward = CONFIG.comp.killRewardBy[killer.weapon] ?? CONFIG.comp.killReward;
+      killer.money = Math.min(CONFIG.comp.maxMoney, killer.money + reward);
     } else if (this.mode === 'gun') {
       killer.tierKills++;
       if (killer.tierKills < CONFIG.gun.killsPerTier) return;
@@ -2402,7 +2404,8 @@ export class Sim {
         // Winner: the last one standing (or, on time, the healthiest survivor).
         const winner = alive.sort((a, b) => b.hp - a.hp)[0];
         for (const a of this.actors.values()) {
-          const bonus = a === winner ? C.roundWinBonus : C.roundLossBonus;
+          a.lossStreak = a === winner ? 0 : a.lossStreak + 1;
+          const bonus = a === winner ? C.roundWinBonus : this.lossMoney(a.lossStreak);
           a.money = Math.min(C.maxMoney, a.money + bonus);
         }
         const score = winner ? this.scores.get(winner.id) : undefined;
@@ -2547,9 +2550,11 @@ export class Sim {
   private endTeamRound(winner: number, reason: string): void {
     const C = CONFIG.comp;
     this.teamScore[winner]++;
+    this.teamLossStreak[winner] = 0;
+    this.teamLossStreak[1 - winner]++;
     for (const a of this.actors.values()) {
       if (a.team < 0) continue;
-      const bonus = a.team === winner ? C.roundWinBonus : C.roundLossBonus;
+      const bonus = a.team === winner ? C.roundWinBonus : this.lossMoney(this.teamLossStreak[a.team]);
       a.money = Math.min(C.maxMoney, a.money + bonus);
       a.useT = 0;
     }
@@ -2566,8 +2571,18 @@ export class Sim {
     if (!this.sidesSwapped && this.round >= Math.floor(C.maxRounds / 2)) {
       this.sidesSwapped = true;
       this.halftimeReset = true;
+      this.teamLossStreak = [0, 0];
       this.events.push({ type: 'round', text: 'swap', team: this.attackTeam });
     }
+  }
+
+  /** Bomb: rounds each team has lost in a row. */
+  private teamLossStreak: [number, number] = [0, 0];
+
+  /** Money for losing a round: grows with a losing streak, so a side can come back. */
+  private lossMoney(streak: number): number {
+    const C = CONFIG.comp;
+    return C.roundLossBonus + C.lossStreakBonus * Math.min(C.lossStreakMax, Math.max(0, streak - 1));
   }
 
   /** Bomb: a carrier going down drops it where they fall. */

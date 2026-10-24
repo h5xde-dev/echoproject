@@ -900,6 +900,34 @@ for (const info of ARENAS) {
   check(ranges.every((_, i) => best(i) !== 'pistol'), 'the starting pistol is never the best');
 }
 
+// Round economy: kill money by weapon, a growing loss bonus.
+{
+  const s = new Sim(buildArena('sklad', 2323, 'bomb'));
+  const a = s.addPlayer('local', 'альфа', 1);
+  const b = s.addPlayer('c2', 'браво', 2);
+  const priv = s as unknown as { rewardKill(k: unknown): void; endTeamRound(w: number, r: string): void; equip(x: unknown, w: string): void };
+  const pay = (weapon: string) => {
+    priv.equip(a, weapon);
+    a.money = 0;
+    priv.rewardKill(a);
+    return a.money;
+  };
+  check(pay('shotgun') > pay('rifle') && pay('rifle') > pay('sniper'), `kill money: shotgun $${pay('shotgun')}, rifle $${pay('rifle')}, sniper $${pay('sniper')}`);
+  const losses: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    b.money = 0;
+    priv.endTeamRound(a.team, 'тест');
+    losses.push(b.money);
+    if (s.matchOver) break;
+  }
+  check(losses[1] > losses[0] && losses[3] === losses[0] + CONFIG.comp.lossStreakBonus * CONFIG.comp.lossStreakMax, `losing in a row pays more, capped: ${losses.join(' → ')}`);
+  // Blue's long losing run ends with a win; its next loss is back to the base pay.
+  priv.endTeamRound(b.team, 'тест');
+  b.money = 0;
+  priv.endTeamRound(a.team, 'тест');
+  check(b.money === CONFIG.comp.roundLossBonus, `a win resets the streak ($${b.money} for the next loss)`);
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');
