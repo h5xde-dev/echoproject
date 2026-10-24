@@ -6,7 +6,8 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '../game/config';
-import type { FloorRect, MapData, PowerupKind, PropKind, RoomTheme, StaticBody } from '../game/types';
+import type { FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody } from '../game/types';
+import { smokeRadius } from '../game/sim';
 import type { WeaponId } from '../game/weapons';
 import { ActorVisual } from './actors';
 import { assets } from './assets';
@@ -78,6 +79,16 @@ export class Renderer {
   private grenadeMeshes: { body: THREE.Mesh; ring: THREE.Mesh }[] = [];
   private grenadeGeo = new THREE.SphereGeometry(0.13, 10, 8);
   private grenadeMat = new THREE.MeshStandardMaterial({ color: 0x3d4a2e, roughness: 0.6, metalness: 0.3, emissive: 0x220000 });
+  private grenadeMats: Record<GrenadeKind, THREE.Material> = {
+    frag: this.grenadeMat,
+    smoke: new THREE.MeshStandardMaterial({ color: 0x6d7378, roughness: 0.7, metalness: 0.2 }),
+    flash: new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.4, metalness: 0.5, emissive: 0x202020 }),
+  };
+  /** Smoke clouds: a cluster of soft sprites each, keyed by cloud id. */
+  private smokeClouds = new Map<number, { group: THREE.Group; seen: boolean }>();
+  /** The same clouds as circles, for line of sight. */
+  private smokeCircles: { x: number; z: number; r: number }[] = [];
+  private smokeTexture = makeSmokeTexture();
   private powerupVisuals = new Map<number, THREE.Group>();
   private hostile: (id: number) => boolean = (id) => id >= 1000;
   private viewerCount = 2;
@@ -622,7 +633,10 @@ export class Renderer {
   }
 
   /** Grenades in flight: body in the scene, danger ring above the fog. */
-  syncGrenades(grenades: { x: number; y: number; z: number; vx: number; vy: number; vz: number; fuse: number }[], ahead: number): void {
+  syncGrenades(
+    grenades: { kind?: GrenadeKind; x: number; y: number; z: number; vx: number; vy: number; vz: number; fuse: number }[],
+    ahead: number,
+  ): void {
     while (this.grenadeMeshes.length < grenades.length) {
       const body = new THREE.Mesh(this.grenadeGeo, this.grenadeMat);
       body.castShadow = true;
@@ -641,6 +655,10 @@ export class Renderer {
       const g = grenades[i];
       m.body.visible = m.ring.visible = !!g;
       if (!g) return;
+      const kind = g.kind ?? 'frag';
+      m.body.material = this.grenadeMats[kind];
+      // Only a frag has a blast to stay out of.
+      m.ring.visible = kind === 'frag';
       m.body.position.set(g.x + g.vx * ahead, Math.max(0.12, g.y + g.vy * ahead), g.z + g.vz * ahead);
       m.body.rotation.x += 0.3;
       m.ring.position.set(m.body.position.x, 0.08, m.body.position.z);
@@ -682,6 +700,65 @@ export class Renderer {
   shotFrom(ownerId: number, x: number, z: number): void {
     const v = this.actorVisuals.get(ownerId);
     if (v && this.hostile(ownerId) && !this.isRevealed(ownerId)) this.pings.spawn(x, z);
+  }
+
+  /** Smoke clouds from the simulation: billowing sprites and sight blockers. */
+  setSmokes(smokes: SmokeCloud[]): void {
+    this.smokeCircles.length = 0;
+    for (const c of this.smokeClouds.values()) c.seen = false;
+    for (const s of smokes) {
+      const r = smokeRadius(s.age);
+      this.smokeCircles.push({ x: s.x, z: s.z, r });
+      let cloud = this.smokeClouds.get(s.id);
+      if (!cloud) {
+        const group = new THREE.Group();
+        group.position.set(s.x, 0, s.z);
+        for (let i = 0; i < 9; i++) {
+          const sprite = new THREE.Sprite(
+            new THREE.SpriteMaterial({ map: this.smokeTexture, color: 0x8d9399, transparent: true, depthWrite: false }),
+          );
+          const a = (i / 9) * Math.PI * 2;
+          const k = i === 0 ? 0 : 0.55;
+          sprite.userData = { ox: Math.cos(a) * k, oz: Math.sin(a) * k, spin: (Math.random() - 0.5) * 0.4 };
+          group.add(sprite);
+        }
+        this.scene.add(group);
+        cloud = { group, seen: true };
+        this.smokeClouds.set(s.id, cloud);
+      }
+      cloud.seen = true;
+      const fade = Math.min(1, Math.max(0, (CONFIG.smoke.life - s.age) / CONFIG.smoke.fade));
+      for (const child of cloud.group.children) {
+        const sprite = child as THREE.Sprite;
+        const u = sprite.userData as { ox: number; oz: number; spin: number };
+        sprite.position.set(u.ox * r, 1.1 + u.ox * 0.3, u.oz * r);
+        sprite.scale.setScalar(r * 1.35);
+        sprite.material.rotation += u.spin * 0.016;
+        sprite.material.opacity = 0.82 * fade;
+      }
+    }
+    for (const [id, c] of this.smokeClouds) {
+      if (c.seen) continue;
+      this.scene.remove(c.group);
+      for (const child of c.group.children) (child as THREE.Sprite).material.dispose();
+      this.smokeClouds.delete(id);
+    }
+  }
+
+  smokePop(x: number, z: number): void {
+    this.tmpColor.setRGB(0.5, 0.52, 0.55);
+    this.smoke.burst(x, 0.4, z, 14, 3, this.tmpColor, 0.6, 0.9, 1);
+  }
+
+  /** A flash grenade: a white burst of light that lights the room for a moment. */
+  flashBang(x: number, z: number): void {
+    const slot = this.boomLights.find((b) => b.life <= 0) ?? this.boomLights[0];
+    slot.life = slot.max;
+    slot.peak = 520;
+    slot.light.color.setHex(0xf2f6ff);
+    slot.light.position.set(x, 1.6, z);
+    slot.light.intensity = slot.peak;
+    this.shockwaves.spawn(x, z, 5, 0xffffff, 0.25);
   }
 
   /** A lamp shot out: the light dies at once (no fade), glass rains down. */
@@ -786,6 +863,8 @@ export class Renderer {
     const slot = this.boomLights.find((b) => b.life <= 0) ?? this.boomLights[0];
     slot.life = slot.max;
     slot.peak = 260;
+    // The pool is shared with flash grenades, which turn it white.
+    slot.light.color.setHex(0xff9a3c);
     slot.light.position.set(x, 1.6, z);
     slot.light.intensity = slot.peak;
 
@@ -991,7 +1070,7 @@ export class Renderer {
       }
       for (const d of this.doorVisuals) if (d.openT < 0.5) near.push(d.body);
       // Dead players keep a small circle of sight around their body.
-      v.compute(near, p.x, p.z, p.ang, [0, WALL_HEIGHT + 0.1]);
+      v.compute(near, p.x, p.z, p.ang, [0, WALL_HEIGHT + 0.1], this.smokeCircles, CONFIG.smoke.insideSight);
     }
 
     for (const [id, visual] of this.actorVisuals) {
@@ -1271,4 +1350,19 @@ function weaponPickupVisual(weapon: WeaponId): THREE.Group {
   holder.scale.setScalar(1.3);
   group.add(holder);
   return group;
+}
+
+/** Soft round puff for smoke sprites. */
+function makeSmokeTexture(): THREE.Texture {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
 }

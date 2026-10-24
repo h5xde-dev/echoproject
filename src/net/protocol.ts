@@ -1,4 +1,4 @@
-import type { Buffs, GameEvent, GameMode, Grenade, MapData, PowerupKind, ShopItem } from '../game/types';
+import type { Buffs, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -25,6 +25,9 @@ export interface ActorState {
   reloading: boolean;
   flashOn: boolean;
   slot: number;
+  smokes?: number;
+  flashes?: number;
+  blind?: number;
 }
 
 export interface BulletState {
@@ -87,6 +90,7 @@ export interface SnapshotMsg {
   grenades: Grenade[];
   /** Indices of shot-out lamps. */
   lampsOut?: number[];
+  smokes?: SmokeCloud[];
   mode: GameMode;
   /** Arena scoreboard: [actor id, kills, deaths, rounds won]. */
   scores: [number, number, number, number][];
@@ -123,6 +127,7 @@ export interface InputMsg {
   throwDist?: number;
   buy?: ShopItem | '';
   rttMs?: number;
+  grenadeKind?: GrenadeKind;
 }
 
 export interface EventMsg {

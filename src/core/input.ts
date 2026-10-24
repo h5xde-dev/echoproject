@@ -9,6 +9,9 @@ export type ActionName =
   | 'slot4'
   | 'slot5'
   | 'slot6'
+  | 'slot7'
+  | 'slot8'
+  | 'nade'
   | 'grenade'
   | 'buy';
 
@@ -22,6 +25,9 @@ const ACTION_KEYS: Record<string, ActionName> = {
   Digit4: 'slot4',
   Digit5: 'slot5',
   Digit6: 'slot6',
+  Digit7: 'slot7',
+  Digit8: 'slot8',
+  KeyQ: 'nade',
   KeyG: 'grenade',
   KeyB: 'buy',
 };

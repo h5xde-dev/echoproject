@@ -171,6 +171,76 @@ for (const info of ARENAS) {
   check(!s.map.lamps.some((l, i) => i !== 0 && Math.hypot(l.x - lamp.x, l.z - lamp.z) < 9.5) ? !s.isLit(lamp.x, lamp.z) : true, 'its spot goes dark');
 }
 
+// Smoke and flash grenades.
+{
+  const s = new Sim(buildArena('sklad', 6060, 'dm'));
+  const dt = CONFIG.tickDt;
+  const p = s.addPlayer('local', 'тест', 1);
+  const spawn = s.map.spawns[0];
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  const run = (secs: number) => {
+    for (let t = 0; t < secs; t += dt) s.step(dt);
+  };
+  check(p.smokes === CONFIG.grenade.startUtility && p.flashes === CONFIG.grenade.startUtility, `players start with ${p.smokes} smoke / ${p.flashes} flash`);
+
+  // Smoke: a cloud forms where it lands, blocks sight through it, then clears.
+  p.x = spawn.x;
+  p.z = spawn.z;
+  s.applyInput(p, { ...input, grenade: true, grenadeKind: 'smoke', throwDist: 3 });
+  check(p.smokes === CONFIG.grenade.startUtility - 1, 'throwing a smoke uses one up');
+  run(CONFIG.smoke.fuse + CONFIG.smoke.grow + 0.1);
+  const cloud = s.smokes[0];
+  check(!!cloud, 'smoke grenade leaves a cloud');
+  if (cloud) {
+    check(s.smokeBlocks(cloud.x - 8, cloud.z, cloud.x + 8, cloud.z), 'the cloud blocks a line through it');
+    check(!s.smokeBlocks(cloud.x - 8, cloud.z + 8, cloud.x + 8, cloud.z + 8), 'and not a line beside it');
+  }
+  run(CONFIG.smoke.life);
+  check(s.smokes.length === 0, 'the cloud clears after its lifetime');
+
+  // No stock, no throw.
+  p.smokes = 0;
+  p.grenadeCd = 0;
+  const before = s.grenades.length;
+  s.applyInput(p, { ...input, grenade: true, grenadeKind: 'smoke' });
+  check(s.grenades.length === before, 'no smoke left: nothing is thrown');
+
+  // Flash: worst looking at it up close, mild facing away, none behind a wall.
+  const flashAt = (x: number, z: number) => {
+    const g = { id: 999, kind: 'flash' as const, ownerId: p.id, x, y: 0.2, z, vx: 0, vy: 0, vz: 0, fuse: 0.001 };
+    s.grenades.push(g);
+    s.step(dt);
+  };
+  p.blind = 0;
+  p.ang = 0;
+  flashAt(p.x + 3, p.z);
+  const facing = p.blind;
+  p.blind = 0;
+  p.ang = Math.PI;
+  flashAt(p.x + 3, p.z);
+  const away = p.blind;
+  check(facing > 2 && away > 0 && away < facing * 0.5, `flash blinds ${facing.toFixed(1)} s facing it, ${away.toFixed(1)} s facing away`);
+  p.blind = 0;
+  const wall = s.map.walls[0];
+  flashAt(wall.cx, wall.cz + wall.hh + 1);
+  const otherSide = { x: wall.cx, z: wall.cz - wall.hh - 1 };
+  p.x = otherSide.x;
+  p.z = otherSide.z;
+  p.blind = 0;
+  flashAt(wall.cx, wall.cz + wall.hh + 1);
+  check(p.blind === 0, 'a wall shields from the flash');
+}
+
+// Competitive: smoke and flash are on sale.
+{
+  const s = new Sim(buildArena('sklad', 7070, 'comp'));
+  const p = s.addPlayer('local', 'тест', 1);
+  p.money = 10000;
+  (s as unknown as { roundAge: number }).roundAge = 0;
+  check(p.smokes === 0 && p.flashes === 0, 'competitive: no free smoke / flash');
+  check(s.buy(p, 'smoke') && s.buy(p, 'flash') && p.smokes === 1 && p.flashes === 1, 'competitive: smoke and flash can be bought');
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

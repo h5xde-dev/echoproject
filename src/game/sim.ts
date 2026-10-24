@@ -14,11 +14,13 @@ import type {
   GameEvent,
   GameMode,
   Grenade,
+  GrenadeKind,
   MapData,
   PowerupKind,
   RoomDef,
   ShopItem,
   SimProp,
+  SmokeCloud,
   StaticBody,
 } from './types';
 import { WEAPON_ORDER, WEAPONS, damageAtRange, weaponCooldown, type WeaponId } from './weapons';
@@ -57,6 +59,16 @@ export interface PlayerInput {
   rttMs?: number;
   /** Run unless walking (Shift) or crouching (C). */
   gait?: Gait;
+  /** Which grenade `grenade` throws (frag when absent). */
+  grenadeKind?: GrenadeKind;
+}
+
+/** Radius of a smoke cloud of this age: it billows out, then thins away. */
+export function smokeRadius(age: number): number {
+  const S = CONFIG.smoke;
+  const grow = Math.min(1, age / S.grow);
+  const fade = Math.min(1, Math.max(0, (S.life - age) / S.fade));
+  return S.radius * Math.sqrt(grow) * (0.6 + 0.4 * fade);
 }
 
 export interface DoorState {
@@ -118,6 +130,7 @@ export class Sim {
   powerups: SimPowerup[] = [];
   grenades: Grenade[] = [];
   events: GameEvent[] = [];
+  smokes: SmokeCloud[] = [];
   /** Ceiling lamps still burning, by index into `map.lamps`. */
   lampAlive: boolean[];
   /** `step` marks footsteps, which only the walker's enemies listen for. */
@@ -255,6 +268,10 @@ export class Sim {
       lagComp: 0,
       gait: 'run',
       stepDist: 0,
+      // Utility grenades are a player tool; in competitive they are bought.
+      smokes: isPlayer && this.mode !== 'comp' ? CONFIG.grenade.startUtility : 0,
+      flashes: isPlayer && this.mode !== 'comp' ? CONFIG.grenade.startUtility : 0,
+      blind: 0,
     };
   }
 
@@ -417,7 +434,7 @@ export class Sim {
     }
 
     if (input.reload) this.startReload(actor);
-    if (input.grenade) this.throwGrenade(actor, input.aim, input.throwDist ?? 10);
+    if (input.grenade) this.throwGrenade(actor, input.aim, input.throwDist ?? 10, input.grenadeKind ?? 'frag');
 
     if (input.fire && !actor.reloading && actor.cooldown <= 0) {
       this.fireWeapon(actor);
@@ -530,6 +547,7 @@ export class Sim {
 
     this.updateBullets(dt);
     this.updateGrenades(dt);
+    this.updateSmokes(dt);
     this.updateProps(dt);
     this.updateItems(dt);
     if (this.mode === 'coop') this.updateRoomProgress();
@@ -543,6 +561,7 @@ export class Sim {
     actor.recoil = Math.max(0, actor.recoil - dt * 1.6);
     actor.shield = Math.max(0, actor.shield - dt);
     actor.grenadeCd = Math.max(0, actor.grenadeCd - dt);
+    actor.blind = Math.max(0, actor.blind - dt);
     const b = actor.buffs;
     b.damage = Math.max(0, b.damage - dt);
     b.rapid = Math.max(0, b.rapid - dt);
@@ -962,6 +981,12 @@ export class Sim {
   private updateAi(actor: Actor, dt: number): void {
     const ai = actor.ai;
     if (!ai) return;
+    // Flashed: stands still, sees nothing, does not shoot.
+    if (actor.blind > 0) {
+      ai.awareness = 0;
+      this.moveActor(actor, 0, 0, dt);
+      return;
+    }
 
     let nearest: Actor | null = null;
     let nearestD = Infinity;
@@ -996,7 +1021,9 @@ export class Sim {
       const facing = Math.cos(toTarget - actor.ang);
       const inFov = facing > Math.cos(P.fovHalf) || d < P.nearSense;
       if (d < detectRange && inFov) {
-        inSight = this.world.lineOfSight(actor.x, actor.z, nearest.x, nearest.z, this.scratch);
+        inSight =
+          this.world.lineOfSight(actor.x, actor.z, nearest.x, nearest.z, this.scratch) &&
+          !this.smokeBlocks(actor.x, actor.z, nearest.x, nearest.z);
       }
     }
 
@@ -1148,7 +1175,7 @@ export class Sim {
       const d = dist(actor.x, actor.z, ai.lastKnownX, ai.lastKnownZ);
       if (d > 5 && d < CONFIG.grenade.maxDist) {
         const ang = Math.atan2(ai.lastKnownZ - actor.z, ai.lastKnownX - actor.x);
-        this.throwGrenade(actor, ang, d);
+        this.throwGrenade(actor, ang, d, 'frag');
         ai.grenadeT = CONFIG.grenade.aiCooldown + this.rng.next() * 4;
       }
     }
@@ -1172,10 +1199,19 @@ export class Sim {
 
   // -------------------------------------------------------------- grenades
 
-  private throwGrenade(actor: Actor, aim: number, distance: number): void {
+  private throwGrenade(actor: Actor, aim: number, distance: number, kind: GrenadeKind): void {
     const G = CONFIG.grenade;
-    if (actor.grenades <= 0 || actor.grenadeCd > 0) return;
-    actor.grenades--;
+    if (actor.grenadeCd > 0) return;
+    if (kind === 'frag') {
+      if (actor.grenades <= 0) return;
+      actor.grenades--;
+    } else if (kind === 'smoke') {
+      if (actor.smokes <= 0) return;
+      actor.smokes--;
+    } else {
+      if (actor.flashes <= 0) return;
+      actor.flashes--;
+    }
     actor.grenadeCd = G.cooldown;
     actor.shield = 0;
     const d = clamp(distance, G.minDist, G.maxDist);
@@ -1185,6 +1221,7 @@ export class Sim {
     const v = d / t;
     const g: Grenade = {
       id: this.nextGrenadeId++,
+      kind,
       ownerId: actor.id,
       x: actor.x + Math.cos(aim) * 0.6,
       y: h,
@@ -1192,7 +1229,7 @@ export class Sim {
       vx: Math.cos(aim) * v + actor.vx * 0.3,
       vy: G.lift,
       vz: Math.sin(aim) * v + actor.vz * 0.3,
-      fuse: G.fuse,
+      fuse: kind === 'smoke' ? CONFIG.smoke.fuse : kind === 'flash' ? CONFIG.flash.fuse : G.fuse,
     };
     this.grenades.push(g);
     this.noises.push({ x: actor.x, z: actor.z, radius: 8, time: this.time, ownerId: actor.id });
@@ -1206,7 +1243,9 @@ export class Sim {
       g.fuse -= dt;
       if (g.fuse <= 0) {
         this.grenades.splice(i, 1);
-        this.explode(g.x, g.z, G.radius, G.damage, g.ownerId);
+        if (g.kind === 'smoke') this.popSmoke(g);
+        else if (g.kind === 'flash') this.flashBang(g);
+        else this.explode(g.x, g.z, G.radius, G.damage, g.ownerId);
         continue;
       }
       g.vy -= G.gravity * dt;
@@ -1241,6 +1280,51 @@ export class Sim {
     }
   }
 
+  private popSmoke(g: Grenade): void {
+    this.smokes.push({ id: this.nextGrenadeId++, x: g.x, z: g.z, age: 0 });
+    this.noises.push({ x: g.x, z: g.z, radius: 6, time: this.time, ownerId: g.ownerId });
+    this.events.push({ type: 'smoke', x: g.x, z: g.z, ownerId: g.ownerId });
+  }
+
+  /**
+   * Everyone with a clear line to the flash is blinded: longest up close and
+   * looking at it, a fraction when it goes off behind them. Guards also lose
+   * track of their target.
+   */
+  private flashBang(g: Grenade): void {
+    const F = CONFIG.flash;
+    for (const a of this.actors.values()) {
+      if (!a.alive) continue;
+      const d = dist(a.x, a.z, g.x, g.z);
+      if (d > F.radius) continue;
+      if (!this.world.lineOfSight(g.x, g.z, a.x, a.z, this.scratch)) continue;
+      const facing = Math.cos(Math.atan2(g.z - a.z, g.x - a.x) - a.ang);
+      const look = F.behind + (1 - F.behind) * clamp((facing + 0.2) / 1.2, 0, 1);
+      a.blind = Math.max(a.blind, F.maxBlind * (1 - (d / F.radius) * 0.6) * look);
+      if (a.ai) a.ai.awareness = 0;
+    }
+    this.noises.push({ x: g.x, z: g.z, radius: 22, time: this.time, ownerId: g.ownerId });
+    this.events.push({ type: 'flash', x: g.x, z: g.z, ownerId: g.ownerId });
+  }
+
+  private updateSmokes(dt: number): void {
+    for (const s of this.smokes) s.age += dt;
+    this.smokes = this.smokes.filter((s) => s.age < CONFIG.smoke.life);
+  }
+
+  /** True when the segment passes through a smoke cloud. */
+  smokeBlocks(x0: number, z0: number, x1: number, z1: number): boolean {
+    for (const s of this.smokes) {
+      if (segCircleHit(x0, z0, x1, z1, s.x, s.z, smokeRadius(s.age) * 0.9) !== null) return true;
+    }
+    return false;
+  }
+
+  /** Client: smoke clouds from a snapshot. */
+  syncSmokes(smokes: SmokeCloud[]): void {
+    this.smokes = smokes;
+  }
+
   // ------------------------------------------------------------ economy
 
   /** Competitive buy window: the first seconds of a round. */
@@ -1262,6 +1346,12 @@ export class Sim {
     } else if (item === 'grenade') {
       if (actor.grenades >= CONFIG.grenade.max) return false;
       actor.grenades++;
+    } else if (item === 'smoke') {
+      if (actor.smokes >= CONFIG.grenade.maxUtility) return false;
+      actor.smokes++;
+    } else if (item === 'flash') {
+      if (actor.flashes >= CONFIG.grenade.maxUtility) return false;
+      actor.flashes++;
     } else {
       if (actor.weapons.includes(item)) return false;
       this.equip(actor, item);
@@ -1456,6 +1546,11 @@ export class Sim {
       actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
       this.equip(actor, this.startWeapon(actor));
       actor.grenades = Math.max(actor.grenades, CONFIG.grenade.startArena);
+      if (actor.kind === 'player' && this.mode !== 'comp') {
+        actor.smokes = Math.max(actor.smokes, CONFIG.grenade.startUtility);
+        actor.flashes = Math.max(actor.flashes, CONFIG.grenade.startUtility);
+      }
+      actor.blind = 0;
       actor.shield = this.mode === 'comp' ? 0 : CONFIG.dm.spawnShield;
       if (actor.ai) Object.assign(actor.ai, makeAi(), { hasLight: true });
     } else {
@@ -1600,6 +1695,7 @@ export class Sim {
     this.roundAge = 0;
     this.bullets = [];
     this.grenades = [];
+    this.smokes = [];
     // Spread everyone over the spawn points; survivors keep their kit.
     const spawns = [...this.map.spawns];
     for (let i = spawns.length - 1; i > 0; i--) {
@@ -1621,6 +1717,8 @@ export class Sim {
         a.weapons = ['pistol'];
         a.armor = 0;
         a.grenades = 0;
+        a.smokes = 0;
+        a.flashes = 0;
         this.equip(a, 'pistol');
       } else {
         a.ammo = WEAPONS[a.weapon].mag;

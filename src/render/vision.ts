@@ -18,6 +18,8 @@ export const VISION = {
   nearRadius: 1,
   /** Rays stop slightly inside walls so the wall face itself is lit. */
   wallBite: 0.35,
+  /** How deep into a smoke cloud the view still reaches (its near side). */
+  smokeBite: 1.8,
   /** Fraction of the range after which sight fades out toward the edge. */
   fadeStart: 0.62,
   /** Mask value at the very end of the range (1 = fully seen). */
@@ -73,7 +75,19 @@ export class Viewer {
     return this.range + (VISION.nearRadius - this.range) * t;
   }
 
-  compute(walls: StaticBody[], x: number, z: number, ang: number, heights: [number, number]): void {
+  /**
+   * `smokes`: clouds (centre + radius) that stop sight like walls; from
+   * inside one, nothing is seen beyond `insideSight`.
+   */
+  compute(
+    walls: StaticBody[],
+    x: number,
+    z: number,
+    ang: number,
+    heights: [number, number],
+    smokes: { x: number; z: number; r: number }[] = [],
+    insideSight = 1.5,
+  ): void {
     this.x = x;
     this.z = z;
     this.ang = ang;
@@ -87,13 +101,25 @@ export class Viewer {
       const a = (i / n) * Math.PI * 2;
       const dx = Math.cos(a);
       const dz = Math.sin(a);
-      const max = this.reach(a, ang);
+      let max = this.reach(a, ang);
       let hit = max;
       for (let w = 0; w < walls.length; w++) {
         const t = rayBox(x, z, dx, dz, walls[w]);
         if (t >= 0 && t < hit) hit = t;
       }
-      const d = hit < max ? Math.min(max, hit + VISION.wallBite) : max;
+      // Smoke stops sight like a wall, but the near side of the cloud stays
+      // visible (the light reaches into it), so it reads as smoke, not a hole.
+      let bite = VISION.wallBite;
+      for (const s of smokes) {
+        const t = rayCircle(x, z, dx, dz, s.x, s.z, s.r);
+        if (t === 0) max = Math.min(max, insideSight);
+        else if (t > 0 && t < hit) {
+          hit = t;
+          bite = Math.min(VISION.smokeBite, s.r);
+        }
+      }
+      hit = Math.min(hit, max);
+      const d = hit < max ? Math.min(max, hit + bite) : max;
       this.dist[i] = hit;
       const o = (i + 1) * 3;
       p[o] = x + dx * d; p[o + 1] = heights[0]; p[o + 2] = z + dz * d;
@@ -275,3 +301,19 @@ export const VISION_SHADER = {
       gl_FragColor = vec4(mix(dark, c.rgb, seen), c.a);
     }`,
 };
+
+/**
+ * Distance along the ray to where it enters a circle: 0 when the origin is
+ * inside, -1 when it misses.
+ */
+function rayCircle(ox: number, oz: number, dx: number, dz: number, cx: number, cz: number, r: number): number {
+  const fx = ox - cx;
+  const fz = oz - cz;
+  const c = fx * fx + fz * fz - r * r;
+  if (c <= 0) return 0;
+  const b = fx * dx + fz * dz;
+  if (b > 0) return -1;
+  const disc = b * b - c;
+  if (disc < 0) return -1;
+  return -b - Math.sqrt(disc);
+}

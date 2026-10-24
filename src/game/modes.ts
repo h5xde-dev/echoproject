@@ -66,5 +66,7 @@ export const SHOP: ShopEntry[] = [
   { item: 'rifle', name: 'Винтовка «Вектор»', price: 2700 },
   { item: 'sniper', name: 'Снайперка «Стриж»', price: 4200 },
   { item: 'armor', name: 'Бронежилет', price: 650 },
-  { item: 'grenade', name: 'Граната', price: 300 },
+  { item: 'grenade', name: 'Осколочная граната', price: 300 },
+  { item: 'smoke', name: 'Дымовая граната', price: 300 },
+  { item: 'flash', name: 'Светошумовая граната', price: 200 },
 ];

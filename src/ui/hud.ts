@@ -1,4 +1,4 @@
-import type { Buffs, Gait, GameMode, MapData, RoomDef, ShopItem } from '../game/types';
+import type { Buffs, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
 import { GUN_LADDER, isArena, SHOP } from '../game/modes';
 import type { RoundState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
@@ -43,6 +43,12 @@ export interface HudState {
   /** Arena table, best first. */
   scores: HudScore[];
   grenades: number;
+  smokes: number;
+  flashes: number;
+  /** Grenade kind G throws. */
+  nadeKind: GrenadeKind;
+  /** Seconds left blinded by a flash grenade. */
+  blind: number;
   money: number;
   tier: number;
   tierKills: number;
@@ -106,6 +112,7 @@ export class Hud {
   private overText: HTMLElement;
   private flashEl: HTMLElement;
   private gaitEl: HTMLElement;
+  private flashOverlay: HTMLElement;
   /** Crosshair size from stance and movement, before shot bloom. */
   private baseSpread = 1;
   private roomCodePanel: HTMLElement;
@@ -176,6 +183,7 @@ export class Hud {
     this.overText = must(root, '.gameover-text');
     this.flashEl = must(root, '.flashlight-tag');
     this.gaitEl = must(root, '.gait-tag');
+    this.flashOverlay = must(root, '.flash-overlay');
     this.roomCodePanel = must(root, '.panel-room');
     this.roomCodeEl = must(root, '.room-code-inline');
     this.platesEl = must(root, '.plates');
@@ -234,7 +242,7 @@ export class Hud {
       const locked = money < e.price;
       return `<button class="shop-item${locked ? ' locked' : ''}" data-item="${e.item}"><kbd>${i + 1}</kbd><span>${escapeHtml(e.name)}</span><em>$${e.price}</em></button>`;
     }).join('');
-    this.shopEl.innerHTML = `<div class="shop-head"><span>МАГАЗИН</span><b>$${money}</b></div><div class="shop-grid">${items}</div><div class="shop-foot">B — закрыть · клавиши 1–6 или клик</div>`;
+    this.shopEl.innerHTML = `<div class="shop-head"><span>МАГАЗИН</span><b>$${money}</b></div><div class="shop-grid">${items}</div><div class="shop-foot">B — закрыть · клавиши 1–${SHOP.length} или клик</div>`;
   }
 
   private hudRoot(): HTMLElement {
@@ -447,6 +455,8 @@ export class Hud {
     this.updatePips(state.alive ? state.ammo : 0, state.mag, state.reloading);
     this.flashEl.classList.toggle('off', !state.flashOn);
     this.flashEl.textContent = state.flashOn ? 'ФОНАРЬ ВКЛ · ВАС ВИДНО' : 'ФОНАРЬ ВЫКЛ · СКРЫТНО';
+    // Flashed: the screen whites out, clearing over the last second.
+    this.flashOverlay.style.opacity = String(Math.min(1, state.blind / 1.1));
     this.gaitEl.className = `gait-tag ${state.gait}`;
     this.gaitEl.textContent = GAIT_LABEL[state.gait];
     // Eased so the crosshair breathes rather than jumps between stances.
@@ -454,7 +464,18 @@ export class Hud {
 
     // Under the ammo: grenades, flashlight, money.
     const money = this.mode === 'comp' ? `<span class="money">$${state.money}</span>` : '';
-    const nades = `<span class="nades">${'<i></i>'.repeat(state.grenades)}${state.grenades === 0 ? '<s>нет гранат</s>' : ''} <kbd>G</kbd></span>`;
+    const kinds: [GrenadeKind, number, string][] = [
+      ['frag', state.grenades, 'осколочная'],
+      ['smoke', state.smokes, 'дымовая'],
+      ['flash', state.flashes, 'светошумовая'],
+    ];
+    const groups = kinds
+      .map(([k, n, title]) => {
+        const sel = k === state.nadeKind ? ' sel' : '';
+        return `<em class="nade ${k}${sel}" title="${title}">${n > 0 ? '<i></i>'.repeat(n) : '<s>0</s>'}</em>`;
+      })
+      .join('');
+    const nades = `<span class="nades">${groups}<kbd>Q</kbd><kbd>G</kbd></span>`;
     const light = `<span class="light${state.flashOn ? ' on' : ''}"><kbd>F</kbd>${state.flashOn ? 'свет' : 'тьма'}</span>`;
     const extra = `${money}${nades}${light}`;
     if (this.extraEl.innerHTML !== extra) this.extraEl.innerHTML = extra;

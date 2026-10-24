@@ -178,6 +178,18 @@ export class GameAudio {
     window.setTimeout(() => this.tone(990, 1760, 0.2, 0.1, 'triangle'), 150);
   }
 
+  smokePop(dist: number): void {
+    const v = Math.max(0.1, 1 - dist / 30);
+    this.noise(1.4, 0.12 * v, 1800, 0.6, 'bandpass');
+  }
+
+  /** A flash grenade: a sharp bang, then a ringing tone up close. */
+  flashBang(dist: number): void {
+    const v = Math.max(0.15, 1 - dist / 40);
+    this.noise(0.25, 0.5 * v, 2400, 0.8, 'bandpass');
+    if (dist < 16) this.tone(3900, 3700, 2.2, 0.035 * (1 - dist / 16), 'sine');
+  }
+
   /** Breaking glass, quieter with distance. */
   glass(dist: number): void {
     const v = Math.max(0.15, 1 - dist / 30);

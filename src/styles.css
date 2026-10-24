@@ -1006,9 +1006,16 @@ kbd {
 /* ========================================================== hud extras */
 .weapon-extra { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--ink-dim); }
 .weapon-extra .money { font-family: var(--mono); font-size: 16px; font-weight: 700; color: #7dff9e; margin-right: auto; }
-.weapon-extra .nades { display: inline-flex; align-items: center; gap: 3px; }
+.weapon-extra .nades { display: inline-flex; align-items: center; gap: 6px; }
+.weapon-extra .nade { display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px; border: 1px solid transparent; border-radius: 4px; font-style: normal; opacity: 0.55; }
+.weapon-extra .nade.sel { border-color: rgba(255, 255, 255, 0.35); opacity: 1; }
 .weapon-extra .nades i { width: 8px; height: 10px; border-radius: 3px 3px 2px 2px; background: #8fa76a; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.3); }
+.weapon-extra .nade.smoke i { background: #9aa3ab; }
+.weapon-extra .nade.flash i { background: #f2f4f7; }
 .weapon-extra .nades s { text-decoration: none; opacity: 0.5; }
+
+/* Flash grenade: the whole view whites out. */
+.flash-overlay { position: absolute; inset: 0; background: #f4f7ff; opacity: 0; pointer-events: none; }
 .weapon-extra .light { opacity: 0.6; }
 .weapon-extra .light.on { opacity: 1; color: #ffe2a0; }
 

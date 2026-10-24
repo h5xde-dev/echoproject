@@ -10,7 +10,7 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, modeInfo, SHOP } from './modes';
 import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, MapData, PowerupKind, ShopItem } from './types';
+import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 
@@ -47,6 +47,9 @@ export interface DisplayActor {
   reloading: boolean;
   flashOn: boolean;
   slot: number;
+  smokes: number;
+  flashes: number;
+  blind: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -114,6 +117,8 @@ export class Game {
   private frameMove = { x: 0, z: 0 };
   /** Shift walks, C crouches (crouch wins when both are held). */
   private frameGait: Gait = 'run';
+  /** Grenade G throws; Q cycles through the kinds. */
+  private nadeKind: GrenadeKind = 'frag';
   private frameAim = 0;
   private frameFire = false;
   private pending = { reload: false, interact: false, flashlight: false, slot: -1, grenade: false, buy: '' as ShopItem | '' };
@@ -367,6 +372,9 @@ export class Game {
         reloading: a.reloading,
         flashOn: a.flashOn,
         slot: a.slot,
+        smokes: a.smokes,
+        flashes: a.flashes,
+        blind: a.blind,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -389,6 +397,7 @@ export class Game {
       powerups: this.sim.powerups.map((p) => ({ id: p.id, kind: p.kind, x: p.x, z: p.z, active: p.active })),
       grenades: this.sim.grenades,
       lampsOut: this.sim.lampAlive.flatMap((alive, i) => (alive ? [] : [i])),
+      smokes: this.sim.smokes,
       mode: this.matchMode,
       scores: this.scoreRows(),
       round: this.localRoundState(),
@@ -457,6 +466,7 @@ export class Game {
     this.sim.syncProps(msg.props);
     this.sim.syncDoors(msg.doors);
     this.sim.syncLamps(msg.lampsOut ?? []);
+    this.sim.syncSmokes(msg.smokes ?? []);
     this.renderer.syncLamps(this.sim.lampAlive);
     this.sim.syncItems(msg.pickups ?? [], msg.powerups ?? [], msg.grenades ?? []);
     this.roundState = msg.round ?? null;
@@ -540,6 +550,14 @@ export class Game {
         if (!this.isAuthority) this.spawnClientBullets(event);
         break;
       }
+      case 'smoke':
+        this.renderer.smokePop(event.x ?? 0, event.z ?? 0);
+        this.audio.smokePop(this.localActorPosition(event.x ?? 0, event.z ?? 0));
+        break;
+      case 'flash':
+        this.renderer.flashBang(event.x ?? 0, event.z ?? 0);
+        this.audio.flashBang(this.localActorPosition(event.x ?? 0, event.z ?? 0));
+        break;
       case 'lampBreak':
         this.renderer.breakLamp(Number(event.id));
         if (this.isAuthority) this.renderer.syncLamps(this.sim.lampAlive);
@@ -810,6 +828,7 @@ export class Game {
     if (this.input.consume('interact')) this.pending.interact = true;
     if (this.input.consume('flashlight')) this.pending.flashlight = true;
     if (this.input.consume('grenade')) this.pending.grenade = true;
+    if (this.input.consume('nade')) this.nadeKind = this.nextNadeKind();
 
     // Competitive shop: B toggles it during the buy window; while open,
     // number keys buy instead of switching weapons.
@@ -817,7 +836,7 @@ export class Game {
     const canBuy = !!round?.canBuy && !!this.localDisplay()?.alive;
     if (this.input.consume('buy') && canBuy) this.buyOpen = !this.buyOpen;
     if (!canBuy) this.buyOpen = false;
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < SHOP.length; i++) {
       if (!this.input.consume(`slot${i + 1}` as never)) continue;
       if (this.buyOpen) this.pending.buy = SHOP[i].item;
       else if (i < 5) this.pending.slot = i;
@@ -851,6 +870,7 @@ export class Game {
       buy: this.pending.buy,
       rttMs: this.mode === 'client' ? this.rttMs : undefined,
       gait: this.frameGait,
+      grenadeKind: this.nadeKind,
     };
     this.pending.reload = false;
     this.pending.interact = false;
@@ -992,6 +1012,9 @@ export class Game {
           reloading: a.reloading,
           flashOn: a.flashOn,
           slot: a.slot,
+          smokes: a.smokes,
+          flashes: a.flashes,
+          blind: a.blind,
           isLocal,
           moving: a.moving,
         });
@@ -1018,6 +1041,7 @@ export class Game {
     this.renderer.syncDoors(this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT })));
     this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
+    this.renderer.setSmokes(this.sim.smokes);
   }
 
   /**
@@ -1090,6 +1114,9 @@ export class Game {
         reloading: b.reloading,
         flashOn: b.flashOn,
         slot: b.slot,
+        smokes: b.smokes ?? 0,
+        flashes: b.flashes ?? 0,
+        blind: b.blind ?? 0,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1128,6 +1155,19 @@ export class Game {
 
   private localDisplay(): DisplayActor | null {
     return this.display.get(this.localId) ?? null;
+  }
+
+  /** Next grenade kind the player carries, after the selected one (Q). */
+  private nextNadeKind(): GrenadeKind {
+    const self = this.localDisplay();
+    const order: GrenadeKind[] = ['frag', 'smoke', 'flash'];
+    const count = (k: GrenadeKind) => (!self ? 0 : k === 'frag' ? self.grenades : k === 'smoke' ? self.smokes : self.flashes);
+    const start = order.indexOf(this.nadeKind);
+    for (let step = 1; step <= order.length; step++) {
+      const k = order[(start + step) % order.length];
+      if (count(k) > 0) return k;
+    }
+    return order[(start + 1) % order.length];
   }
 
   /** Current spread multiplier of the local player, for the crosshair. */
@@ -1260,6 +1300,10 @@ export class Game {
       timeLeft: this.isAuthority ? this.sim.timeLeft : this.timeLeft,
       scores,
       grenades: self.grenades,
+      smokes: self.smokes,
+      flashes: self.flashes,
+      nadeKind: this.nadeKind,
+      blind: self.blind,
       money: self.money,
       tier: self.tier,
       tierKills: self.tierKills,

@@ -135,6 +135,32 @@ export const CONFIG = {
     startCoop: 2,
     startArena: 1,
     aiCooldown: 7,
+    /** Smoke and flash grenades each player starts with (co-op and arenas). */
+    startUtility: 1,
+    /** Most smoke / flash grenades carried, each. */
+    maxUtility: 2,
+  },
+
+  smoke: {
+    fuse: 1.4,
+    /** Full cloud radius, reached after `grow` seconds. */
+    radius: 4.2,
+    grow: 1.2,
+    /** Cloud lifetime; it thins out over the last `fade` seconds. */
+    life: 14,
+    fade: 2.5,
+    /** How far you see from inside a cloud. */
+    insideSight: 1.5,
+  },
+
+  flash: {
+    fuse: 1.3,
+    /** Blinds those in line of sight within this distance. */
+    radius: 16,
+    /** Blindness at point blank, looking straight at it (seconds). */
+    maxBlind: 2.6,
+    /** Fraction of the blindness when the flash goes off behind you. */
+    behind: 0.3,
   },
 
   gun: {
