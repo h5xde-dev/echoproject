@@ -85,6 +85,8 @@ export interface SnapshotMsg {
   pickups: PickupState[];
   powerups: PowerupState[];
   grenades: Grenade[];
+  /** Indices of shot-out lamps. */
+  lampsOut?: number[];
   mode: GameMode;
   /** Arena scoreboard: [actor id, kills, deaths, rounds won]. */
   scores: [number, number, number, number][];

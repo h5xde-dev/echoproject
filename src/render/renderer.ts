@@ -81,7 +81,7 @@ export class Renderer {
   private powerupVisuals = new Map<number, THREE.Group>();
   private hostile: (id: number) => boolean = (id) => id >= 1000;
   private viewerCount = 2;
-  private lamps: { x: number; z: number; color: number }[] = [];
+  private lamps: { x: number; z: number; color: number; on: boolean; fixture: THREE.Mesh }[] = [];
   private lampPool: THREE.PointLight[] = [];
   private lampUsed = [-1, -1, -1];
   private spotlights: { light: THREE.SpotLight; target: THREE.Object3D }[] = [];
@@ -344,7 +344,13 @@ export class Renderer {
     this.maskScene.add(this.memoryPlane);
 
     // Ceiling lamps: the fixed pool of lights is moved to the nearest ones.
-    this.lamps = map.lamps.map((l) => ({ x: l.x, z: l.z, color: l.color }));
+    // Each also gets a visible fixture, so players know what to shoot.
+    this.lamps = map.lamps.map((l) => {
+      const fixture = new THREE.Mesh(LAMP_FIXTURE_GEO, new THREE.MeshBasicMaterial({ color: l.color, toneMapped: false }));
+      fixture.position.set(l.x, 2.9, l.z);
+      g.add(fixture);
+      return { x: l.x, z: l.z, color: l.color, on: true, fixture };
+    });
 
     // Props: asset models fitted to the collision boxes, primitives otherwise.
     const barrelMat = new THREE.MeshStandardMaterial({ map: makeBarrelTexture(), roughness: 0.6, metalness: 0.25 });
@@ -678,6 +684,30 @@ export class Renderer {
     if (v && this.hostile(ownerId) && !this.isRevealed(ownerId)) this.pings.spawn(x, z);
   }
 
+  /** A lamp shot out: the light dies at once (no fade), glass rains down. */
+  breakLamp(index: number): void {
+    const lamp = this.lamps[index];
+    if (!lamp || !lamp.on) return;
+    this.setLampOn(index, false);
+    const k = this.lampUsed.indexOf(index);
+    if (k >= 0) this.lampPool[k].intensity = 0;
+    this.tmpColor.setRGB(0.85, 0.92, 1);
+    this.particles.burst(lamp.x, 2.8, lamp.z, 18, 4, this.tmpColor, 0.08, 0.6, -9);
+  }
+
+  /** Lamp states from the host (snapshots also cover late joiners). */
+  syncLamps(alive: boolean[]): void {
+    alive.forEach((on, i) => {
+      if (this.lamps[i] && this.lamps[i].on !== on) this.setLampOn(i, on);
+    });
+  }
+
+  private setLampOn(index: number, on: boolean): void {
+    const lamp = this.lamps[index];
+    lamp.on = on;
+    (lamp.fixture.material as THREE.MeshBasicMaterial).color.setHex(on ? lamp.color : 0x1a1c20);
+  }
+
   /** Footsteps of an unseen enemy: a small, faint marker. */
   stepFrom(ownerId: number, x: number, z: number): void {
     const v = this.actorVisuals.get(ownerId);
@@ -916,7 +946,8 @@ export class Renderer {
     const pool = this.lampPool;
     const used = this.lampUsed;
     const wanted = this.lamps
-      .map((l, i) => ({ i, d: Math.hypot(l.x - cx, l.z - cz) }))
+      .map((l, i) => ({ i, on: l.on, d: Math.hypot(l.x - cx, l.z - cz) }))
+      .filter((e) => e.on)
       .sort((a, b) => a.d - b.d)
       .slice(0, pool.length)
       .map((e) => e.i);
@@ -1057,6 +1088,9 @@ function wallBox(w: StaticBody, height: number): THREE.BufferGeometry {
 }
 
 /** Props whose model is long along X (turned when the box is long along Z). */
+/** A ceiling lamp seen from above: a flat disc. */
+const LAMP_FIXTURE_GEO = new THREE.CylinderGeometry(0.34, 0.34, 0.06, 20);
+
 /** Ceiling lamp brightness at full fade-in. */
 const LAMP_INTENSITY = 32;
 

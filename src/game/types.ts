@@ -292,6 +292,7 @@ export interface GameEvent {
   type:
     | 'shot'
     | 'step'
+    | 'lampBreak'
     | 'impact'
     | 'explosion'
     | 'death'

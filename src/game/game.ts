@@ -388,6 +388,7 @@ export class Game {
       pickups: this.sim.pickups.map((p) => ({ id: p.id, weapon: p.weapon, x: p.x, z: p.z })),
       powerups: this.sim.powerups.map((p) => ({ id: p.id, kind: p.kind, x: p.x, z: p.z, active: p.active })),
       grenades: this.sim.grenades,
+      lampsOut: this.sim.lampAlive.flatMap((alive, i) => (alive ? [] : [i])),
       mode: this.matchMode,
       scores: this.scoreRows(),
       round: this.localRoundState(),
@@ -455,6 +456,8 @@ export class Game {
 
     this.sim.syncProps(msg.props);
     this.sim.syncDoors(msg.doors);
+    this.sim.syncLamps(msg.lampsOut ?? []);
+    this.renderer.syncLamps(this.sim.lampAlive);
     this.sim.syncItems(msg.pickups ?? [], msg.powerups ?? [], msg.grenades ?? []);
     this.roundState = msg.round ?? null;
     this.sim.roomIndex = msg.room;
@@ -537,6 +540,11 @@ export class Game {
         if (!this.isAuthority) this.spawnClientBullets(event);
         break;
       }
+      case 'lampBreak':
+        this.renderer.breakLamp(Number(event.id));
+        if (this.isAuthority) this.renderer.syncLamps(this.sim.lampAlive);
+        this.audio.glass(this.localActorPosition(event.x ?? 0, event.z ?? 0));
+        break;
       case 'step': {
         // Own steps are played from local input (no network delay).
         const owner = event.ownerId ?? 0;

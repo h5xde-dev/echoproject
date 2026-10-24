@@ -13,6 +13,14 @@ export const CONFIG = {
   /** Most a client's shot is fast-forwarded on the host (seconds). */
   lagCompMax: 0.15,
 
+  /** Ceiling lamps players can shoot out. */
+  lamp: {
+    /** A player's bullet passing this close (metres) breaks the lamp. */
+    hitRadius: 0.35,
+    /** Breaking glass is heard this far. */
+    noise: 12,
+  },
+
   /** Run (default), walk (Shift) and crouch (C). */
   gait: {
     speed: { run: 1, walk: 0.55, crouch: 0.38 },

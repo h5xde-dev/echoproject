@@ -1,5 +1,5 @@
 import { Rng } from '../core/rng';
-import { clamp, dist, normalize } from '../core/math';
+import { clamp, dist, normalize, segCircleHit } from '../core/math';
 import { CONFIG, TILE } from './config';
 import { updateBullets, type BulletCtx } from './bullets';
 import { pickPowerup } from './levelgen';
@@ -118,6 +118,8 @@ export class Sim {
   powerups: SimPowerup[] = [];
   grenades: Grenade[] = [];
   events: GameEvent[] = [];
+  /** Ceiling lamps still burning, by index into `map.lamps`. */
+  lampAlive: boolean[];
   /** `step` marks footsteps, which only the walker's enemies listen for. */
   noises: { x: number; z: number; radius: number; time: number; ownerId: number; step?: boolean }[] = [];
   readonly scores = new Map<number, Score>();
@@ -151,6 +153,7 @@ export class Sim {
 
   constructor(map: MapData) {
     this.map = map;
+    this.lampAlive = map.lamps.map(() => true);
     this.mode = map.mode;
     this.world = new PhysicsWorld(map.walls);
     this.rng = new Rng(map.seed ^ 0x5f3759df);
@@ -555,6 +558,35 @@ export class Sim {
     }
   }
 
+  /**
+   * Players' bullets break the lamps they pass under this tick (up to the
+   * first wall). The bullet flies on: the lamp hangs overhead.
+   */
+  private shootLamps(bullets: Bullet[], dt: number): void {
+    for (const b of bullets) {
+      if (b.ownerKind !== 'player') continue;
+      const dirX = b.vx / b.speed;
+      const dirZ = b.vz / b.speed;
+      let travel = b.speed * dt;
+      const wall = this.world.castSegment(b.x, b.z, dirX, dirZ, travel, this.scratch);
+      if (wall) travel = wall.t;
+      const ex = b.x + dirX * travel;
+      const ez = b.z + dirZ * travel;
+      this.map.lamps.forEach((l, i) => {
+        if (!this.lampAlive[i]) return;
+        if (segCircleHit(b.x, b.z, ex, ez, l.x, l.z, CONFIG.lamp.hitRadius) === null) return;
+        this.lampAlive[i] = false;
+        this.noises.push({ x: l.x, z: l.z, radius: CONFIG.lamp.noise, time: this.time, ownerId: b.ownerId });
+        this.events.push({ type: 'lampBreak', id: String(i), x: l.x, z: l.z, ownerId: b.ownerId });
+      });
+    }
+  }
+
+  /** Client: lamp states from a snapshot (indices of broken lamps). */
+  syncLamps(broken: number[]): void {
+    this.lampAlive = this.map.lamps.map((_, i) => !broken.includes(i));
+  }
+
   /** Every few metres a moving soldier makes noise: loud running, quiet walking, none crouched. */
   private updateFootsteps(actor: Actor, dt: number): void {
     const v = Math.hypot(actor.vx, actor.vz);
@@ -720,6 +752,7 @@ export class Sim {
   // ---------------------------------------------------------------- bullets
 
   private updateBullets(dt: number, bullets = this.bullets): void {
+    this.shootLamps(bullets, dt);
     const ctx: BulletCtx = {
       world: this.world,
       props: this.props,
@@ -1622,10 +1655,7 @@ export class Sim {
   }
 
   isLit(x: number, z: number): boolean {
-    for (const l of this.map.lamps) {
-      if (dist(x, z, l.x, l.z) < 9.5) return true;
-    }
-    return false;
+    return this.map.lamps.some((l, i) => this.lampAlive[i] && dist(x, z, l.x, l.z) < 9.5);
   }
 
   // ------------------------------------------------------ client mirroring

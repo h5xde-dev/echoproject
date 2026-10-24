@@ -146,6 +146,31 @@ for (const info of ARENAS) {
   check(hears(p.id), "co-op guard hears the player's footsteps");
 }
 
+// Shootable lamps: a player's bullet breaks one and darkens the spot; a
+// guard's bullet flies under it.
+{
+  const s = new Sim(buildArena('sklad', 5150, 'dm'));
+  const lamp = s.map.lamps[0];
+  const p = s.addPlayer('local', 'тест', 1);
+  const guard = s.addPlayer('probe', 'probe', 1001);
+  guard.kind = 'enemy';
+  const shootAt = (shooter: typeof p) => {
+    s.bullets.push({
+      id: `t${shooter.id}`, ownerId: shooter.id, ownerKind: shooter.kind,
+      x: lamp.x - 1.5, z: lamp.z, vx: 60, vz: 0, speed: 60,
+      damage: 0, damageMul: 1, life: 0.2, weapon: 'pistol', color: 0, range: 0,
+    });
+    s.drainEvents();
+    for (let i = 0; i < 6; i++) s.step(CONFIG.tickDt);
+    return s.drainEvents().some((e) => e.type === 'lampBreak');
+  };
+  p.x = guard.x = -500;
+  check(s.isLit(lamp.x, lamp.z), 'lamp lights its spot');
+  check(!shootAt(guard) && s.lampAlive[0], "a guard's bullet does not break lamps");
+  check(shootAt(p) && !s.lampAlive[0], "a player's bullet breaks the lamp");
+  check(!s.map.lamps.some((l, i) => i !== 0 && Math.hypot(l.x - lamp.x, l.z - lamp.z) < 9.5) ? !s.isLit(lamp.x, lamp.z) : true, 'its spot goes dark');
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

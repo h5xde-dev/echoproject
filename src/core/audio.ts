@@ -178,6 +178,13 @@ export class GameAudio {
     window.setTimeout(() => this.tone(990, 1760, 0.2, 0.1, 'triangle'), 150);
   }
 
+  /** Breaking glass, quieter with distance. */
+  glass(dist: number): void {
+    const v = Math.max(0.15, 1 - dist / 30);
+    this.noise(0.18, 0.22 * v, 5200, 2.5, 'highpass');
+    this.tone(2600, 1800, 0.12, 0.05 * v, 'triangle');
+  }
+
   step(volume = 1): void {
     this.noise(0.045, 0.07 * volume, 900, 1.1, 'lowpass');
   }
