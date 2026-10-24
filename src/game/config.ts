@@ -199,6 +199,19 @@ export const CONFIG = {
   /** Weapons dropped by the dead stay on the ground this long. */
   dropLife: 30,
 
+  /** Co-op waves on an arena. */
+  waves: {
+    /** Calm before the first wave and between waves. */
+    firstBreak: 5,
+    breakTime: 8,
+    /** Guards in wave n: base + perWave * (n - 1), capped. */
+    base: 3,
+    perWave: 2,
+    max: 14,
+    /** Extra guard health per wave. */
+    hpGrowth: 0.12,
+  },
+
   /** Team deathmatch: first team to the limit wins; the clock is dm.timeLimit. */
   tdm: {
     scoreLimit: 30,

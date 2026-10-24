@@ -2,13 +2,13 @@ import { GameAudio } from '../core/audio';
 import { Input } from '../core/input';
 import { clamp } from '../core/math';
 import { Net } from '../net/net';
-import type { ActorState, EventMsg, HostMessage, RoundState, SnapshotMsg, WelcomeMsg } from '../net/protocol';
+import type { ActorState, EventMsg, HostMessage, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '../net/protocol';
 import { Renderer } from '../render/renderer';
 import { buildArena } from './arenas';
 import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
 import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
-import { GUN_LADDER, isArena, isTeamMode, modeInfo, SHOP } from './modes';
+import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP } from './modes';
 import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
@@ -136,6 +136,8 @@ export class Game {
   private timeLeft = 0;
   /** Client: team kills from the last snapshot. */
   private teamScore: [number, number] = [0, 0];
+  /** Client: wave state from the last snapshot. */
+  private wave: WaveState | null = null;
   private roundState: RoundState | null = null;
 
   // Interpolation state.
@@ -305,7 +307,7 @@ export class Game {
       const other = this.display.get(id)?.team ?? -1;
       return other < 0 || other !== this.localTeam();
     }
-    if (isArena(this.matchMode)) return true;
+    if (!isCoopMode(this.matchMode)) return true;
     return id >= 1000;
   }
 
@@ -420,12 +422,22 @@ export class Game {
       round: this.localRoundState(),
       timeLeft: this.sim.timeLeft,
       teamScore: this.sim.teamScore,
+      wave: this.waveState() ?? undefined,
       ack,
     };
   }
 
   private scoreRows(): [number, number, number, number][] {
     return [...this.sim.scores].map(([id, s]) => [id, s.kills, s.deaths, s.rounds]);
+  }
+
+  /** Waves: progress (host: from the sim; client: from snapshots). */
+  private waveState(): WaveState | null {
+    if (this.matchMode !== 'waves') return null;
+    if (!this.isAuthority) return this.wave;
+    let left = 0;
+    for (const a of this.sim.actors.values()) if (a.kind === 'enemy' && a.alive) left++;
+    return { n: this.sim.wave, phase: this.sim.wavePhase, t: Math.max(0, this.sim.waveT), left };
   }
 
   /** Competitive round info (host: from the sim; client: from snapshots). */
@@ -493,6 +505,7 @@ export class Game {
     this.scores = msg.scores ?? [];
     this.timeLeft = msg.timeLeft ?? 0;
     this.teamScore = msg.teamScore ?? [0, 0];
+    this.wave = msg.wave ?? null;
 
     // Reconcile the locally predicted player: rewind to the host state,
     // replay unacknowledged input, and keep the visual jump as a decaying
@@ -701,6 +714,17 @@ export class Game {
       case 'roomEnter':
         this.hud.message(`Комната ${event.text}`, 'warn');
         break;
+      case 'wave':
+        if (event.text === 'start') {
+          this.hud.banner(`ВОЛНА ${event.id ?? ''}`, 'Они идут на шум и свет');
+        } else {
+          this.hud.banner('ВОЛНА ОТБИТА', `Передышка ${CONFIG.waves.breakTime} с · павшие возвращаются`);
+          this.audio.powerup();
+        }
+        break;
+      case 'gameOver':
+        this.endGame(false, event.text ?? '', 'ОТРЯД ПОГИБ');
+        break;
       case 'victory':
         if (isTeamMode(this.matchMode)) {
           const win = event.team === this.localTeam();
@@ -831,7 +855,7 @@ export class Game {
       this.updateDisplay(dt);
     }
     // Solo arenas: only your own sight. Co-op and teams: your ally's too.
-    const shared = !isArena(this.matchMode) || isTeamMode(this.matchMode);
+    const shared = isCoopMode(this.matchMode) || isTeamMode(this.matchMode);
     this.renderer.update(dt, this.playerLights(), shared ? 2 : 1, this.beams());
     this.renderer.render();
     this.updateHud();
@@ -1304,7 +1328,7 @@ export class Game {
       .filter(
         (d) =>
           d.kind === 'player' &&
-          (this.matchMode === 'coop' || d.isLocal || (isTeamMode(this.matchMode) && d.team === this.localTeam())),
+          (isCoopMode(this.matchMode) || d.isLocal || (isTeamMode(this.matchMode) && d.team === this.localTeam())),
       )
       .map((d) => ({
         name: d.isLocal ? `${d.name} (вы)` : d.name,
@@ -1350,6 +1374,7 @@ export class Game {
       nadeKind: this.nadeKind,
       team: this.localTeam(),
       teamScore: this.isAuthority ? this.sim.teamScore : this.teamScore,
+      wave: this.waveState(),
       blind: self.blind,
       money: self.money,
       tier: self.tier,

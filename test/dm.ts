@@ -396,6 +396,59 @@ for (const info of ARENAS) {
   check(!!over && over.team === a.team, `reaching ${CONFIG.tdm.scoreLimit} wins the match for that team`);
 }
 
+// Waves.
+{
+  const s = new Sim(buildArena('sklad', 1414, 'waves'));
+  const a = s.addPlayer('local', 'альфа', 1);
+  const b = s.addPlayer('c2', 'браво', 2);
+  s.fillBots();
+  const dt = CONFIG.tickDt;
+  const guards = () => [...s.actors.values()].filter((x) => x.kind === 'enemy' && x.alive);
+  check(guards().length === 0, 'waves: no bots before the first wave');
+  for (let t = 0; t < CONFIG.waves.firstBreak + 0.1; t += dt) s.step(dt);
+  check(s.wave === 1 && guards().length === CONFIG.waves.base, `wave 1 brings ${guards().length} guards`);
+  const hostile = (s as unknown as { hostileTo(x: unknown, y: unknown): boolean }).hostileTo.bind(s);
+  const [g1, g2] = guards();
+  check(hostile(g1, a) && !hostile(g1, g2) && !hostile(a, b), 'guards hunt players, not each other; players are allies');
+  const hp1 = g1.maxHp;
+
+  // One player down, the rest of the wave cleared: the fallen one is back.
+  b.hp = 1;
+  b.shield = 0;
+  (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(b, 50, g1.id);
+  check(!b.alive, 'a player can fall mid-wave');
+  for (const g of guards()) (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(g, 999, a.id);
+  s.step(dt);
+  check(s.wavePhase === 'break' && b.alive, 'clearing the wave brings the fallen back');
+  for (let t = 0; t < CONFIG.waves.breakTime + 0.1; t += dt) s.step(dt);
+  const w2 = guards();
+  check(s.wave === 2 && w2.length === CONFIG.waves.base + CONFIG.waves.perWave && w2[0].maxHp > hp1, `wave 2: ${w2.length} tougher guards`);
+
+  // Everyone down at once: the run is over.
+  s.drainEvents();
+  for (const p of [a, b]) {
+    p.shield = 0;
+    (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(p, 999, w2[0].id);
+  }
+  s.step(dt);
+  const over = s.drainEvents().find((e) => e.type === 'gameOver');
+  check(!!over, `the squad wiped out ends the run: ${over?.text ?? '—'}`);
+}
+
+// Waves: guards find a player who sits still and quiet.
+{
+  const s = new Sim(buildArena('dvor', 1515, 'waves'));
+  const p = s.addPlayer('local', 'альфа', 1);
+  const dt = CONFIG.tickDt;
+  let hurt = -1;
+  for (let t = 0; t < CONFIG.waves.firstBreak + 45 && hurt < 0; t += dt) {
+    p.hp = p.maxHp;
+    s.step(dt);
+    for (const e of s.drainEvents()) if ((e.type === 'hurt' || e.type === 'death') && e.ownerId === p.id) hurt = t;
+  }
+  check(hurt > 0, `waves: guards track down a hidden player (first hit after ${hurt.toFixed(0)} s)`);
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

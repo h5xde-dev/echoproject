@@ -3,7 +3,7 @@ import { clamp, dist, normalize, segCircleHit } from '../core/math';
 import { CONFIG, TILE } from './config';
 import { updateBullets, type BulletCtx } from './bullets';
 import { pickPowerup } from './levelgen';
-import { GUN_LADDER, isArena, isTeamMode, SHOP, TEAM_NAMES } from './modes';
+import { GUN_LADDER, isArena, isCoopMode, isTeamMode, SHOP, TEAM_NAMES } from './modes';
 import { NavGrid } from './nav';
 import { PhysicsWorld, resolveCircleBox, type DoorBody } from './physics';
 import type {
@@ -145,6 +145,10 @@ export class Sim {
   matchOver = false;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
+  /** Waves: current wave (0 before the first), its phase and phase clock. */
+  wave = 0;
+  wavePhase: 'break' | 'fight' = 'break';
+  waveT: number = CONFIG.waves.firstBreak;
   bulletSeq = 0;
   /** Arena head count; bots fill the places humans leave free. */
   fighters: number = CONFIG.dm.fighters;
@@ -337,7 +341,8 @@ export class Sim {
 
   /** Deathmatch: tops the arena up with bots to the configured head count. */
   fillBots(): void {
-    if (!this.arena) return;
+    // Waves bring their own guards.
+    if (!this.arena || this.mode === 'waves') return;
     let humans = 0;
     let bots = 0;
     for (const a of this.actors.values()) {
@@ -587,6 +592,7 @@ export class Sim {
     this.updateItems(dt);
     if (this.mode === 'coop') this.updateRoomProgress();
     else if (this.mode === 'comp') this.updateRounds(dt);
+    else if (this.mode === 'waves') this.updateWaves(dt);
     else this.updateMatch(dt);
     this.noises = this.noises.filter((n) => this.time - n.time < 0.5);
   }
@@ -833,7 +839,7 @@ export class Sim {
         // Co-op and teams: no friendly fire (the bullet still stops on the body).
         const shooter = this.actors.get(hit.bullet.ownerId);
         const friendly =
-          (this.mode === 'coop' && hit.bullet.ownerKind === hit.actor.kind) ||
+          (isCoopMode(this.mode) && hit.bullet.ownerKind === hit.actor.kind) ||
           (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team);
         if (!friendly) this.damageActor(hit.actor, dmg, hit.bullet.ownerId);
         this.events.push({
@@ -889,7 +895,8 @@ export class Sim {
 
     this.dropWeapon(actor);
     if (this.arena) {
-      actor.respawnT = this.mode === 'comp' ? Infinity : CONFIG.dm.respawnDelay;
+      // Competitive: back next round. Waves: players after the wave, guards never.
+      actor.respawnT = this.mode === 'comp' || this.mode === 'waves' ? Infinity : CONFIG.dm.respawnDelay;
       const victim = this.scores.get(actor.id);
       if (victim) victim.deaths++;
       const killer = this.scores.get(sourceId);
@@ -898,6 +905,15 @@ export class Sim {
       const k = this.actors.get(sourceId);
       if (this.teams && k && !suicide && k.team >= 0 && k.team !== actor.team) this.teamScore[k.team]++;
       if (k && !suicide) this.rewardKill(k);
+      // Waves: fallen guards are bodies, cleared like co-op corpses.
+      if (this.mode === 'waves' && actor.kind === 'enemy') {
+        this.corpses.push(actor.id);
+        while (this.corpses.length > MAX_CORPSES) {
+          const id = this.corpses.shift()!;
+          this.actors.delete(id);
+          this.scores.delete(id);
+        }
+      }
       return;
     }
 
@@ -1029,7 +1045,7 @@ export class Sim {
   private hostileTo(actor: Actor, other: Actor): boolean {
     if (other === actor || !other.alive) return false;
     if (this.teams) return other.team !== actor.team;
-    if (this.arena) return true;
+    if (this.arena && this.mode !== 'waves') return true;
     return actor.kind === 'enemy' ? other.kind === 'player' : other.kind === 'enemy';
   }
 
@@ -1463,6 +1479,12 @@ export class Sim {
   }
 
   private pickPatrolTarget(actor: Actor): { x: number; z: number } {
+    // Waves: guards sweep toward the squad, a little off target.
+    if (this.mode === 'waves') {
+      const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
+      const p = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
+      if (p) return { x: p.x + this.rng.range(-6, 6), z: p.z + this.rng.range(-6, 6) };
+    }
     if (this.mode === 'dm' || this.teams) {
       // Roam between items and spawn points; go for health when hurt.
       if (actor.hp < actor.maxHp * 0.5) {
@@ -1575,6 +1597,8 @@ export class Sim {
         candidates.push({ x: a.x + Math.cos(ang) * 2, z: a.z + Math.sin(ang) * 2 });
       }
     }
+    // Arenas have no rooms: their spawn points are the fallback.
+    if (this.arena) candidates.push(...this.map.spawns);
     const rooms = [this.map.rooms[this.roomIndex], this.map.rooms[this.roomIndex - 1]].filter(Boolean) as RoomDef[];
     for (const room of rooms) {
       for (let x = room.minX + 1.5; x < room.maxX - 1; x += 2.5) {
@@ -1702,6 +1726,85 @@ export class Sim {
     if (limitHit || this.timeLeft <= 0) {
       this.finishMatch(leader?.id, leader ? `${leader.name} — ${leader.score.kills} фрагов` : 'Ничья');
     }
+  }
+
+  /**
+   * Waves: a calm break, then a wave of guards that hunt the squad. Clearing
+   * it brings the fallen back; losing everyone at once ends the run.
+   */
+  private updateWaves(dt: number): void {
+    if (this.matchOver) return;
+    const players = [...this.actors.values()].filter((a) => a.kind === 'player');
+    if (this.wavePhase === 'break') {
+      this.waveT -= dt;
+      if (this.waveT <= 0) {
+        this.wave++;
+        this.wavePhase = 'fight';
+        this.spawnWave();
+        this.events.push({ type: 'wave', text: 'start', id: String(this.wave) });
+      }
+      return;
+    }
+    if (players.length > 0 && players.every((p) => !p.alive)) {
+      this.matchOver = true;
+      const held = this.wave - 1;
+      this.events.push({ type: 'gameOver', text: `Отряд погиб на волне ${this.wave} · отбито волн: ${held}` });
+      return;
+    }
+    const left = [...this.actors.values()].some((a) => a.kind === 'enemy' && a.alive);
+    if (left) return;
+    this.wavePhase = 'break';
+    this.waveT = CONFIG.waves.breakTime;
+    for (const p of players) if (!p.alive) this.revive(p);
+    this.events.push({ type: 'wave', text: 'clear', id: String(this.wave) });
+  }
+
+  /** Waves: guards enter at the spawn points farthest from the squad. */
+  private spawnWave(): void {
+    const W = CONFIG.waves;
+    const count = Math.min(W.max, W.base + W.perWave * (this.wave - 1));
+    const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
+    const away = (s: { x: number; z: number }) => Math.min(...squad.map((p) => dist(p.x, p.z, s.x, s.z)), 1e6);
+    const spots = [...this.map.spawns].sort((a, b) => away(b) - away(a)).slice(0, Math.max(2, Math.ceil(this.map.spawns.length / 2)));
+    const armed = Math.min(ENEMY_WEAPONS.length - 1, Math.floor((this.wave - 1) / 2));
+    for (let i = 0; i < count; i++) {
+      const at = spots[i % spots.length];
+      const id = this.nextActorId++;
+      const x = at.x + this.rng.range(-1, 1);
+      const z = at.z + this.rng.range(-1, 1);
+      const guard = this.newActor(id, 'enemy', BOT_NAMES[(id - ENEMY_ID_BASE) % BOT_NAMES.length], x, z);
+      guard.maxHp = guard.hp = Math.round(CONFIG.enemy.maxHp * (1 + W.hpGrowth * (this.wave - 1)));
+      this.equip(guard, ENEMY_WEAPONS[this.rng.int(0, armed)]);
+      guard.ai!.hasLight = this.rng.next() < 0.5;
+      guard.flashOn = guard.ai!.hasLight;
+      guard.grenades = this.wave >= 3 && this.rng.next() < 0.3 ? 1 : 0;
+      // They come looking: straight for where the squad was last heard.
+      const target = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
+      if (target) {
+        guard.ai!.mode = 'alert';
+        guard.ai!.lastKnownX = target.x;
+        guard.ai!.lastKnownZ = target.z;
+        guard.ai!.timer = 8;
+      }
+      this.actors.set(id, guard);
+      this.scores.set(id, { kills: 0, deaths: 0, rounds: 0 });
+    }
+  }
+
+  /** Waves: a fallen player stands up again, keeping what they carried. */
+  private revive(actor: Actor): void {
+    const at = this.findSafeSpawn(actor);
+    actor.alive = true;
+    actor.x = at.x;
+    actor.z = at.z;
+    actor.vx = actor.vz = 0;
+    actor.hp = actor.maxHp;
+    actor.blind = 0;
+    actor.ammo = WEAPONS[actor.weapon].mag;
+    actor.reloading = false;
+    actor.shield = CONFIG.dm.spawnShield;
+    actor.respawnT = 0;
+    this.events.push({ type: 'respawn', ownerId: actor.id, x: actor.x, z: actor.z });
   }
 
   private finishTeamMatch(team: number | undefined, text: string): void {

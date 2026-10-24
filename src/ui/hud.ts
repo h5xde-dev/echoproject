@@ -1,6 +1,6 @@
 import type { Buffs, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
 import { GUN_LADDER, isArena, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
-import type { RoundState } from '../net/protocol';
+import type { RoundState, WaveState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
 import { CONFIG } from '../game/config';
 import { clamp } from '../core/math';
@@ -50,6 +50,8 @@ export interface HudState {
   /** Team modes: the local player's team and the kills per team. */
   team: number;
   teamScore: [number, number];
+  /** Waves mode progress. */
+  wave: WaveState | null;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -402,6 +404,13 @@ export class Hud {
         const r = state.round;
         const phase = !r ? '' : r.phase === 'freeze' ? `ПРИГОТОВЬТЕСЬ ${Math.ceil(r.t)}` : r.phase === 'live' ? clock(r.t) : 'РАУНД ОКОНЧЕН';
         this.objectiveEl.textContent = `РАУНД ${r?.n ?? 1} · ${phase} · ПОБЕД ${me?.rounds ?? 0}/${ROUNDS_TO_WIN} · ЛИДЕР ${leader}`;
+      } else if (this.mode === 'waves') {
+        const w = state.wave;
+        this.objectiveEl.textContent = !w
+          ? ''
+          : w.phase === 'break'
+            ? `ВОЛНА ${w.n + 1} ЧЕРЕЗ ${Math.ceil(w.t)} · ОТБИТО ${w.n}`
+            : `ВОЛНА ${w.n} · ВРАГОВ ${w.left}`;
       } else if (isTeamMode(this.mode)) {
         const [blue, red] = state.teamScore;
         const mine = state.team >= 0 ? ` · ВЫ — ${TEAM_NAMES[state.team]}` : '';

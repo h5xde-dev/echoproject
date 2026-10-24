@@ -53,6 +53,7 @@ const SOLO_DESC: Record<GameMode, string> = {
   gun: 'Гонка против ботов',
   comp: 'Раунды против ботов',
   tdm: 'Ваша команда с ботами против ботов',
+  waves: 'Продержаться как можно дольше',
 };
 
 function selectMode(mode: GameMode): void {
@@ -66,6 +67,8 @@ function selectMode(mode: GameMode): void {
   detailTitle.textContent = info.title;
   detailDesc.textContent = info.desc;
   arenaBox.classList.toggle('hidden', !info.arena);
+  // Waves bring their own guards: the head count does not apply.
+  fightersRange.closest('.fighters')?.classList.toggle('hidden', mode === 'waves');
   btnSolo.querySelector('.btn-desc')!.textContent = SOLO_DESC[mode];
   if (info.arena) drawPreview();
 }

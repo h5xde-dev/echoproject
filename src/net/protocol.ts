@@ -55,6 +55,13 @@ export interface PickupState {
   z: number;
 }
 
+export interface WaveState {
+  n: number;
+  phase: 'break' | 'fight';
+  t: number;
+  left: number;
+}
+
 export interface RoundState {
   n: number;
   phase: 'freeze' | 'live' | 'end';
@@ -100,6 +107,8 @@ export interface SnapshotMsg {
   timeLeft: number;
   /** Team modes: kills per team. */
   teamScore?: [number, number];
+  /** Waves: current wave, phase, seconds left in a break, guards left. */
+  wave?: WaveState;
   /** playerId -> last processed input sequence. */
   ack: Record<string, number>;
 }

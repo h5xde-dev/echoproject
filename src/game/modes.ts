@@ -35,6 +35,13 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'waves',
+    title: 'Волны',
+    short: 'ВОЛНЫ',
+    desc: 'Вместе против волн охраны. Каждая следующая больше и злее; враги идут на шум и свет. Погибшие возвращаются после волны — пока жив хоть кто-то.',
+    arena: true,
+  },
+  {
     id: 'gun',
     title: 'Гонка вооружений',
     short: 'ГОНКА',
@@ -56,6 +63,11 @@ export function modeInfo(mode: GameMode): ModeInfo {
 
 export function isArena(mode: GameMode): boolean {
   return mode !== 'coop';
+}
+
+/** Players on one side against guards: co-op levels and waves. */
+export function isCoopMode(mode: GameMode): boolean {
+  return mode === 'coop' || mode === 'waves';
 }
 
 /** Modes fought in two teams. */
