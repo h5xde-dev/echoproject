@@ -1,4 +1,4 @@
-import type { Buffs, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -31,6 +31,8 @@ export interface ActorState {
   concealed?: boolean;
   team?: number;
   carrying?: number;
+  /** Bomb: seconds the use key has been held (plant / defuse progress). */
+  useT?: number;
 }
 
 export interface BulletState {
@@ -113,6 +115,9 @@ export interface SnapshotMsg {
   /** Capture the flag: both flags and their bases. */
   flags?: FlagState[];
   bases?: { x: number; z: number }[];
+  /** Bomb planting: the bomb (null between rounds) and sites A, B. */
+  bomb?: BombState | null;
+  sites?: { x: number; z: number }[];
   /** playerId -> last processed input sequence. */
   ack: Record<string, number>;
 }
@@ -145,6 +150,7 @@ export interface InputMsg {
   buy?: ShopItem | '';
   rttMs?: number;
   grenadeKind?: GrenadeKind;
+  use?: boolean;
 }
 
 export interface EventMsg {

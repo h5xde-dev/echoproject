@@ -212,6 +212,20 @@ export const CONFIG = {
     hpGrowth: 0.12,
   },
 
+  /** Bomb planting (rounds and money as in comp). */
+  bomb: {
+    plantTime: 3,
+    defuseTime: 5,
+    /** Fuse once planted. */
+    timer: 35,
+    /** Site reach, and how close a defuser must stand. */
+    siteRadius: 3,
+    defuseReach: 1.6,
+    /** The blast kills everyone this close, behind walls or not. */
+    blastRadius: 12,
+    roundTime: 90,
+  },
+
   /** Capture the flag. */
   ctf: {
     capLimit: 3,

@@ -4,7 +4,7 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf';
+export type GameMode = 'coop' | 'dm' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb';
 
 export interface StaticBody {
   cx: number;
@@ -194,6 +194,11 @@ export interface AiState {
   pathGoalZ: number;
   /** Seconds until the path may be re-planned. */
   pathTimer: number;
+  /** Seconds spent wanting to move without getting anywhere. */
+  stuckT: number;
+  /** Seconds left sidestepping out of a jam, and which way. */
+  unstuckT: number;
+  unstuckDir: number;
 }
 
 /** Seconds left on each timed buff (0 = inactive). */
@@ -269,6 +274,22 @@ export interface Actor {
   team: number;
   /** Capture the flag: team of the flag carried, -1 when none. */
   carrying: number;
+  /** Bomb: holding the use key (plant / defuse) and for how long. */
+  using: boolean;
+  useT: number;
+}
+
+/** Bomb planting: the one bomb of a round. */
+export interface BombState {
+  x: number;
+  z: number;
+  /** Attacker carrying it, -1 when it lies or is planted. */
+  carrier: number;
+  planted: boolean;
+  /** Seconds to the blast once planted. */
+  timer: number;
+  /** Site it was planted on (0 = A, 1 = B), -1 before. */
+  site: number;
 }
 
 /** Capture the flag: one per team. */
@@ -342,6 +363,7 @@ export interface GameEvent {
     | 'lampBreak'
     | 'wave'
     | 'flag'
+    | 'bomb'
     | 'smoke'
     | 'flash'
     | 'impact'

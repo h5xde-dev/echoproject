@@ -3,12 +3,13 @@ import { clamp, dist, normalize, segCircleHit } from '../core/math';
 import { CONFIG, TILE } from './config';
 import { updateBullets, type BulletCtx } from './bullets';
 import { pickPowerup } from './levelgen';
-import { GUN_LADDER, isArena, isCoopMode, isTeamMode, SHOP, TEAM_NAMES } from './modes';
+import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from './modes';
 import { NavGrid } from './nav';
 import { PhysicsWorld, resolveCircleBox, type DoorBody } from './physics';
 import type {
   Actor,
   AiState,
+  BombState,
   Bullet,
   FlagState,
   Gait,
@@ -62,6 +63,8 @@ export interface PlayerInput {
   gait?: Gait;
   /** Which grenade `grenade` throws (frag when absent). */
   grenadeKind?: GrenadeKind;
+  /** Use key held (E): plant or defuse the bomb. */
+  use?: boolean;
 }
 
 /** Radius of a smoke cloud of this age: it billows out, then thins away. */
@@ -146,6 +149,10 @@ export class Sim {
   matchOver = false;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
+  /** Bomb planting: this round's bomb, the two sites, the site attackers aim for. */
+  bomb: BombState | null = null;
+  sites: { x: number; z: number }[] = [];
+  private bombGoal = 0;
   /** Capture the flag: the flags and the bases they belong on. */
   flags: FlagState[] = [];
   bases: { x: number; z: number }[] = [];
@@ -221,10 +228,18 @@ export class Sim {
       }
     }
     this.nav = new NavGrid(map.minX, map.minZ, map.maxX, map.maxZ, navSolids, CONFIG.enemy.radius + 0.1);
-    if (this.mode === 'comp') {
+    if (this.rounds) {
       this.round = 1;
       this.roundPhase = 'freeze';
       this.roundT = CONFIG.comp.freezeTime;
+    }
+    if (this.mode === 'bomb') {
+      // Sites A and B: upper and lower quarter of the defenders' half.
+      const w = map.maxX - map.minX;
+      const h = map.maxZ - map.minZ;
+      // A site must be reachable: from the attackers' start, not a walled-in pocket.
+      const from = map.spawns.find((s) => this.sideOf(s.x) === 0) ?? { x: map.spawnX, z: map.spawnZ };
+      for (const fz of [0.27, 0.73]) this.sites.push(this.nearestWalkable(map.minX + w * 0.74, map.minZ + h * fz, from));
     }
     if (this.mode === 'ctf') {
       // Each base sits among its team's spawn points.
@@ -246,6 +261,11 @@ export class Sim {
     return isTeamMode(this.mode);
   }
 
+  /** Comp and bomb: rounds, freeze, buy window, money, no respawn. */
+  get rounds(): boolean {
+    return isRoundMode(this.mode);
+  }
+
   /**
    * Team for a newcomer: humans are split evenly first (so friends end up
    * facing each other only when they outnumber a side), bots then even out
@@ -258,6 +278,24 @@ export class Sim {
       if (!isHuman || a.kind === 'player') count[a.team]++;
     }
     return count[1] < count[0] ? 1 : 0;
+  }
+
+  /**
+   * The walkable spot closest to a point (spiralling out on a 0.75 m grid),
+   * optionally one that can be walked to from `from`.
+   */
+  private nearestWalkable(x: number, z: number, from?: { x: number; z: number }): { x: number; z: number } {
+    for (let r = 0; r < 30; r++) {
+      for (let k = 0; k < Math.max(1, r * 8); k++) {
+        const a = (k / Math.max(1, r * 8)) * Math.PI * 2;
+        const px = x + Math.cos(a) * r * 0.75;
+        const pz = z + Math.sin(a) * r * 0.75;
+        if (!this.nav.walkable(px, pz)) continue;
+        if (from && !this.nav.find(from.x, from.z, px, pz)) continue;
+        return { x: px, z: pz };
+      }
+    }
+    return { x, z };
   }
 
   /** Arena half a spawn point belongs to: teams start on opposite sides. */
@@ -312,13 +350,15 @@ export class Sim {
       gait: 'run',
       stepDist: 0,
       // Utility grenades are a player tool; in competitive they are bought.
-      smokes: isPlayer && this.mode !== 'comp' ? CONFIG.grenade.startUtility : 0,
-      flashes: isPlayer && this.mode !== 'comp' ? CONFIG.grenade.startUtility : 0,
+      smokes: isPlayer && !this.rounds ? CONFIG.grenade.startUtility : 0,
+      flashes: isPlayer && !this.rounds ? CONFIG.grenade.startUtility : 0,
       blind: 0,
       concealed: false,
       revealT: 0,
       team: -1,
       carrying: -1,
+      using: false,
+      useT: 0,
     };
   }
 
@@ -338,9 +378,9 @@ export class Sim {
     const actor = this.newActor(id, 'player', name, x, z);
     actor.peerId = peerId;
     actor.team = team;
-    if (this.arena && this.mode !== 'comp') actor.shield = CONFIG.dm.spawnShield;
+    if (this.arena && !this.rounds) actor.shield = CONFIG.dm.spawnShield;
     // Joining a competitive round already under way: wait for the next one.
-    if (this.mode === 'comp' && this.roundPhase !== 'freeze') {
+    if (this.rounds && this.roundPhase !== 'freeze') {
       actor.alive = false;
       actor.respawnT = Infinity;
     }
@@ -351,7 +391,10 @@ export class Sim {
 
   removeActor(id: number): void {
     const actor = this.actors.get(id);
-    if (actor) this.dropFlag(actor);
+    if (actor) {
+      this.dropFlag(actor);
+      this.dropBomb(actor);
+    }
     this.actors.delete(id);
     this.scores.delete(id);
   }
@@ -379,12 +422,12 @@ export class Sim {
       bot.flashOn = true;
       this.equip(bot, this.startWeapon(bot));
       bot.ai!.hasLight = true;
-      bot.shield = this.mode === 'comp' ? 0 : CONFIG.dm.spawnShield;
-      if (this.mode === 'comp' && this.roundPhase !== 'freeze') {
+      bot.shield = this.rounds ? 0 : CONFIG.dm.spawnShield;
+      if (this.rounds && this.roundPhase !== 'freeze') {
         bot.alive = false;
         bot.respawnT = Infinity;
       }
-      if (this.mode === 'comp' && this.roundPhase === 'freeze') this.botShopping(bot);
+      if (this.rounds && this.roundPhase === 'freeze') this.botShopping(bot);
       this.actors.set(id, bot);
       this.scores.set(id, { kills: 0, deaths: 0, rounds: 0 });
       bots++;
@@ -447,7 +490,7 @@ export class Sim {
   /** What a fighter spawns with on an arena. */
   private startWeapon(actor: Actor): WeaponId {
     if (this.mode === 'gun') return GUN_LADDER[Math.min(actor.tier, GUN_LADDER.length - 1)];
-    if (this.mode === 'comp') return 'pistol';
+    if (this.rounds) return 'pistol';
     return actor.kind === 'enemy' ? ENEMY_WEAPONS[this.rng.int(0, ENEMY_WEAPONS.length - 1)] : 'pistol';
   }
 
@@ -467,6 +510,7 @@ export class Sim {
 
     actor.ang = input.aim;
     actor.gait = input.gait ?? 'run';
+    actor.using = !!input.use;
     if (input.buy) this.buy(actor, input.buy);
     // Competitive freeze time: look around and shop, but no moving or shooting.
     if (this.frozen) {
@@ -589,7 +633,7 @@ export class Sim {
     for (const actor of this.actors.values()) {
       if (!actor.alive) {
         // Competitive: the dead wait for the next round.
-        if ((actor.kind === 'player' || this.arena) && this.mode !== 'comp') {
+        if ((actor.kind === 'player' || this.arena) && !this.rounds) {
           actor.respawnT -= dt;
           if (actor.respawnT <= 0 && !this.matchOver) this.respawn(actor);
         }
@@ -608,7 +652,7 @@ export class Sim {
     this.updateProps(dt);
     this.updateItems(dt);
     if (this.mode === 'coop') this.updateRoomProgress();
-    else if (this.mode === 'comp') this.updateRounds(dt);
+    else if (this.rounds) this.updateRounds(dt);
     else if (this.mode === 'waves') this.updateWaves(dt);
     else this.updateMatch(dt);
     if (this.mode === 'ctf') this.updateFlags(dt);
@@ -665,6 +709,21 @@ export class Sim {
   /** Client: lamp states from a snapshot (indices of broken lamps). */
   syncLamps(broken: number[]): void {
     this.lampAlive = this.map.lamps.map((_, i) => !broken.includes(i));
+  }
+
+  /**
+   * Where a bot must go for its side's objective, and how close counts as
+   * there: the bomb carrier to its site, defenders to a planted bomb, a flag
+   * carrier home. Null when it has no such errand.
+   */
+  private objectiveOf(actor: Actor): { x: number; z: number; reach: number } | null {
+    const bomb = this.bomb;
+    if (this.mode === 'bomb' && bomb && this.roundPhase === 'live') {
+      if (!bomb.planted && bomb.carrier === actor.id) return { ...this.sites[this.bombGoal], reach: CONFIG.bomb.siteRadius * 0.6 };
+      if (bomb.planted && actor.team === 1) return { x: bomb.x, z: bomb.z, reach: CONFIG.bomb.defuseReach * 0.7 };
+    }
+    if (this.mode === 'ctf' && actor.carrying >= 0) return { ...this.bases[actor.team], reach: CONFIG.ctf.touch };
+    return null;
   }
 
   /** Hidden while in a bush and quiet (not running, not just fired). */
@@ -913,9 +972,10 @@ export class Sim {
 
     this.dropWeapon(actor);
     this.dropFlag(actor);
+    this.dropBomb(actor);
     if (this.arena) {
       // Competitive: back next round. Waves: players after the wave, guards never.
-      actor.respawnT = this.mode === 'comp' || this.mode === 'waves' ? Infinity : CONFIG.dm.respawnDelay;
+      actor.respawnT = this.rounds || this.mode === 'waves' ? Infinity : CONFIG.dm.respawnDelay;
       const victim = this.scores.get(actor.id);
       if (victim) victim.deaths++;
       const killer = this.scores.get(sourceId);
@@ -977,7 +1037,7 @@ export class Sim {
 
   /** Kill rewards: money in competitive, the next gun in gun game. */
   private rewardKill(killer: Actor): void {
-    if (this.mode === 'comp') {
+    if (this.rounds) {
       killer.money = Math.min(CONFIG.comp.maxMoney, killer.money + CONFIG.comp.killReward);
     } else if (this.mode === 'gun') {
       killer.tierKills++;
@@ -1071,6 +1131,7 @@ export class Sim {
   private updateAi(actor: Actor, dt: number): void {
     const ai = actor.ai;
     if (!ai) return;
+    actor.using = false;
     // Flashed: stands still, sees nothing, does not shoot.
     if (actor.blind > 0) {
       ai.awareness = 0;
@@ -1188,13 +1249,21 @@ export class Sim {
     let move = { x: 0, z: 0 };
     let wantAng = actor.ang;
 
+    // An objective to carry out (plant, defuse, bring a flag home) wins over
+    // hunting noises: with no enemy in sight, patrol straight to it.
+    const objective = this.objectiveOf(actor);
+    if (objective && !canSee && ai.mode !== 'patrol') {
+      ai.mode = 'patrol';
+      ai.repathTimer = 0;
+    }
+
     switch (ai.mode) {
       case 'idle':
       case 'patrol':
       case 'reposition': {
         if (ai.repathTimer <= 0 || dist(actor.x, actor.z, ai.targetX, ai.targetZ) < 1.2) {
           // Objectives move (a flag is carried off): replan often in CTF.
-          ai.repathTimer = this.mode === 'ctf' ? 1.2 : this.arena ? 6 + this.rng.next() * 4 : 2.4 + this.rng.next() * 2.4;
+          ai.repathTimer = this.mode === 'ctf' || this.mode === 'bomb' ? 1.2 : this.arena ? 6 + this.rng.next() * 4 : 2.4 + this.rng.next() * 2.4;
           const target = this.pickPatrolTarget(actor);
           ai.targetX = target.x;
           ai.targetZ = target.z;
@@ -1273,9 +1342,15 @@ export class Sim {
       }
     }
 
-    // Carrying a flag: run it home whatever else is going on (still shooting
-    // and turning at whoever is in sight).
-    if (actor.carrying >= 0) {
+    // On the objective with no enemy in sight: stand still and hold use.
+    if (this.mode === 'bomb' && objective && !canSee && dist(actor.x, actor.z, objective.x, objective.z) < objective.reach) {
+      move = { x: 0, z: 0 };
+      actor.using = true;
+    }
+
+    // Carrying a flag in a firefight: keep running home while shooting (out of
+    // a fight, patrol already heads there).
+    if (actor.carrying >= 0 && canSee) {
       const base = this.bases[actor.team];
       const home = this.steer(actor, base.x, base.z, 0.5);
       if (home.x !== 0 || home.z !== 0) {
@@ -1296,9 +1371,30 @@ export class Sim {
     // Flashlight: on when patrolling or fighting, off when sneaking up.
     actor.flashOn = ai.hasLight && ai.mode !== 'chase' && ai.mode !== 'alert';
 
+    // Jammed against something (a pushed crate, a corner the grid misses):
+    // sidestep for a moment and plan the path again.
+    if (ai.unstuckT > 0) {
+      ai.unstuckT -= dt;
+      const side = Math.atan2(move.z, move.x) + (Math.PI / 2) * ai.unstuckDir;
+      move = { x: Math.cos(side), z: Math.sin(side) };
+    }
+
     const turnRate = ai.mode === 'attack' ? 7 : 3.4;
     actor.ang = turnTowards(actor.ang, wantAng, turnRate * dt);
+    const wantsToMove = move.x !== 0 || move.z !== 0;
+    const fromX = actor.x;
+    const fromZ = actor.z;
     this.moveActor(actor, move.x, move.z, dt);
+    const progress = Math.hypot(actor.x - fromX, actor.z - fromZ) / dt;
+    ai.stuckT = wantsToMove && progress < 0.5 ? ai.stuckT + dt : 0;
+    if (ai.stuckT > 1.2) {
+      ai.stuckT = 0;
+      ai.unstuckT = 0.6;
+      ai.unstuckDir = this.rng.next() < 0.5 ? 1 : -1;
+      ai.path.length = 0;
+      ai.pathTimer = 0;
+      ai.repathTimer = 0;
+    }
   }
 
   // -------------------------------------------------------------- grenades
@@ -1434,11 +1530,11 @@ export class Sim {
 
   /** Competitive buy window: the first seconds of a round. */
   get canBuy(): boolean {
-    return this.mode === 'comp' && this.roundAge < CONFIG.comp.buyTime && this.roundPhase !== 'end';
+    return this.rounds && this.roundAge < CONFIG.comp.buyTime && this.roundPhase !== 'end';
   }
 
   get frozen(): boolean {
-    return this.mode === 'comp' && this.roundPhase === 'freeze';
+    return this.rounds && this.roundPhase === 'freeze';
   }
 
   buy(actor: Actor, item: ShopItem): boolean {
@@ -1485,13 +1581,19 @@ export class Sim {
     const ai = actor.ai!;
     const d = dist(actor.x, actor.z, gx, gz);
     if (d < arrive) return { x: 0, z: 0 };
-    if (d < 10 && this.world.lineOfSight(actor.x, actor.z, gx, gz, this.scratch)) {
+    // Straight at it only when neither walls nor anchored props are in the way
+    // (props are not walls: walking into a car would stall the bot for good).
+    if (d < 10 && this.bodyClear(actor, gx, gz) && !this.propInWay(actor, gx, gz)) {
       ai.path.length = 0;
       return { x: (gx - actor.x) / d, z: (gz - actor.z) / d };
     }
     const stale = dist(ai.pathGoalX, ai.pathGoalZ, gx, gz) > 2 || ai.pathIndex >= ai.path.length;
-    if (stale && ai.pathTimer <= 0) {
-      ai.path = this.nav.find(actor.x, actor.z, gx, gz) ?? [];
+    // An empty path is planned at once: waiting out the timer would leave the
+    // bot standing (e.g. right after a straight run that got blocked).
+    if (stale && (ai.pathTimer <= 0 || ai.path.length === 0)) {
+      // No grid path (the bot squeezed through a gap narrower than the grid's
+      // margin): head straight for it; the jam check sidesteps if it bumps.
+      ai.path = this.nav.find(actor.x, actor.z, gx, gz) ?? [{ x: gx, z: gz }];
       ai.pathIndex = 0;
       ai.pathGoalX = gx;
       ai.pathGoalZ = gz;
@@ -1509,12 +1611,59 @@ export class Sim {
     return { x: 0, z: 0 };
   }
 
+  /** A straight walk is clear for the whole body: centre line and both edges. */
+  private bodyClear(actor: Actor, gx: number, gz: number): boolean {
+    const d = dist(actor.x, actor.z, gx, gz) || 1;
+    const nx = (-(gz - actor.z) / d) * actor.radius;
+    const nz = ((gx - actor.x) / d) * actor.radius;
+    return (
+      this.world.lineOfSight(actor.x, actor.z, gx, gz, this.scratch) &&
+      this.world.lineOfSight(actor.x + nx, actor.z + nz, gx + nx, gz + nz, this.scratch) &&
+      this.world.lineOfSight(actor.x - nx, actor.z - nz, gx - nx, gz - nz, this.scratch)
+    );
+  }
+
+  /** An anchored prop on the straight line from the actor to a point (sampled every 0.4 m). */
+  private propInWay(actor: Actor, gx: number, gz: number): boolean {
+    const d = dist(actor.x, actor.z, gx, gz);
+    const steps = Math.ceil(d / 0.4);
+    const r = actor.radius;
+    for (const p of this.props) {
+      if (!p.alive || !p.fixed) continue;
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        const x = actor.x + (gx - actor.x) * t;
+        const z = actor.z + (gz - actor.z) * t;
+        if (Math.abs(x - p.x) < p.hw + r && Math.abs(z - p.z) < p.hh + r) return true;
+      }
+    }
+    return false;
+  }
+
   private pickPatrolTarget(actor: Actor): { x: number; z: number } {
     // Waves: guards sweep toward the squad, a little off target.
     if (this.mode === 'waves') {
       const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
       const p = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
       if (p) return { x: p.x + this.rng.range(-6, 6), z: p.z + this.rng.range(-6, 6) };
+    }
+    // Bomb: attackers go for the bomb (or escort / guard it), defenders hold
+    // the sites until it is planted, then converge on it.
+    if (this.mode === 'bomb' && actor.team >= 0) {
+      const bomb = this.bomb;
+      const jitter = () => ({ x: this.rng.range(-4, 4), z: this.rng.range(-4, 4) });
+      if (actor.team === 0) {
+        if (!bomb) return this.sites[this.bombGoal];
+        if (bomb.carrier === actor.id) return this.sites[this.bombGoal];
+        const carrier = this.actors.get(bomb.carrier);
+        const at = carrier ?? bomb;
+        const j = jitter();
+        return bomb.carrier < 0 && !bomb.planted ? { x: bomb.x, z: bomb.z } : { x: at.x + j.x, z: at.z + j.z };
+      }
+      if (bomb?.planted) return { x: bomb.x, z: bomb.z };
+      const site = this.sites[actor.id % 2];
+      const j = jitter();
+      return { x: site.x + j.x, z: site.z + j.z };
     }
     // Capture the flag: carriers run home, attackers go for the enemy flag,
     // defenders hold their own (and chase whoever took it).
@@ -1681,12 +1830,12 @@ export class Sim {
       actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
       this.equip(actor, this.startWeapon(actor));
       actor.grenades = Math.max(actor.grenades, CONFIG.grenade.startArena);
-      if (actor.kind === 'player' && this.mode !== 'comp') {
+      if (actor.kind === 'player' && !this.rounds) {
         actor.smokes = Math.max(actor.smokes, CONFIG.grenade.startUtility);
         actor.flashes = Math.max(actor.flashes, CONFIG.grenade.startUtility);
       }
       actor.blind = 0;
-      actor.shield = this.mode === 'comp' ? 0 : CONFIG.dm.spawnShield;
+      actor.shield = this.rounds ? 0 : CONFIG.dm.spawnShield;
       if (actor.ai) Object.assign(actor.ai, makeAi(), { hasLight: true });
     } else {
       actor.hp = actor.maxHp * 0.7;
@@ -1957,9 +2106,14 @@ export class Sim {
     if (this.roundPhase === 'freeze') {
       if (this.roundT <= 0) {
         this.roundPhase = 'live';
-        this.roundT = C.roundTime;
+        this.roundT = this.mode === 'bomb' ? CONFIG.bomb.roundTime : C.roundTime;
+        if (this.mode === 'bomb') this.handOutBomb();
         this.events.push({ type: 'round', text: 'live' });
       }
+      return;
+    }
+    if (this.roundPhase === 'live' && this.mode === 'bomb') {
+      this.updateBomb(dt);
       return;
     }
     if (this.roundPhase === 'live') {
@@ -1986,6 +2140,129 @@ export class Sim {
     if (this.roundT <= 0) this.startRound();
   }
 
+  /** Bomb: one attacker (a human if any) starts the round with it. */
+  private handOutBomb(): void {
+    const attackers = [...this.actors.values()].filter((a) => a.alive && a.team === 0);
+    const humans = attackers.filter((a) => a.kind === 'player');
+    const pool = humans.length > 0 ? humans : attackers;
+    const carrier = pool[this.rng.int(0, Math.max(0, pool.length - 1))];
+    this.bombGoal = this.rng.int(0, 1);
+    this.bomb = carrier
+      ? { x: carrier.x, z: carrier.z, carrier: carrier.id, planted: false, timer: 0, site: -1 }
+      : null;
+  }
+
+  /**
+   * Bomb round: the carrier plants by holding use on a site, defenders
+   * defuse by holding use at the bomb. The round ends on a blast, a defuse,
+   * a wiped-out side or (before a plant) the clock.
+   */
+  private updateBomb(dt: number): void {
+    const B = CONFIG.bomb;
+    const alive = [...this.actors.values()].filter((a) => a.alive);
+    const attackers = alive.filter((a) => a.team === 0);
+    const defenders = alive.filter((a) => a.team === 1);
+    const bomb = this.bomb;
+    for (const a of this.actors.values()) if (!a.using || !a.alive) a.useT = 0;
+
+    if (bomb && !bomb.planted) {
+      const carrier = this.actors.get(bomb.carrier);
+      if (carrier?.alive) {
+        bomb.x = carrier.x;
+        bomb.z = carrier.z;
+        const site = this.sites.findIndex((s) => dist(s.x, s.z, carrier.x, carrier.z) < B.siteRadius);
+        const still = Math.hypot(carrier.vx, carrier.vz) < 1;
+        if (carrier.using && site >= 0 && still) {
+          carrier.useT += dt;
+          if (carrier.useT >= B.plantTime) {
+            carrier.useT = 0;
+            bomb.planted = true;
+            bomb.carrier = -1;
+            bomb.timer = B.timer;
+            bomb.site = site;
+            this.noises.push({ x: bomb.x, z: bomb.z, radius: 16, time: this.time, ownerId: carrier.id });
+            this.events.push({ type: 'bomb', text: 'planted', ownerId: carrier.id, x: bomb.x, z: bomb.z, id: String(site) });
+          }
+        } else {
+          carrier.useT = 0;
+        }
+      } else if (bomb.carrier < 0) {
+        // Lying on the floor: the first attacker to touch it picks it up.
+        const finder = attackers.find((a) => dist(a.x, a.z, bomb.x, bomb.z) < CONFIG.ctf.touch);
+        if (finder) {
+          bomb.carrier = finder.id;
+          this.events.push({ type: 'bomb', text: 'picked', ownerId: finder.id });
+        }
+      }
+    }
+
+    if (bomb?.planted) {
+      bomb.timer -= dt;
+      for (const d of defenders) {
+        if (!d.using || dist(d.x, d.z, bomb.x, bomb.z) > B.defuseReach) continue;
+        d.useT += dt;
+        if (d.useT >= B.defuseTime) {
+          this.events.push({ type: 'bomb', text: 'defused', ownerId: d.id, x: bomb.x, z: bomb.z });
+          this.bomb = null;
+          this.endTeamRound(1, 'Бомба обезврежена');
+          return;
+        }
+      }
+      if (bomb.timer <= 0) {
+        this.events.push({ type: 'explosion', x: bomb.x, z: bomb.z, y: 1 });
+        this.events.push({ type: 'bomb', text: 'exploded', x: bomb.x, z: bomb.z });
+        for (const a of this.actors.values()) {
+          if (!a.alive || dist(a.x, a.z, bomb.x, bomb.z) > B.blastRadius) continue;
+          a.shield = 0;
+          a.armor = 0;
+          this.damageActor(a, 9999, a.id);
+        }
+        this.bomb = null;
+        this.endTeamRound(0, 'Бомба взорвалась');
+        return;
+      }
+    }
+
+    if (defenders.length === 0) this.endTeamRound(0, 'Защита уничтожена');
+    else if (!bomb?.planted && attackers.length === 0) this.endTeamRound(1, 'Атака уничтожена');
+    else if (!bomb?.planted && this.roundT <= 0) this.endTeamRound(1, 'Время вышло — бомба не заложена');
+  }
+
+  /** Team round over: score, team money, then the next round or the match. */
+  private endTeamRound(winner: number, reason: string): void {
+    const C = CONFIG.comp;
+    this.teamScore[winner]++;
+    for (const a of this.actors.values()) {
+      if (a.team < 0) continue;
+      const bonus = a.team === winner ? C.roundWinBonus : C.roundLossBonus;
+      a.money = Math.min(C.maxMoney, a.money + bonus);
+      a.useT = 0;
+    }
+    this.roundPhase = 'end';
+    this.roundT = C.endDelay;
+    this.events.push({ type: 'round', team: winner, text: 'end', id: reason });
+    const [blue, red] = this.teamScore;
+    if (Math.max(blue, red) >= C.roundsToWin || this.round >= C.maxRounds) {
+      const best = blue === red ? undefined : blue > red ? 0 : 1;
+      this.finishTeamMatch(best, best === undefined ? `Ничья ${blue}:${red}` : `${TEAM_NAMES[best]} победили ${Math.max(blue, red)}:${Math.min(blue, red)}`);
+    }
+  }
+
+  /** Bomb: a carrier going down drops it where they fall. */
+  private dropBomb(actor: Actor): void {
+    const bomb = this.bomb;
+    if (!bomb || bomb.planted || bomb.carrier !== actor.id) return;
+    bomb.carrier = -1;
+    bomb.x = actor.x;
+    bomb.z = actor.z;
+    this.events.push({ type: 'bomb', text: 'dropped', ownerId: actor.id, x: bomb.x, z: bomb.z });
+  }
+
+  /** Client: bomb from a snapshot. */
+  syncBomb(bomb: BombState | null): void {
+    this.bomb = bomb;
+  }
+
   private roundLeader(): { id: number; name: string; rounds: number } | null {
     let best: { id: number; name: string; rounds: number } | null = null;
     for (const [id, s] of this.scores) {
@@ -2010,11 +2287,18 @@ export class Sim {
       [spawns[i], spawns[j]] = [spawns[j], spawns[i]];
     }
     let k = 0;
+    // Team rounds: each side starts on its own half.
+    const sideK = [0, 0];
+    const sides = [0, 1].map((t) => spawns.filter((s) => this.sideOf(s.x) === t));
+    this.bomb = null;
     for (const a of this.actors.values()) {
-      const s = spawns[k++ % spawns.length];
+      const own = a.team >= 0 && sides[a.team].length > 0 ? sides[a.team] : null;
+      const n = own ? sideK[a.team]++ : k++;
+      const pool = own ?? spawns;
+      const s = pool[n % pool.length];
       const survived = a.alive;
       a.alive = true;
-      a.x = s.x + (k > spawns.length ? 1.2 : 0);
+      a.x = s.x + (n >= pool.length ? 1.2 : 0);
       a.z = s.z;
       a.vx = a.vz = 0;
       a.hp = a.maxHp;
@@ -2122,6 +2406,9 @@ function makeAi(): AiState {
     fireDelay: 0.8,
     patrolTarget: 0,
     reactT: 0,
+    stuckT: 0,
+    unstuckT: 0,
+    unstuckDir: 1,
     sawTarget: false,
     awareness: 0,
     aimT: 0,

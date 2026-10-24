@@ -27,7 +27,7 @@ for (const info of ARENAS) {
   if (unreachable.length) console.log(info.id + '\n' + sim.nav.dump());
   check(map.spawns.length >= 6, `${info.id}: ${map.spawns.length} spawn points`);
 
-  for (const mode of ['dm', 'gun', 'comp', 'tdm', 'ctf'] as GameMode[]) {
+  for (const mode of ['dm', 'gun', 'comp', 'tdm', 'ctf', 'bomb'] as GameMode[]) {
     const tag = `${info.id}/${mode}`;
     const s = new Sim(buildArena(info.id, 777, mode));
     s.fillBots();
@@ -39,9 +39,11 @@ for (const info of ARENAS) {
     let rounds = 0;
     let ladder = 0;
     let flagsTaken = 0;
+    let plants = 0;
+    let bombEnds = 0;
     let ended = '';
     const dt = CONFIG.tickDt;
-    const limit = mode === 'comp' ? 1500 : CONFIG.dm.timeLimit + 2;
+    const limit = mode === 'comp' || mode === 'bomb' ? 1500 : CONFIG.dm.timeLimit + 2;
     for (let t = 0; t < limit && !ended; t += dt) {
       s.step(dt);
       for (const e of s.drainEvents()) {
@@ -52,11 +54,14 @@ for (const info of ARENAS) {
         if (e.type === 'ladder') ladder = Math.max(ladder, Number(e.text));
         if (e.type === 'victory') ended = e.text ?? '?';
         if (e.type === 'flag' && e.text === 'taken') flagsTaken++;
+        if (e.type === 'bomb' && e.text === 'planted') plants++;
+        if (e.type === 'bomb' && (e.text === 'exploded' || e.text === 'defused')) bombEnds++;
       }
       for (const b of s.actors.values()) {
         const l = last.get(b.id) ?? { x: b.x, z: b.z, still: 0 };
         const moved = Math.hypot(b.x - l.x, b.z - l.z) > 0.05;
-        const busy = b.ai?.mode === 'attack' || s.frozen || s.roundPhase === 'end';
+        // Planting or defusing is standing still on purpose.
+      const busy = b.ai?.mode === 'attack' || s.frozen || s.roundPhase === 'end' || b.using;
         l.still = b.alive && !moved && !busy ? l.still + dt : 0;
         maxStill = Math.max(maxStill, l.still);
         l.x = b.x;
@@ -64,11 +69,13 @@ for (const info of ARENAS) {
         last.set(b.id, l);
       }
     }
-    check(deaths >= 8, `${tag}: ${deaths} deaths`);
+    // Bomb rounds can end in a defuse with nobody down: one death a round will do.
+    check(deaths >= (mode === 'bomb' ? rounds : 8), `${tag}: ${deaths} deaths`);
     check(!!ended, `${tag}: match ended — ${ended || 'no'}`);
     check(maxStill < 9, `${tag}: longest idle bot ${maxStill.toFixed(1)} s`);
     check(throws > 0, `${tag}: ${throws} grenades thrown`);
     if (mode === 'gun') check(ladder >= 2, `${tag}: best ladder tier ${ladder + 1}`);
+    if (mode === 'bomb') check(plants > 0, `${tag}: ${plants} plants, ${bombEnds} blasts/defuses, ${rounds} rounds, score ${s.teamScore.join(':')}`);
     if (mode === 'ctf') check(flagsTaken > 0, `${tag}: bots took a flag ${flagsTaken} times, score ${s.teamScore.join(':')}`);
     if (mode === 'comp') {
       check(rounds >= CONFIG.comp.roundsToWin, `${tag}: ${rounds} rounds played`);
@@ -506,6 +513,86 @@ for (const info of ARENAS) {
   s.step(dt);
   const over = s.drainEvents().find((e) => e.type === 'victory');
   check(!!over && over.team === 0, `${CONFIG.ctf.capLimit} captures win: ${over?.text ?? '—'}`);
+}
+
+// Bomb planting rules.
+{
+  const s = new Sim(buildArena('sklad', 1717, 'bomb'));
+  const a = s.addPlayer('local', 'альфа', 1);
+  const d = s.addPlayer('c2', 'браво', 2);
+  const dt = CONFIG.tickDt;
+  const priv = s as unknown as { roundT: number; roundAge: number };
+  check(a.team === 0 && d.team === 1 && s.sites.length === 2, 'bomb: attackers, defenders and two sites');
+  const mid = (s.map.minX + s.map.maxX) / 2;
+  check(s.sites.every((x) => x.x > mid && s.nav.walkable(x.x, x.z)), 'both sites are walkable, on the defenders\' half');
+  for (const id of ['sklad', 'dvor', 'bunker']) {
+    const m = new Sim(buildArena(id, 1, 'bomb'));
+    const from = m.map.spawns.find((p) => p.x < (m.map.minX + m.map.maxX) / 2)!;
+    check(m.sites.every((x) => !!m.nav.find(from.x, from.z, x.x, x.z)), `${id}: both bomb sites reachable from the attackers' spawn`);
+  }
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  const hold = (who: typeof a, secs: number, use = true) => {
+    for (let t = 0; t < secs; t += dt) {
+      s.applyInput(who, { ...input, use });
+      s.step(dt);
+    }
+  };
+  priv.roundT = 0;
+  s.step(dt);
+  check(s.roundPhase === 'live' && s.bomb?.carrier === a.id, 'round goes live with the bomb on the (human) attacker');
+  const site = s.sites[0];
+  d.x = d.z = -500;
+  a.x = site.x - 6;
+  a.z = site.z;
+  hold(a, 1);
+  check(!s.bomb!.planted && a.useT === 0, 'no planting off-site');
+  a.x = site.x;
+  a.z = site.z;
+  hold(a, 1.5);
+  hold(a, 0.1, false);
+  check(!s.bomb!.planted && a.useT === 0, 'letting go of E resets the plant');
+  hold(a, CONFIG.bomb.plantTime + 0.1);
+  check(!!s.bomb?.planted && s.bomb.site === 0, 'holding E on the site plants the bomb');
+
+  // Defuse.
+  d.x = s.bomb!.x + 0.5;
+  d.z = s.bomb!.z;
+  a.x = a.z = -500;
+  s.drainEvents();
+  hold(d, CONFIG.bomb.defuseTime + 0.1);
+  const ev = s.drainEvents();
+  check(!s.bomb && ev.some((e) => e.type === 'bomb' && e.text === 'defused'), 'a defender holding E at the bomb defuses it');
+  check(s.teamScore[1] === 1 && s.roundPhase === 'end', 'a defuse wins the round for the defence');
+
+  // Next round: plant and let it blow; whoever stands close dies.
+  for (let t = 0; t < CONFIG.comp.endDelay + CONFIG.comp.freezeTime + 0.2; t += dt) s.step(dt);
+  check(s.roundPhase === 'live' && !!s.bomb, 'next round starts with a new bomb');
+  const carrier = s.actors.get(s.bomb!.carrier)!;
+  carrier.x = site.x;
+  carrier.z = site.z;
+  d.x = site.x + 3;
+  d.z = site.z;
+  d.alive = true;
+  hold(carrier, CONFIG.bomb.plantTime + 0.1);
+  s.bomb!.timer = 0.05;
+  d.x = site.x + 3;
+  d.z = site.z;
+  for (let i = 0; i < 5; i++) s.step(dt);
+  check(!d.alive && s.teamScore[0] === 1, 'the blast kills nearby defenders and wins the round for the attack');
+
+  // Carrier down: the bomb drops; another attacker picks it up.
+  for (let t = 0; t < CONFIG.comp.endDelay + CONFIG.comp.freezeTime + 0.2; t += dt) s.step(dt);
+  const c2 = s.actors.get(s.bomb!.carrier)!;
+  const mate = s.addPlayer('c3', 'чарли', 3);
+  mate.team = 0;
+  mate.alive = true;
+  c2.shield = 0;
+  (s as unknown as { damageActor(x: unknown, dmg: number, by: number): void }).damageActor(c2, 999, d.id);
+  check(s.bomb?.carrier === -1, 'a fallen carrier drops the bomb');
+  mate.x = s.bomb!.x;
+  mate.z = s.bomb!.z;
+  s.step(dt);
+  check(s.bomb?.carrier === mate.id, 'another attacker picks it up');
 }
 
 out.push(`${failures} failures`);

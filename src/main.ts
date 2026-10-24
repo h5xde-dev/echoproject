@@ -55,6 +55,7 @@ const SOLO_DESC: Record<GameMode, string> = {
   tdm: 'Ваша команда с ботами против ботов',
   waves: 'Продержаться как можно дольше',
   ctf: 'Ваша команда с ботами против ботов',
+  bomb: 'Ваша команда с ботами против ботов',
 };
 
 function selectMode(mode: GameMode): void {

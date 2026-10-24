@@ -1,5 +1,5 @@
-import type { Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
-import { GUN_LADDER, isArena, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
+import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
+import { GUN_LADDER, isArena, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
 import type { RoundState, WaveState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
 import { CONFIG } from '../game/config';
@@ -56,6 +56,10 @@ export interface HudState {
   flags: FlagState[];
   /** Capture the flag: team of the flag the local player carries, or -1. */
   carrying: number;
+  /** Bomb planting: the bomb, the local plant/defuse progress, and whether you carry it. */
+  bomb: BombState | null;
+  useT: number;
+  bombCarrier: boolean;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -228,7 +232,7 @@ export class Hud {
     const root = this.hudRoot();
     root.classList.toggle('mode-dm', isArena(mode));
     root.classList.toggle('mode-gun', mode === 'gun');
-    root.classList.toggle('mode-comp', mode === 'comp');
+    root.classList.toggle('mode-comp', isRoundMode(mode));
     if (isArena(mode)) this.roomEl.textContent = `${(title || mode).toUpperCase()} · ${arenaName.toUpperCase()}`;
   }
 
@@ -404,7 +408,27 @@ export class Hud {
         return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
       };
       const leader = lead && !lead.isLocal ? lead.name.toUpperCase() : 'ВЫ';
-      if (this.mode === 'comp') {
+      if (this.mode === 'bomb') {
+        const r = state.round;
+        const B = CONFIG.bomb;
+        const [blue, red] = state.teamScore;
+        const head = `РАУНД ${r?.n ?? 1} · ${TEAM_NAMES[0]} ${blue} : ${red} ${TEAM_NAMES[1]}`;
+        const bomb = state.bomb;
+        let task: string;
+        if (!r || r.phase === 'freeze') task = `ПРИГОТОВЬТЕСЬ ${Math.ceil(r?.t ?? 0)} · ЗАКУПКА — B`;
+        else if (r.phase === 'end') task = 'РАУНД ОКОНЧЕН';
+        else if (bomb?.planted) {
+          const site = bomb.site === 1 ? 'B' : 'A';
+          const progress = state.useT > 0 ? ` · РАЗМИНИРОВАНИЕ ${Math.round((state.useT / B.defuseTime) * 100)}%` : '';
+          task = `БОМБА НА ${site} · ${Math.ceil(bomb.timer)} · ${state.team === 1 ? 'ОБЕЗВРЕДЬТЕ: E' : 'ЗАЩИЩАЙТЕ'}${progress}`;
+        } else if (state.bombCarrier) {
+          const progress = state.useT > 0 ? ` · ЗАКЛАДКА ${Math.round((state.useT / B.plantTime) * 100)}%` : '';
+          task = `${clock(r.t)} · БОМБА У ВАС · E НА A/B${progress}`;
+        } else {
+          task = `${clock(r.t)} · ${state.team === 0 ? 'АТАКА: БОМБУ НА A/B' : 'ЗАЩИТА: НЕ ДАЙТЕ ЗАЛОЖИТЬ'}`;
+        }
+        this.objectiveEl.textContent = `${head} · ${task}`;
+      } else if (this.mode === 'comp') {
         const r = state.round;
         const phase = !r ? '' : r.phase === 'freeze' ? `ПРИГОТОВЬТЕСЬ ${Math.ceil(r.t)}` : r.phase === 'live' ? clock(r.t) : 'РАУНД ОКОНЧЕН';
         this.objectiveEl.textContent = `РАУНД ${r?.n ?? 1} · ${phase} · ПОБЕД ${me?.rounds ?? 0}/${ROUNDS_TO_WIN} · ЛИДЕР ${leader}`;
@@ -493,7 +517,7 @@ export class Hud {
     this.baseSpread += (state.spread - this.baseSpread) * 0.2;
 
     // Under the ammo: grenades, flashlight, money.
-    const money = this.mode === 'comp' ? `<span class="money">$${state.money}</span>` : '';
+    const money = isRoundMode(this.mode) ? `<span class="money">$${state.money}</span>` : '';
     const kinds: [GrenadeKind, number, string][] = [
       ['frag', state.grenades, 'осколочная'],
       ['smoke', state.smokes, 'дымовая'],

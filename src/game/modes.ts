@@ -42,6 +42,13 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'bomb',
+    title: 'Закладка бомбы',
+    short: 'БОМБА',
+    desc: 'Раунды как в CS: синие закладывают бомбу на точку A или B (зажать E), красные защищают и обезвреживают. Без возрождения, закупка в начале раунда. Пять раундов — победа.',
+    arena: true,
+  },
+  {
     id: 'waves',
     title: 'Волны',
     short: 'ВОЛНЫ',
@@ -79,7 +86,12 @@ export function isCoopMode(mode: GameMode): boolean {
 
 /** Modes fought in two teams. */
 export function isTeamMode(mode: GameMode): boolean {
-  return mode === 'tdm' || mode === 'ctf';
+  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb';
+}
+
+/** Modes played in rounds with a freeze, a buy window and money. */
+export function isRoundMode(mode: GameMode): boolean {
+  return mode === 'comp' || mode === 'bomb';
 }
 
 export const TEAM_NAMES = ['СИНИЕ', 'КРАСНЫЕ'] as const;

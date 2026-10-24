@@ -93,6 +93,9 @@ export class Renderer {
   /** Capture the flag: flags and base rings, drawn above the dark. */
   private flagVisuals: { group: THREE.Group; cloth: THREE.Mesh }[] = [];
   private baseRings: THREE.Mesh[] = [];
+  /** Bomb planting: site markers (ring + letter) and the bomb itself. */
+  private siteMarks: THREE.Group[] = [];
+  private bombMesh: THREE.Mesh | null = null;
   private powerupVisuals = new Map<number, THREE.Group>();
   private hostile: (id: number) => boolean = (id) => id >= 1000;
   private viewerCount = 2;
@@ -844,6 +847,50 @@ export class Renderer {
     });
   }
 
+  /**
+   * Bomb sites and the bomb, drawn above the fog. `bomb` is null between
+   * rounds or while an enemy carries it (no giving the carrier away).
+   */
+  syncBomb(bomb: { x: number; z: number; planted: boolean; timer: number } | null, sites: { x: number; z: number }[]): void {
+    while (this.siteMarks.length < sites.length) {
+      const i = this.siteMarks.length;
+      const group = new THREE.Group();
+      const ringGeo = new THREE.RingGeometry(CONFIG.bomb.siteRadius - 0.25, CONFIG.bomb.siteRadius, 56);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(
+        ringGeo,
+        new THREE.MeshBasicMaterial({ color: 0xffb545, transparent: true, opacity: 0.45, depthTest: false, toneMapped: false }),
+      );
+      const label = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: makeLetterTexture(i === 0 ? 'A' : 'B'), transparent: true, depthTest: false, opacity: 0.8 }),
+      );
+      label.scale.setScalar(1.6);
+      // On the ring's edge, so it hides neither the bomb nor whoever plants it.
+      label.position.set(0, 0.5, -CONFIG.bomb.siteRadius - 0.7);
+      group.add(ring, label);
+      this.overlay.add(group);
+      this.siteMarks.push(group);
+    }
+    this.siteMarks.forEach((m, i) => {
+      m.visible = !!sites[i];
+      if (sites[i]) m.position.set(sites[i].x, 0.05, sites[i].z);
+    });
+    if (!this.bombMesh) {
+      this.bombMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.55, 0.28, 0.38),
+        new THREE.MeshBasicMaterial({ color: 0xc8352a, depthTest: false, toneMapped: false }),
+      );
+      this.overlay.add(this.bombMesh);
+    }
+    this.bombMesh.visible = !!bomb;
+    if (!bomb) return;
+    this.bombMesh.position.set(bomb.x, 0.3, bomb.z);
+    // Planted: blinks faster as the fuse runs down.
+    const mat = this.bombMesh.material as THREE.MeshBasicMaterial;
+    const rate = bomb.planted ? 2 + (1 - bomb.timer / CONFIG.bomb.timer) * 10 : 0;
+    mat.color.setHex(bomb.planted && Math.sin(this.time * rate * Math.PI) > 0 ? 0xff4a3a : 0x7a2018);
+  }
+
   /** Night vision goggles: the whole picture goes green and bright. */
   setNightVision(on: boolean): void {
     this.container.classList.toggle('night-vision', on);
@@ -1469,5 +1516,19 @@ function makeSmokeTexture(): THREE.Texture {
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/** A big letter for a bomb site marker. */
+function makeLetterTexture(letter: string): THREE.Texture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = 'bold 96px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffb545';
+  ctx.fillText(letter, size / 2, size / 2 + 6);
   return new THREE.CanvasTexture(canvas);
 }

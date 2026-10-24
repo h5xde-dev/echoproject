@@ -8,7 +8,7 @@ import { buildArena } from './arenas';
 import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
 import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
-import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP } from './modes';
+import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
@@ -53,6 +53,7 @@ export interface DisplayActor {
   concealed: boolean;
   team: number;
   carrying: number;
+  useT: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -396,6 +397,7 @@ export class Game {
         concealed: a.concealed,
         team: a.team,
         carrying: a.carrying,
+        useT: a.useT,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -427,6 +429,8 @@ export class Game {
       wave: this.waveState() ?? undefined,
       flags: this.sim.flags.length > 0 ? this.sim.flags : undefined,
       bases: this.sim.bases.length > 0 ? this.sim.bases : undefined,
+      bomb: this.matchMode === 'bomb' ? this.sim.bomb : undefined,
+      sites: this.sim.sites.length > 0 ? this.sim.sites : undefined,
       ack,
     };
   }
@@ -447,7 +451,7 @@ export class Game {
   /** Competitive round info (host: from the sim; client: from snapshots). */
   private localRoundState(): RoundState | null {
     if (!this.isAuthority) return this.roundState;
-    if (this.matchMode !== 'comp') return null;
+    if (!isRoundMode(this.matchMode)) return null;
     return { n: this.sim.round, phase: this.sim.roundPhase, t: Math.max(0, this.sim.roundT), canBuy: this.sim.canBuy };
   }
 
@@ -503,6 +507,8 @@ export class Game {
     this.sim.syncSmokes(msg.smokes ?? []);
     if (msg.flags) this.sim.syncFlags(msg.flags);
     if (msg.bases) this.sim.bases = msg.bases;
+    if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
+    if (msg.sites) this.sim.sites = msg.sites;
     this.renderer.syncLamps(this.sim.lampAlive);
     this.sim.syncItems(msg.pickups ?? [], msg.powerups ?? [], msg.grenades ?? []);
     this.roundState = msg.round ?? null;
@@ -686,6 +692,11 @@ export class Game {
         } else if (event.text === 'live') {
           this.buyOpen = false;
           this.hud.banner('В БОЙ', '');
+        } else if (event.text === 'end' && event.team !== undefined) {
+          // Team rounds (bomb): which side took it, and why.
+          const ours = event.team === this.localTeam();
+          this.hud.banner(ours ? 'РАУНД ЗА НАМИ' : `РАУНД: ${TEAM_NAMES[event.team]}`, event.id ?? '');
+          if (ours) this.audio.powerup();
         } else if (event.text === 'end') {
           const me = event.ownerId === this.localId;
           this.hud.banner(me ? 'РАУНД ЗА ВАМИ' : event.ownerId !== undefined ? `РАУНД: ${this.nameOf(event.ownerId).toUpperCase()}` : 'НИЧЬЯ', '');
@@ -722,6 +733,21 @@ export class Game {
       case 'roomEnter':
         this.hud.message(`Комната ${event.text}`, 'warn');
         break;
+      case 'bomb': {
+        const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
+        const site = event.id === '1' ? 'B' : 'A';
+        if (event.text === 'planted') {
+          this.hud.banner(`БОМБА НА ${site}`, `${CONFIG.bomb.timer} секунд`);
+          this.audio.flashBang(this.localActorPosition(event.x ?? 0, event.z ?? 0) + 20);
+        } else if (event.text === 'defused') {
+          this.hud.message(`${who}: бомба обезврежена`, this.localTeam() === 1 ? 'good' : 'warn');
+        } else if (event.text === 'dropped') {
+          this.hud.message('Бомба упала', this.localTeam() === 0 ? 'warn' : 'good');
+        } else if (event.text === 'picked') {
+          this.hud.message(`${who}: бомба подобрана`, 'info');
+        }
+        break;
+      }
       case 'flag': {
         const ours = event.team === this.localTeam();
         const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
@@ -950,6 +976,8 @@ export class Game {
       rttMs: this.mode === 'client' ? this.rttMs : undefined,
       gait: this.frameGait,
       grenadeKind: this.nadeKind,
+      // Held, not pressed: planting and defusing take seconds.
+      use: this.input.keys.has('KeyE'),
     };
     this.pending.reload = false;
     this.pending.interact = false;
@@ -1097,6 +1125,7 @@ export class Game {
           concealed: a.concealed,
           team: a.team,
           carrying: a.carrying,
+          useT: a.useT,
           isLocal,
           moving: a.moving,
         });
@@ -1131,6 +1160,11 @@ export class Game {
       return d ? { ...f, x: d.x, z: d.z } : f;
     });
     this.renderer.syncFlags(flags, this.sim.bases);
+    // The bomb: shown lying or planted; carried, only to the carrier's side.
+    const bomb = this.sim.bomb;
+    const carrier = bomb && bomb.carrier >= 0 ? this.display.get(bomb.carrier) : undefined;
+    const shownBomb = !bomb ? null : carrier ? (this.isHostile(carrier.id) ? null : { ...bomb, x: carrier.x, z: carrier.z }) : bomb;
+    this.renderer.syncBomb(shownBomb, this.sim.sites);
   }
 
   /**
@@ -1209,6 +1243,7 @@ export class Game {
         concealed: b.concealed ?? false,
         team: b.team ?? -1,
         carrying: b.carrying ?? -1,
+        useT: b.useT ?? 0,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1416,6 +1451,9 @@ export class Game {
       wave: this.waveState(),
       flags: this.sim.flags,
       carrying: self.carrying,
+      bomb: this.sim.bomb,
+      useT: self.useT,
+      bombCarrier: this.sim.bomb?.carrier === this.localId,
       blind: self.blind,
       money: self.money,
       tier: self.tier,
