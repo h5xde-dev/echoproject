@@ -390,7 +390,7 @@ export interface SmokeCloud {
 }
 
 /** Things for sale in competitive mode. */
-export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'armor' | 'grenade' | 'smoke' | 'flash';
+export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'armor' | 'grenade' | 'smoke' | 'flash';
 
 export interface NoiseEvent {
   x: number;
@@ -412,6 +412,7 @@ export interface GameEvent {
     | 'revive'
     | 'objective'
     | 'deploy'
+    | 'stab'
     | 'smoke'
     | 'flash'
     | 'impact'

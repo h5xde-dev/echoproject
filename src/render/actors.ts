@@ -43,6 +43,9 @@ const HOLD: Record<WeaponId, HoldSpec> = {
   shotgun: { grip: [0.16, 1.24, 0.15], fore: 0.44 },
   rifle: { grip: [0.2, 1.24, 0.15], fore: 0.38 },
   sniper: { grip: [0.2, 1.24, 0.15], fore: 0.42 },
+  lmg: { grip: [0.2, 1.22, 0.15], fore: 0.44 },
+  silenced: { grip: [0.5, 1.3, 0.06], fore: 0.02 },
+  knife: { grip: [0.45, 1.15, 0.12], fore: 0.02 },
 };
 
 const DEATH_TIME = 0.45;
@@ -410,8 +413,21 @@ export class ActorVisual {
       this.weaponModel = w.model;
       length = w.length;
       grip = w.grip;
+    } else if (id === 'knife') {
+      // Knife: a pale blade on a dark grip.
+      const g = new THREE.Group();
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.22, 0.04, 0.012),
+        new THREE.MeshStandardMaterial({ color: 0xc8ccd2, roughness: 0.25, metalness: 0.9 }),
+      );
+      blade.position.set(0.15, 0, 0);
+      const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.035, 0.03), new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.8 }));
+      g.add(blade, hilt);
+      this.weaponModel = g;
+      length = 0.26;
+      grip = 0.05;
     } else {
-      // Pistol (no source model) and fallback.
+      // Pistol (no source model) and fallback; a silencer on the silenced one.
       const g = new THREE.Group();
       const mat = new THREE.MeshStandardMaterial({ color: 0x23262d, roughness: 0.45, metalness: 0.6 });
       const slide = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 0.05), mat);
@@ -420,9 +436,16 @@ export class ActorVisual {
       handle.position.set(0, -0.03, 0);
       handle.rotation.z = 0.25;
       g.add(slide, handle);
+      length = 0.26;
+      if (id === 'silenced') {
+        const can = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.16, 10), mat);
+        can.rotation.z = Math.PI / 2;
+        can.position.set(0.27, 0.05, 0);
+        g.add(can);
+        length = 0.36;
+      }
       g.traverse((o) => ((o as THREE.Mesh).castShadow = true));
       this.weaponModel = g;
-      length = 0.26;
       grip = 0.27;
     }
     // Soldiers fade with the fog of war, so the gun needs its own materials.

@@ -8,7 +8,7 @@ import { ARENAS, buildArena } from '../src/game/arenas';
 import { CONFIG } from '../src/game/config';
 import { generateMap, pickPowerup } from '../src/game/levelgen';
 import { Sim } from '../src/game/sim';
-import { WEAPON_ORDER, type WeaponId } from '../src/game/weapons';
+import { WEAPON_ORDER, WEAPONS, type WeaponId } from '../src/game/weapons';
 import type { GameMode } from '../src/game/types';
 
 const out: string[] = [];
@@ -898,6 +898,7 @@ for (const info of ARENAS) {
   check(best(3) === 'rifle', `20 m: the rifle (best: ${best(3)})`);
   check(best(4) === 'sniper', `30 m: the sniper rifle (best: ${best(4)})`);
   check(ranges.every((_, i) => best(i) !== 'pistol'), 'the starting pistol is never the best');
+  check(ranges.every((_, i) => table.silenced[i] >= table.pistol[i]), 'quiet costs: the silenced pistol never out-kills the plain one');
 }
 
 // Round economy: kill money by weapon, a growing loss bonus.
@@ -1006,6 +1007,42 @@ for (const info of ARENAS) {
     for (let i = 0; i < 6; i++) s.step(dt);
     check(target.hp === hpBefore && shield.hp < CONFIG.classes.engineer.shieldHp, 'the shield takes the bullet');
   }
+}
+
+// New weapons: knife, silenced pistol, LMG.
+{
+  const dt = CONFIG.tickDt;
+  const s = new Sim(buildArena('sklad', 4545, 'dm'));
+  const a = s.addPlayer('a', 'a', 1);
+  const b = s.addPlayer('b', 'b', 2);
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  check(a.weapons.includes('knife'), 'players carry a knife');
+  const stab = (behind: boolean, gap = 1.2) => {
+    a.x = 20; a.z = 20; a.ang = 0; a.cooldown = 0; a.shield = 0;
+    b.x = a.x + gap; b.z = a.z; b.hp = b.maxHp; b.armor = 0; b.shield = 0; b.alive = true;
+    b.ang = behind ? 0 : Math.PI; // facing away from the attacker, or at him
+    (s as unknown as { equip(x: unknown, w: string): void }).equip(a, 'knife');
+    s.applyInput(a, { ...input, aim: 0, fire: true });
+    return b.maxHp - b.hp;
+  };
+  check(stab(false) === WEAPONS.knife.damage, `a knife from the front: ${stab(false)} damage`);
+  stab(true);
+  check(!b.alive, 'a knife in the back kills');
+  check(stab(false, 3) === 0, 'out of reach: nothing');
+  // Silenced pistol: barely heard.
+  s.noises = [];
+  a.cooldown = 0;
+  (s as unknown as { equip(x: unknown, w: string): void }).equip(a, 'silenced');
+  s.applyInput(a, { ...input, fire: true });
+  const shotNoise = s.noises.find((n) => n.ownerId === a.id)?.radius ?? 0;
+  check(shotNoise > 0 && shotNoise < 10 && WEAPONS.silenced.silenced === true, `a silenced shot is heard only ${shotNoise} m away`);
+  // LMG: slower on your feet.
+  (s as unknown as { equip(x: unknown, w: string): void }).equip(a, 'lmg');
+  s.applySpeed(a);
+  const lmgSpeed = a.speed;
+  (s as unknown as { equip(x: unknown, w: string): void }).equip(a, 'rifle');
+  s.applySpeed(a);
+  check(lmgSpeed < a.speed, 'the LMG slows you down');
 }
 
 out.push(`${failures} failures`);

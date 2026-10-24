@@ -1,4 +1,4 @@
-export type WeaponId = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'sniper';
+export type WeaponId = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'knife';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -31,6 +31,12 @@ export interface WeaponDef {
   /** Camera shake / flash size multiplier. */
   flashSize: number;
   color: number;
+  /** Silenced: no shot marker for those who cannot see the shooter. */
+  silenced?: boolean;
+  /** Melee: no bullet; hits whoever is in reach in front (see CONFIG.knife). */
+  melee?: boolean;
+  /** Movement speed factor while it is in hand (heavy guns slow you). */
+  moveMul?: number;
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
@@ -139,9 +145,78 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     flashSize: 1.8,
     color: 0xdff0ff,
   },
+  lmg: {
+    id: 'lmg',
+    name: 'Пулемёт «Рой»',
+    short: 'Пулем.',
+    damage: 21,
+    rpm: 560,
+    mag: 60,
+    reloadTime: 3.6,
+    spread: 0.085,
+    pellets: 1,
+    bulletSpeed: 100,
+    falloffStart: 20,
+    falloffEnd: 45,
+    falloffEndMul: 0.6,
+    auto: true,
+    recoil: 0.03,
+    shake: 0.22,
+    noise: 40,
+    flashSize: 1.2,
+    color: 0xffe6b0,
+    moveMul: 0.82,
+  },
+  silenced: {
+    id: 'silenced',
+    name: 'Пистолет с глушителем',
+    short: 'Глуш.',
+    damage: 22,
+    rpm: 280,
+    mag: 12,
+    reloadTime: 1.35,
+    spread: 0.024,
+    pellets: 1,
+    bulletSpeed: 72,
+    falloffStart: 18,
+    falloffEnd: 36,
+    falloffEndMul: 0.55,
+    auto: false,
+    recoil: 0.018,
+    shake: 0.05,
+    noise: 6,
+    flashSize: 0.25,
+    color: 0xc8d0d8,
+    silenced: true,
+  },
+  knife: {
+    id: 'knife',
+    name: 'Нож',
+    short: 'Нож',
+    damage: 55,
+    rpm: 90,
+    mag: 1,
+    reloadTime: 0,
+    spread: 0,
+    pellets: 0,
+    bulletSpeed: 0,
+    falloffStart: 0,
+    falloffEnd: 1,
+    falloffEndMul: 1,
+    auto: false,
+    recoil: 0,
+    shake: 0.08,
+    noise: 2,
+    flashSize: 0,
+    color: 0xffffff,
+    melee: true,
+  },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper'];
+export const WEAPON_ORDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'silenced', 'knife'];
+
+/** Guns that can lie on the floor as pickups. */
+export const PICKUP_WEAPONS: WeaponId[] = ['smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'silenced'];
 
 export function weaponCooldown(def: WeaponDef): number {
   return 60 / def.rpm;

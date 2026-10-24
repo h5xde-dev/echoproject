@@ -32,6 +32,8 @@ const WEAPON_SPECS: Partial<Record<WeaponId, WeaponSpec>> = {
   shotgun: { file: 'w_shotgun', length: 0.95, rot: [0, Math.PI / 2, 0], grip: 0.1 },
   rifle: { file: 'w_rifle', length: 1.0, rot: [0, 0, 0], grip: 0.25 },
   sniper: { file: 'w_sniper', length: 1.15, rot: [0, Math.PI, 0], grip: 0.36 },
+  // The rifle model, longer: reads as a heavier gun.
+  lmg: { file: 'w_rifle', length: 1.2, rot: [0, 0, 0], grip: 0.25 },
 };
 
 interface PropSpec {

@@ -373,7 +373,8 @@ export class Sim {
       accel: cfg.accel,
       friction: cfg.friction,
       weapon: 'pistol',
-      weapons: ['pistol'],
+      // Players always carry a knife (not in gun game: it is the last rung).
+      weapons: isPlayer && this.mode !== 'gun' ? ['pistol', 'knife'] : ['pistol'],
       ammo: WEAPONS.pistol.mag,
       reloading: false,
       reloadT: 0,
@@ -663,6 +664,12 @@ export class Sim {
 
   private fireWeapon(actor: Actor): void {
     const def = WEAPONS[actor.weapon];
+    if (def.melee) {
+      actor.cooldown = weaponCooldown(def);
+      actor.shield = 0;
+      this.meleeStrike(actor);
+      return;
+    }
     if (actor.ammo <= 0) {
       this.startReload(actor);
       return;
@@ -944,6 +951,33 @@ export class Sim {
     this.events.push({ type: 'deploy', ownerId: actor.id, x, z });
   }
 
+  /**
+   * Knife: the closest enemy in reach in front of you takes the blow — a
+   * kill outright from behind (they face away), 55 damage from the front.
+   */
+  private meleeStrike(actor: Actor): void {
+    const K = CONFIG.knife;
+    let victim: Actor | null = null;
+    let best = Infinity;
+    for (const o of this.actors.values()) {
+      if (!this.hostileTo(actor, o) && !(o.downed && o.kind !== actor.kind)) continue;
+      const d = dist(actor.x, actor.z, o.x, o.z);
+      if (d > K.reach + o.radius || d >= best) continue;
+      const toward = Math.atan2(o.z - actor.z, o.x - actor.x);
+      if (Math.cos(toward - actor.ang) < Math.cos(K.arc)) continue;
+      victim = o;
+      best = d;
+    }
+    this.noises.push({ x: actor.x, z: actor.z, radius: WEAPONS.knife.noise, time: this.time, ownerId: actor.id });
+    this.events.push({ type: 'stab', ownerId: actor.id, x: actor.x, z: actor.z });
+    if (!victim) return;
+    // Facing away from the attacker: a backstab.
+    const fromVictim = Math.atan2(actor.z - victim.z, actor.x - victim.x);
+    const behind = Math.cos(victim.ang - fromVictim) < -0.2;
+    victim.shield = 0;
+    this.damageActor(victim, behind ? K.backstab : WEAPONS.knife.damage, actor.id);
+  }
+
   /** Hidden while in a bush and quiet (not running, not just fired). */
   private updateConcealment(actor: Actor): void {
     const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
@@ -980,7 +1014,8 @@ export class Sim {
   applySpeed(actor: Actor): void {
     const base = actor.kind === 'player' ? CONFIG.player.maxSpeed : this.arena ? CONFIG.player.maxSpeed * 0.92 : CONFIG.enemy.maxSpeed;
     const role = actor.role === 'grunt' ? 1 : CONFIG.roles[actor.role].speed;
-    actor.speed = base * role * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1);
+    const gun = WEAPONS[actor.weapon].moveMul ?? 1;
+    actor.speed = base * role * gun * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1);
   }
 
   /**
@@ -1257,7 +1292,7 @@ export class Sim {
   /** The dead drop their best gun (not in gun game; co-op guards sometimes). */
   private dropWeapon(actor: Actor): void {
     if (this.mode === 'gun') return;
-    if (actor.weapon === 'pistol') return;
+    if (actor.weapon === 'pistol' || actor.weapon === 'knife') return;
     if (this.mode === 'coop' && (actor.kind === 'player' || this.rng.next() > 0.5)) return;
     this.pickups.push({
       id: this.nextPickupId++,
@@ -1977,6 +2012,15 @@ export class Sim {
 
   private enemyShoot(actor: Actor, target: Actor): void {
     const def = WEAPONS[actor.weapon];
+    // A knife in hand (gun game's last rung): stab when close enough.
+    if (def.melee) {
+      actor.cooldown = weaponCooldown(def);
+      if (dist(actor.x, actor.z, target.x, target.z) <= CONFIG.knife.reach) {
+        actor.ang = Math.atan2(target.z - actor.z, target.x - actor.x);
+        this.meleeStrike(actor);
+      }
+      return;
+    }
     const ang = Math.atan2(target.z - actor.z, target.x - actor.x);
     // Accuracy settles in over the first second on target.
     const settle = clamp(0.35 + (actor.ai?.aimT ?? 1) * 0.65, 0.35, 1);
@@ -2100,7 +2144,7 @@ export class Sim {
     this.classKit(actor);
     if (this.arena) {
       actor.hp = actor.maxHp;
-      actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
+      actor.weapons = this.mode === 'gun' ? [] : actor.kind === 'player' ? ['pistol', 'knife'] : ['pistol'];
       this.equip(actor, this.startWeapon(actor));
       actor.grenades = Math.max(actor.grenades, CONFIG.grenade.startArena);
       if (actor.kind === 'player' && !this.rounds) {
@@ -2713,7 +2757,7 @@ export class Sim {
       a.buffs.damage = a.buffs.speed = a.buffs.rapid = a.buffs.nv = 0;
       this.classKit(a);
       if (!survived) {
-        a.weapons = ['pistol'];
+        a.weapons = a.kind === 'player' ? ['pistol', 'knife'] : ['pistol'];
         a.armor = 0;
         a.grenades = 0;
         a.smokes = 0;

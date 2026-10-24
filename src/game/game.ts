@@ -11,7 +11,7 @@ import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
-import { WEAPONS, type WeaponId } from './weapons';
+import { WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 
 export type GameMode = 'solo' | 'host' | 'client';
@@ -718,8 +718,11 @@ export class Game {
         const isLocalPlayer = owner === this.localId;
         const size = def.flashSize;
         this.renderer.muzzleFlash(event.x ?? 0, event.z ?? 0, event.dirX ?? 0, event.dirZ ?? 0, size);
-        this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
-        this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
+        // A silenced shot leaves no marker for those who cannot see the shooter.
+        if (!def.silenced) {
+          this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
+          this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
+        }
         this.soundAt(event.x ?? 0, event.z ?? 0, (dist) => this.audio.shot(size, dist));
         if (isLocalPlayer) {
           this.renderer.shake(def.shake);
@@ -874,6 +877,11 @@ export class Game {
         break;
       case 'roomEnter':
         this.hud.message(`Комната ${event.text}`, 'warn');
+        break;
+      case 'stab':
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => {
+          if (d < 12) this.audio.tone(900, 300, 0.08, 0.08 * (1 - d / 12), 'sawtooth');
+        });
         break;
       case 'deploy':
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.door());
@@ -1130,7 +1138,7 @@ export class Game {
     for (let i = 0; i < SHOP.length; i++) {
       if (!this.input.consume(`slot${i + 1}` as never)) continue;
       if (this.buyOpen) this.pending.buy = SHOP[i].item;
-      else if (i < 5) this.pending.slot = i;
+      else if (i < WEAPON_ORDER.length) this.pending.slot = i;
     }
     this.hud.showBuyMenu(this.buyOpen, this.localDisplay()?.money ?? 0, round?.canBuy ? round : null, this.waveState()?.t ?? 0);
     this.hud.showScores(this.input.keys.has('Tab'));

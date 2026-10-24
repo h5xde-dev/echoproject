@@ -14,7 +14,7 @@ import type {
   RoomTheme,
   StaticBody,
 } from './types';
-import { WEAPON_ORDER, type WeaponId } from './weapons';
+import { PICKUP_WEAPONS, type WeaponId } from './weapons';
 
 // Co-op levels: a chain of rooms joined by armoured doors. Each room gets a
 // theme that decides its prop mix and look (warehouse, office, yard, bunker);
@@ -376,7 +376,7 @@ export function generateMap(seed: number): MapData {
     for (let i = 0; i < weaponCount; i++) {
       const spot = freeSpot(1.0);
       if (!spot) continue;
-      const weapon: WeaponId = room.index === 0 ? 'smg' : WEAPON_ORDER[rng.int(1, WEAPON_ORDER.length - 1)];
+      const weapon: WeaponId = room.index === 0 ? 'smg' : PICKUP_WEAPONS[rng.int(0, PICKUP_WEAPONS.length - 1)];
       pickups.push({ id: pickupId++, weapon, ...spot, room: room.index });
     }
     if (room.index > 0 && rng.next() < 0.75) {

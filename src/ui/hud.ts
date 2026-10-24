@@ -110,6 +110,9 @@ const WEAPON_LABEL: Record<WeaponId, string> = {
   shotgun: 'ДРОБ.',
   rifle: 'ВИНТ.',
   sniper: 'СНАЙП.',
+  lmg: 'ПУЛЕМ.',
+  silenced: 'ГЛУШ.',
+  knife: 'НОЖ',
 };
 
 export class Hud {
@@ -837,7 +840,7 @@ export class Hud {
 const FRAG_LIMIT = CONFIG.dm.fragLimit;
 const ROUNDS_TO_WIN = CONFIG.comp.roundsToWin;
 const KILLS_PER_TIER = CONFIG.gun.killsPerTier;
-const LADDER_LABEL = GUN_LADDER.map((w) => ({ pistol: 'M9', smg: 'ПП', shotgun: 'ДРОБ.', rifle: 'ВИНТ.', sniper: 'СНАЙП.' })[w]);
+const LADDER_LABEL = GUN_LADDER.map((w) => WEAPON_LABEL[w]);
 const BUFF_TIME = {
   damage: CONFIG.powerups.damageTime,
   speed: CONFIG.powerups.speedTime,

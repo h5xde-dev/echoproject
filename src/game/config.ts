@@ -202,7 +202,7 @@ export const CONFIG = {
     startMoney: 800,
     killReward: 300,
     /** Kill money by weapon: close-range guns pay for the risk, the sniper rifle hardly. */
-    killRewardBy: { pistol: 300, smg: 600, shotgun: 900, rifle: 300, sniper: 100 },
+    killRewardBy: { pistol: 300, smg: 600, shotgun: 900, rifle: 300, sniper: 100, lmg: 300, silenced: 400, knife: 1500 },
     roundWinBonus: 1500,
     roundLossBonus: 900,
     /** Each round lost in a row adds this to the loss money, up to lossStreakMax times. */
@@ -262,6 +262,15 @@ export const CONFIG = {
     reach: 1.6,
     blastRadius: 9,
     blastDamage: 120,
+  },
+
+  /** Melee with the knife. */
+  knife: {
+    reach: 1.7,
+    /** Half-angle of the swing, radians. */
+    arc: 0.8,
+    /** From behind (the victim faces away) it kills outright. */
+    backstab: 999,
   },
 
   /** Player classes. */

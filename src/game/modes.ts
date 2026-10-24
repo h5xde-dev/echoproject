@@ -97,7 +97,7 @@ export function isRoundMode(mode: GameMode): boolean {
 export const TEAM_NAMES = ['СИНИЕ', 'КРАСНЫЕ'] as const;
 
 /** Gun game ladder, weakest first. */
-export const GUN_LADDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper'];
+export const GUN_LADDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'lmg', 'sniper', 'knife'];
 
 export interface ShopEntry {
   item: ShopItem;
@@ -110,6 +110,8 @@ export const SHOP: ShopEntry[] = [
   { item: 'shotgun', name: 'Дробовик «Кром»', price: 1100 },
   { item: 'rifle', name: 'Винтовка «Вектор»', price: 2700 },
   { item: 'sniper', name: 'Снайперка «Стриж»', price: 4200 },
+  { item: 'lmg', name: 'Пулемёт «Рой»', price: 3000 },
+  { item: 'silenced', name: 'Пистолет с глушителем', price: 500 },
   { item: 'armor', name: 'Бронежилет', price: 650 },
   { item: 'grenade', name: 'Осколочная граната', price: 300 },
   { item: 'smoke', name: 'Дымовая граната', price: 300 },
