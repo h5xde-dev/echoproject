@@ -127,6 +127,15 @@ export class Hud {
   private overText: HTMLElement;
   private flashEl: HTMLElement;
   private gaitEl: HTMLElement;
+  private statsEl: HTMLElement;
+  private spectateEl: HTMLElement;
+  private lobbyEl: HTMLElement;
+  private lobbyList: HTMLElement;
+  private lobbyAction: HTMLElement;
+  private lobbyHint: HTMLElement;
+  private fps = 60;
+  private latency = -1;
+  private statsT = 0;
   private flashOverlay: HTMLElement;
   /** Crosshair size from stance and movement, before shot bloom. */
   private baseSpread = 1;
@@ -169,6 +178,8 @@ export class Hud {
   onPauseResume: () => void = () => undefined;
   /** The pause overlay asked to leave for the main menu. */
   onPauseMenu: () => void = () => undefined;
+  /** Lobby button: the host starts the match, a client toggles ready. */
+  onLobbyAction: () => void = () => undefined;
   private buffsKey = '';
   private scoresKey = '';
 
@@ -198,6 +209,15 @@ export class Hud {
     this.overText = must(root, '.gameover-text');
     this.flashEl = must(root, '.flashlight-tag');
     this.gaitEl = must(root, '.gait-tag');
+    this.statsEl = must(root, '.stats-tag');
+    this.spectateEl = must(root, '.spectate');
+    this.lobbyEl = must(root, '.panel-lobby');
+    this.lobbyList = must(root, '.lobby-list');
+    this.lobbyAction = must(root, '.lobby-action');
+    this.lobbyHint = must(root, '.lobby-hint');
+    // Clicks here must not reach the game as shots.
+    this.lobbyEl.addEventListener('mousedown', (e) => e.stopPropagation());
+    this.lobbyAction.addEventListener('click', () => this.onLobbyAction());
     this.flashOverlay = must(root, '.flash-overlay');
     this.roomCodePanel = must(root, '.panel-room');
     this.roomCodeEl = must(root, '.room-code-inline');
@@ -377,7 +397,45 @@ export class Hud {
     window.setTimeout(() => this.statusEl.classList.remove('visible', 'error'), 5000);
   }
 
+  /**
+   * Warm-up lobby of a hosted room; `players` null hides it (solo games, or
+   * the match has started).
+   */
+  showLobby(players: { id: number; name: string; ready: boolean; host: boolean }[] | null, isHost: boolean, ready: boolean): void {
+    this.lobbyEl.classList.toggle('hidden', !players);
+    if (!players) return;
+    this.lobbyList.innerHTML = players
+      .map(
+        (p) =>
+          `<div class="lobby-row${p.ready ? ' ready' : ''}"><span>${escapeHtml(p.name)}${p.host ? ' <em>хост</em>' : ''}</span><b>${p.ready ? 'ГОТОВ' : 'ждём…'}</b></div>`,
+      )
+      .join('');
+    const waiting = players.filter((p) => !p.ready).length;
+    this.lobbyAction.querySelector('.btn-title')!.textContent = isHost ? 'НАЧАТЬ МАТЧ' : ready ? 'НЕ ГОТОВ' : 'ГОТОВ';
+    this.lobbyAction.classList.toggle('primary', isHost || !ready);
+    this.lobbyHint.textContent = isHost
+      ? players.length === 1
+        ? 'Пока никого — отправьте код комнаты'
+        : waiting > 0
+          ? `Не готовы: ${waiting}. Можно начать и так.`
+          : 'Все готовы'
+      : 'Матч начнёт хост. Пока — разминка.';
+  }
+
+  /** "Watching: …" line while dead; empty hides it. */
+  setSpectating(text: string): void {
+    if (this.spectateEl.textContent === text) return;
+    this.spectateEl.textContent = text;
+    this.spectateEl.classList.toggle('visible', !!text);
+  }
+
+  /** FPS and ping counter (a setting). */
+  showStats(on: boolean): void {
+    this.statsEl.classList.toggle('hidden', !on);
+  }
+
   setLatency(ms: number): void {
+    this.latency = ms;
     this.latencyEl.textContent = `${ms} мс`;
     this.latencyEl.classList.toggle('bad', ms > 140);
   }
@@ -592,6 +650,13 @@ export class Hud {
   }
 
   tick(dt: number): void {
+    // Frame rate, smoothed, shown a few times a second.
+    if (dt > 0) this.fps += (1 / dt - this.fps) * 0.05;
+    this.statsT -= dt;
+    if (this.statsT <= 0) {
+      this.statsT = 0.4;
+      this.statsEl.textContent = `${Math.round(this.fps)} FPS${this.latency >= 0 ? ` · ${this.latency} МС` : ''}`;
+    }
     if (this.bannerT > 0) {
       this.bannerT -= dt;
       if (this.bannerT <= 0) this.bannerEl.classList.remove('visible');
@@ -673,6 +738,7 @@ export class Hud {
     actors: { id: number; kind: string; x: number; z: number; ang: number; alive: boolean; ally?: boolean }[],
     localId: number,
     activeRoom: RoomDef | undefined,
+    blips: { noise: { x: number; z: number; life: number }[]; marks: { x: number; z: number; life: number }[] } = { noise: [], marks: [] },
   ): void {
     const ctx = this.minimapCtx;
     const w = this.minimap.width;
@@ -703,6 +769,21 @@ export class Hud {
         else continue;
         ctx.fillRect(ox + x * tile, oy + z * tile, tile + 0.5, tile + 0.5);
       }
+    }
+
+    // Noise radar: unseen enemies' shots and steps; team markers.
+    for (const b of blips.noise) {
+      ctx.fillStyle = `rgba(255, 70, 90, ${0.75 * b.life})`;
+      ctx.beginPath();
+      ctx.arc(px(b.x), pz(b.z), 2 + (1 - b.life) * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const m of blips.marks) {
+      ctx.strokeStyle = `rgba(110, 240, 255, ${m.life})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px(m.x), pz(m.z), 4 + Math.sin(m.life * 20) * 1, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     for (const a of actors) {

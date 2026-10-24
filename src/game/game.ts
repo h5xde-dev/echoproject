@@ -2,7 +2,7 @@ import { GameAudio } from '../core/audio';
 import { Input } from '../core/input';
 import { clamp } from '../core/math';
 import { Net } from '../net/net';
-import type { ActorState, EventMsg, HostMessage, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '../net/protocol';
+import type { ActorState, EventMsg, HostMessage, LobbyMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '../net/protocol';
 import { Renderer } from '../render/renderer';
 import { buildArena } from './arenas';
 import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
@@ -114,7 +114,7 @@ export class Game {
   private latestActors = new Map<number, ActorState>();
   private snapBuffer: SnapFrame[] = [];
   private pendingInputs: PendingInput[] = [];
-  private clientInputs = new Map<string, { input: PlayerInput; lastAck: number }>();
+  private clientInputs = new Map<string, { input: PlayerInput; once: OnceInput; lastAck: number }>();
   /** Client: last measured round trip to the host (ms). */
   private rttMs = 0;
   /** Client: the room code joined, reused to reconnect. */
@@ -128,16 +128,32 @@ export class Game {
   private nadeKind: GrenadeKind = 'frag';
   private frameAim = 0;
   private frameFire = false;
-  private pending = { reload: false, interact: false, flashlight: false, slot: -1, grenade: false, buy: '' as ShopItem | '' };
+  private pending = {
+    reload: false,
+    interact: false,
+    flashlight: false,
+    slot: -1,
+    grenade: false,
+    buy: '' as ShopItem | '',
+    mark: null as { x: number; z: number } | null,
+  };
+  /** Minimap: recent noises of unseen enemies and team markers (ms timestamps). */
+  private noiseBlips: { x: number; z: number; at: number }[] = [];
+  private markBlips: { x: number; z: number; at: number }[] = [];
   private frameThrow = 10;
   private buyOpen = false;
   private gameOver = false;
+  /** Host of a room: the warm-up lobby (null for solo games and clients). */
+  private lobby: { started: boolean; ready: Map<number, boolean> } | null = null;
+  private matchOpts: MatchOptions = {};
   private lastFootstep = 0;
   private enemyCount = 0;
   private scores: [number, number, number, number][] = [];
   private timeLeft = 0;
   /** Client: team kills from the last snapshot. */
   private teamScore: [number, number] = [0, 0];
+  /** Spectating after death: who killed us and when (ms). */
+  private spectate: { killer: number; at: number } | null = null;
   /** Client: wave state from the last snapshot. */
   private wave: WaveState | null = null;
   private roundState: RoundState | null = null;
@@ -175,18 +191,30 @@ export class Game {
     this.isAuthority = true;
     this.localName = name;
     this.localId = 1;
+    this.matchOpts = opts;
+    // A hosted room starts as a warm-up with a lobby; the host starts the match.
+    this.lobby = { started: false, ready: new Map() };
     this.beginAuthoritySession(opts);
+    this.broadcastLobby();
 
     this.roomCode = await this.net.host({
       onClientInput: (input, playerId) => {
         const state = this.clientInputs.get(String(playerId));
         if (state) {
+          // Continuous state from the newest packet; one-shot actions from
+          // every packet, so none is lost when several arrive between ticks.
           state.input = input;
           state.lastAck = input.seq;
+          mergeOnce(state.once, input);
         }
       },
       onClientHello: (name, playerId) => this.onClientHello(name, playerId),
       onClientLeave: (playerId) => this.onClientLeave(playerId),
+      onClientReady: (playerId, ready) => {
+        if (!this.lobby || this.lobby.started) return;
+        this.lobby.ready.set(playerId, ready);
+        this.broadcastLobby();
+      },
       onStatus: (text) => this.hud.setStatus(text),
       onError: (text) => this.hud.setError(text),
     });
@@ -227,6 +255,7 @@ export class Game {
         this.hud.setLatency(ms);
       },
       onDisconnected: () => void this.recoverConnection(),
+      onLobby: (msg) => this.showLobby(msg),
     });
 
     this.net.send({ t: 'hello', name: this.localName });
@@ -336,9 +365,22 @@ export class Game {
         slot: -1,
         dt: CONFIG.tickDt,
       },
+      once: { ...NO_ONCE },
       lastAck: 0,
     });
 
+    this.sendWelcome(playerId, name);
+
+    const joined: HostMessage = { t: 'joined', playerId, name };
+    this.net.broadcast(joined);
+    this.hud.message(`${name} подключился`, 'good');
+    if (this.lobby && !this.lobby.started) {
+      this.lobby.ready.set(playerId, false);
+      this.broadcastLobby();
+    }
+  }
+
+  private sendWelcome(playerId: number, name: string): void {
     const welcome: WelcomeMsg = {
       t: 'welcome',
       playerId,
@@ -349,16 +391,67 @@ export class Game {
       colors: { [String(playerId)]: PLAYER_COLORS[(playerId - 1) % PLAYER_COLORS.length] },
     };
     this.net.sendTo(playerId, welcome);
+  }
 
-    const joined: HostMessage = { t: 'joined', playerId, name };
-    this.net.broadcast(joined);
-    this.hud.message(`${name} подключился`, 'good');
+  // ------------------------------------------------------------------ lobby
+
+  /** Host: everyone in the room and who is ready, to all and to our own HUD. */
+  private broadcastLobby(): void {
+    if (!this.lobby) return;
+    const msg: LobbyMsg = {
+      t: 'lobby',
+      started: this.lobby.started,
+      players: [
+        { id: this.localId, name: this.localName, ready: true, host: true },
+        ...[...this.clientNames].map(([id, name]) => ({ id, name, ready: this.lobby!.ready.get(id) ?? false, host: false })),
+      ],
+    };
+    this.net.broadcast(msg);
+    this.showLobby(msg);
+  }
+
+  private showLobby(msg: LobbyMsg): void {
+    const me = msg.players.find((p) => p.id === this.localId);
+    this.localReady = me?.ready ?? false;
+    this.hud.showLobby(msg.started ? null : msg.players, this.isAuthority, this.localReady);
+  }
+
+  /** Client: our ready flag as the host last confirmed it. */
+  private localReady = false;
+
+  get isHost(): boolean {
+    return this.mode === 'host';
+  }
+
+  /** Client: tell the host we are (not) ready. */
+  toggleReady(): void {
+    if (!this.isAuthority) this.net.send({ t: 'ready', ready: !this.localReady });
+  }
+
+  /**
+   * Host: end the warm-up. The match starts over on a fresh map with
+   * everyone now in the room; each client gets a new welcome.
+   */
+  startMatch(): void {
+    if (!this.isAuthority || !this.lobby || this.lobby.started) return;
+    this.lobby.started = true;
+    this.gameOver = false;
+    this.hud.hideGameOver();
+    this.prevTick.clear();
+    this.beginAuthoritySession(this.matchOpts);
+    for (const [id, name] of this.clientNames) this.sim.addPlayer(`c${id}`, name, id);
+    this.sim.fillBots();
+    for (const [id, name] of this.clientNames) this.sendWelcome(id, name);
+    this.broadcastLobby();
+    this.hud.banner('МАТЧ НАЧАЛСЯ', '');
   }
 
   private onClientLeave(playerId: number): void {
     this.sim.removeActor(playerId);
     this.sim.fillBots();
     this.clientNames.delete(playerId);
+    this.lobby?.ready.delete(playerId);
+    this.broadcastLobby();
     this.clientInputs.delete(String(playerId));
     this.net.broadcast({ t: 'left', playerId });
     this.hud.message('Оператор отключился', 'warn');
@@ -458,8 +551,10 @@ export class Game {
   // ---------------------------------------------------------------- client
 
   private onWelcome(msg: WelcomeMsg): void {
-    // A welcome after a reconnect starts a new mirror of the host.
+    // A welcome after a reconnect (or a match start) begins a new mirror of the host.
     this.resetClientState();
+    this.gameOver = false;
+    this.hud.hideGameOver();
     this.map = msg.map;
     this.matchMode = msg.map.mode ?? 'coop';
     this.localId = msg.playerId;
@@ -586,6 +681,7 @@ export class Game {
         const size = def.flashSize;
         this.renderer.muzzleFlash(event.x ?? 0, event.z ?? 0, event.dirX ?? 0, event.dirZ ?? 0, size);
         this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
+        this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
         const dist = this.localActorPosition(event.x ?? 0, event.z ?? 0);
         this.audio.shot(size, dist);
         if (isLocalPlayer) {
@@ -614,6 +710,7 @@ export class Game {
         const owner = event.ownerId ?? 0;
         if (owner === this.localId) break;
         this.renderer.stepFrom(owner, event.x ?? 0, event.z ?? 0);
+        this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
         const d = this.localActorPosition(event.x ?? 0, event.z ?? 0);
         if (d < 16) this.audio.step(0.9 * (1 - d / 16));
         break;
@@ -656,6 +753,8 @@ export class Game {
             .setDeathImpulse(victim.x - killer.x, victim.z - killer.z, Math.min(7, power));
         }
         this.audio.death();
+        // Our own death: watch the killer for a moment, then an ally.
+        if (event.ownerId === this.localId) this.spectate = { killer: event.by ?? -1, at: performance.now() };
         if (event.by === this.localId && event.ownerId !== this.localId) this.hud.hitMarker(true);
         if (isArena(this.matchMode)) {
           const by = event.by === event.ownerId ? '' : this.nameOf(event.by);
@@ -733,6 +832,15 @@ export class Game {
       case 'roomEnter':
         this.hud.message(`Комната ${event.text}`, 'warn');
         break;
+      case 'mark': {
+        // Our own side's markers only.
+        const owner = event.ownerId ?? -1;
+        if (owner !== this.localId && this.isHostile(owner)) break;
+        this.renderer.markAt(event.x ?? 0, event.z ?? 0);
+        this.markBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
+        this.audio.tone(1300, 1700, 0.12, 0.05, 'triangle');
+        break;
+      }
       case 'bomb': {
         const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
         const site = event.id === '1' ? 'B' : 'A';
@@ -882,6 +990,8 @@ export class Game {
     this.clientNames.clear();
     this.buyOpen = false;
     this.roomCode = '';
+    this.lobby = null;
+    this.hud.showLobby(null, false, false);
   }
 
   // ------------------------------------------------------------------ loop
@@ -934,6 +1044,10 @@ export class Game {
     if (this.input.consume('flashlight')) this.pending.flashlight = true;
     if (this.input.consume('grenade')) this.pending.grenade = true;
     if (this.input.consume('nade')) this.nadeKind = this.nextNadeKind();
+    if (this.input.consume('mark')) {
+      const g = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
+      this.pending.mark = { x: g.x, z: g.z };
+    }
 
     // Competitive shop: B toggles it during the buy window; while open,
     // number keys buy instead of switching weapons.
@@ -978,7 +1092,9 @@ export class Game {
       grenadeKind: this.nadeKind,
       // Held, not pressed: planting and defusing take seconds.
       use: this.input.keys.has('KeyE'),
+      mark: this.pending.mark ?? undefined,
     };
+    this.pending.mark = null;
     this.pending.reload = false;
     this.pending.interact = false;
     this.pending.flashlight = false;
@@ -1014,7 +1130,9 @@ export class Game {
         // One-way delay of this client's input, capped so a bad link cannot
         // shoot far ahead of what everyone else sees.
         actor.lagComp = Math.min(CONFIG.lagCompMax, (state.input.rttMs ?? 0) / 2000);
-        this.sim.applyInput(actor, state.input);
+        // One-shots apply exactly once, even if no new packet came this tick.
+        this.sim.applyInput(actor, { ...state.input, ...NO_ONCE, ...state.once });
+        state.once = { ...NO_ONCE };
       }
 
       this.sim.step(dt);
@@ -1288,6 +1406,39 @@ export class Game {
     return this.display.get(this.localId) ?? null;
   }
 
+  /**
+   * While dead: the killer for the first seconds (lit up even in the dark),
+   * then a living ally. Null when alive or with no one to watch.
+   */
+  private spectateTarget(self: DisplayActor | null): DisplayActor | null {
+    if (!self || self.alive || !this.spectate) {
+      this.spectate = self && !self.alive ? this.spectate : null;
+      this.renderer.forceReveal(-1);
+      return null;
+    }
+    const since = (performance.now() - this.spectate.at) / 1000;
+    const killer = this.display.get(this.spectate.killer);
+    if (since < 2.5 && killer?.alive && killer.id !== this.localId) {
+      this.renderer.forceReveal(killer.id);
+      return killer;
+    }
+    this.renderer.forceReveal(-1);
+    for (const d of this.display.values()) {
+      if (d.id !== this.localId && d.alive && !this.isHostile(d.id) && d.kind === 'player') return d;
+    }
+    for (const d of this.display.values()) {
+      if (d.id !== this.localId && d.alive && !this.isHostile(d.id)) return d;
+    }
+    return null;
+  }
+
+  /** Minimap noise radar: an unseen enemy's shot or step leaves a blip. */
+  private noteNoise(owner: number, x: number, z: number): void {
+    if (!this.isHostile(owner) || this.renderer.isRevealed(owner)) return;
+    this.noiseBlips.push({ x, z, at: performance.now() });
+    if (this.noiseBlips.length > 40) this.noiseBlips.shift();
+  }
+
   /** Next grenade kind the player carries, after the selected one (Q). */
   private nextNadeKind(): GrenadeKind {
     const self = this.localDisplay();
@@ -1390,8 +1541,10 @@ export class Game {
 
   private updateHud(): void {
     const self = this.localDisplay();
-    const cameraTarget = self ?? { x: this.map.spawnX, z: this.map.spawnZ };
+    const watched = this.spectateTarget(self);
+    const cameraTarget = watched ?? self ?? { x: this.map.spawnX, z: this.map.spawnZ };
     this.renderer.setCameraTarget(cameraTarget.x, cameraTarget.z);
+    this.hud.setSpectating(watched && watched.id !== this.localId ? `${watched.id === this.spectate?.killer ? 'ВАС УБИЛ' : 'НАБЛЮДЕНИЕ'}: ${watched.name.toUpperCase()}` : '');
 
     if (!self) return;
 
@@ -1466,7 +1619,13 @@ export class Game {
     const known = [...this.display.values()]
       .filter((d) => !this.isHostile(d.id) || this.renderer.isRevealed(d.id))
       .map((d) => ({ ...d, ally: !this.isHostile(d.id) }));
-    this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined);
+    const now = performance.now();
+    this.noiseBlips = this.noiseBlips.filter((b) => now - b.at < 1500);
+    this.markBlips = this.markBlips.filter((b) => now - b.at < 4000);
+    this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined, {
+      noise: this.noiseBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 1500 })),
+      marks: this.markBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 4000 })),
+    });
     this.updatePlates();
   }
 
@@ -1502,4 +1661,35 @@ function shortestAngle(a: number, b: number): number {
   if (d > Math.PI) d -= Math.PI * 2;
   if (d < -Math.PI) d += Math.PI * 2;
   return d;
+}
+
+/** The parts of an input that happen once per press, not every tick. */
+type OnceInput = Pick<PlayerInput, 'reload' | 'interact' | 'flashlight' | 'slot' | 'grenade' | 'throwDist' | 'grenadeKind' | 'buy' | 'mark'>;
+
+const NO_ONCE: OnceInput = {
+  reload: false,
+  interact: false,
+  flashlight: false,
+  slot: -1,
+  grenade: false,
+  throwDist: undefined,
+  grenadeKind: undefined,
+  buy: '',
+  mark: undefined,
+};
+
+/** Folds a packet's one-shot actions into those not yet applied. */
+function mergeOnce(once: OnceInput, input: PlayerInput): void {
+  if (input.reload) once.reload = true;
+  if (input.interact) once.interact = true;
+  // Two presses before a tick cancel out, as they would have one tick apart.
+  if (input.flashlight) once.flashlight = !once.flashlight;
+  if (input.slot >= 0) once.slot = input.slot;
+  if (input.grenade) {
+    once.grenade = true;
+    once.throwDist = input.throwDist;
+    once.grenadeKind = input.grenadeKind;
+  }
+  if (input.buy) once.buy = input.buy;
+  if (input.mark) once.mark = input.mark;
 }

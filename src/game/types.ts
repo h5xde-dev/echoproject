@@ -277,6 +277,8 @@ export interface Actor {
   /** Bomb: holding the use key (plant / defuse) and for how long. */
   using: boolean;
   useT: number;
+  /** Seconds until this player may place another team marker. */
+  markCd: number;
 }
 
 /** Bomb planting: the one bomb of a round. */
@@ -364,6 +366,7 @@ export interface GameEvent {
     | 'wave'
     | 'flag'
     | 'bomb'
+    | 'mark'
     | 'smoke'
     | 'flash'
     | 'impact'

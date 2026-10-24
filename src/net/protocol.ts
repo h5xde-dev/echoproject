@@ -151,6 +151,7 @@ export interface InputMsg {
   rttMs?: number;
   grenadeKind?: GrenadeKind;
   use?: boolean;
+  mark?: { x: number; z: number };
 }
 
 export interface EventMsg {
@@ -187,6 +188,19 @@ export interface PlayerLeftMsg {
   playerId: number;
 }
 
+/** Hosted room before the match: who is in and who is ready. */
+export interface LobbyMsg {
+  t: 'lobby';
+  players: { id: number; name: string; ready: boolean; host: boolean }[];
+  /** The host has started the match (the warm-up is over). */
+  started: boolean;
+}
+
+export interface ReadyMsg {
+  t: 'ready';
+  ready: boolean;
+}
+
 export interface PingMsg {
   t: 'ping';
   id: number;
@@ -201,9 +215,10 @@ export type HostMessage =
   | EventMsg
   | PlayerJoinedMsg
   | PlayerLeftMsg
+  | LobbyMsg
   | PingMsg;
 
-export type ClientMessage = InputMsg | HelloMsg | PingMsg;
+export type ClientMessage = InputMsg | HelloMsg | ReadyMsg | PingMsg;
 
 /** Deterministic seed so both peers can reproduce the exact same bullet spread. */
 export function shotSeed(actorId: number, shotSeq: number, mapSeed: number): number {

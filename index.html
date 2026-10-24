@@ -42,6 +42,7 @@
         <div class="panel panel-topright">
           <canvas class="minimap" width="184" height="184"></canvas>
           <div class="flashlight-tag">ФОНАРЬ ВКЛ</div>
+          <div class="stats-tag hidden"></div>
           <div class="gait-tag">БЕГ · СЛЫШНО</div>
         </div>
 
@@ -91,12 +92,20 @@
           <span><b>1-5</b> оружие</span>
           <span><b>Esc</b> пауза</span>
           <span><b>G</b> граната</span>
+          <span><b>Z</b> метка</span>
           <span class="hint-comp"><b>B</b> магазин</span>
           <span class="hint-dm"><b>Tab</b> счёт</span>
         </div>
 
         <div class="status-line"></div>
 
+        <div class="spectate"></div>
+        <div class="panel panel-lobby hidden">
+          <div class="panel-title">ЛОББИ · РАЗМИНКА</div>
+          <div class="lobby-list"></div>
+          <button class="btn lobby-action"><span class="btn-title">ГОТОВ</span></button>
+          <div class="lobby-hint"></div>
+        </div>
         <div class="gameover">
           <div class="gameover-title">ОБЪЕКТ ЗАЧИЩЕН</div>
           <div class="gameover-text"></div>
@@ -115,6 +124,18 @@
               <span class="btn-title">В ГЛАВНОЕ МЕНЮ</span>
               <span class="btn-desc">выйти из матча</span>
             </button>
+          </div>
+          <div class="pause-settings">
+            <label class="setting"><span>Громкость</span><input class="set-volume" type="range" min="0" max="100" /></label>
+            <label class="setting">
+              <span>Графика</span>
+              <select class="set-quality">
+                <option value="high">Высокая</option>
+                <option value="low">Низкая — без теней</option>
+              </select>
+            </label>
+            <label class="setting check"><input class="set-shake" type="checkbox" /><span>Тряска камеры</span></label>
+            <label class="setting check"><input class="set-stats" type="checkbox" /><span>FPS и пинг</span></label>
           </div>
         </div>
       </div>

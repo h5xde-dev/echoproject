@@ -28,7 +28,7 @@ export class GameAudio {
     this.ctx = ctx;
 
     const master = ctx.createGain();
-    master.gain.value = 0.5;
+    master.gain.value = this.muted ? 0 : 0.5 * this.volume;
     master.connect(ctx.destination);
     this.master = master;
 
@@ -80,7 +80,19 @@ export class GameAudio {
 
   setMuted(muted: boolean): void {
     this.muted = muted;
-    if (this.master) this.master.gain.value = muted ? 0 : 0.5;
+    this.applyGain();
+  }
+
+  /** Master volume, 0..1 (the mix is built for 0.5 at full volume). */
+  setVolume(volume: number): void {
+    this.volume = volume;
+    this.applyGain();
+  }
+
+  private volume = 1;
+
+  private applyGain(): void {
+    if (this.master) this.master.gain.value = this.muted ? 0 : 0.5 * this.volume;
   }
 
   private get now(): number {
@@ -107,7 +119,7 @@ export class GameAudio {
     src.stop(t + duration + 0.02);
   }
 
-  private tone(freq: number, endFreq: number, duration: number, gain: number, type: OscillatorType = 'sine'): void {
+  tone(freq: number, endFreq: number, duration: number, gain: number, type: OscillatorType = 'sine'): void {
     const ctx = this.ctx;
     const master = this.master;
     if (!ctx || !master) return;

@@ -178,6 +178,70 @@ check('start room is safe', health.inStart === 0, `guards in start room=${health
 // Counted dead or alive: stray shots and barrels may already have hit them.
 check('next room is manned when its door opens', health.spawned > 0, `guards spawned=${health.spawned}`);
 
+// Lobby: a hosted room starts as a warm-up; the client says ready, the host
+// starts the match on a fresh map with everyone in it.
+const lobbyBefore = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const visible = (root) => !document.querySelector(`${root} .panel-lobby`).classList.contains('hidden');
+  return { players: gameA.clientNames.size + 1, ready: gameA.lobby?.ready.get(gameB.localId), hostPanel: visible('#hudA'), clientPanel: visible('#hudB') };
+});
+check(
+  'lobby: both see the warm-up lobby, the client not ready yet',
+  lobbyBefore.players === 2 && lobbyBefore.ready === false && lobbyBefore.hostPanel && lobbyBefore.clientPanel,
+  JSON.stringify(lobbyBefore),
+);
+await page.evaluate(() => window.__net.gameB.toggleReady());
+const readied = await page
+  .waitForFunction(() => window.__net.gameA.lobby?.ready.get(window.__net.gameB.localId) === true, null, { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+check('lobby: the client\'s ready reaches the host', readied);
+const seedBefore = await page.evaluate(() => window.__net.gameA.map.seed);
+await page.evaluate(() => window.__net.gameA.startMatch());
+await page
+  .waitForFunction((old) => window.__net.gameB.map.seed !== old && window.__net.gameB.latestActors.size > 0, seedBefore, { timeout: 15000 })
+  .catch(() => {});
+const started = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const hidden = (root) => document.querySelector(`${root} .panel-lobby`).classList.contains('hidden');
+  return {
+    sameSeed: gameA.map.seed === gameB.map.seed,
+    clientInHostSim: gameA.sim.actors.has(gameB.localId),
+    lobbiesHidden: hidden('#hudA') && hidden('#hudB'),
+  };
+});
+check('lobby: start moves everyone to a fresh match', started.sameSeed && started.clientInHostSim && started.lobbiesHidden, JSON.stringify(started));
+
+// Team marker: the client's mark goes through the host to both teammates.
+await page.evaluate(() => {
+  const { gameB } = window.__net;
+  const me = gameB.sim.actors.get(gameB.localId);
+  gameB.pending.mark = { x: me.x + 3, z: me.z };
+});
+const marked = await page
+  .waitForFunction(() => window.__net.gameA.markBlips.length > 0 && window.__net.gameB.markBlips.length > 0, null, { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+check('team marker reaches the host and comes back to the client', marked);
+
+// One-shot actions in a packet that is followed by another before the host
+// ticks are applied once: not lost, not repeated.
+const once = await page.evaluate(async () => {
+  const { gameA, gameB } = window.__net;
+  const id = gameB.localId;
+  const actor = gameA.sim.actors.get(id);
+  actor.grenades = 2;
+  actor.grenadeCd = 0;
+  const light = actor.flashOn;
+  const base = { t: 'input', seq: 1e6, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt: 1 / 60 };
+  const handlers = gameA.net.hostHandlers;
+  handlers.onClientInput({ ...base, seq: 1e6 + 1, grenade: true, throwDist: 6, flashlight: true }, id);
+  handlers.onClientInput({ ...base, seq: 1e6 + 2 }, id);
+  await new Promise((r) => setTimeout(r, 600));
+  return { grenades: actor.grenades, toggled: actor.flashOn !== light };
+});
+check('one-shot actions apply once even when packets bunch up', once.grenades === 1 && once.toggled, JSON.stringify(once));
+
 // Lag compensation: the client reports its round trip with every input and
 // the host fast-forwards that player's shots by half of it.
 // The real loopback ping would overwrite it every 1.5 s: stop the pinger.

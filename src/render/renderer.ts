@@ -1024,7 +1024,73 @@ export class Renderer {
   }
 
   shake(amount: number): void {
-    this.shakeAmount = Math.min(1.6, this.shakeAmount + amount);
+    this.shakeAmount = Math.min(1.6, this.shakeAmount + amount * this.shakeScale);
+  }
+
+  /** Team marker: a cyan ring and beam above the fog, fading over 4 s. */
+  markAt(x: number, z: number): void {
+    let m = this.marks.find((k) => k.life <= 0);
+    if (!m) {
+      if (this.marks.length >= 6) m = this.marks[0];
+      else {
+        const group = new THREE.Group();
+        const ringGeo = new THREE.RingGeometry(0.7, 0.9, 32);
+        ringGeo.rotateX(-Math.PI / 2);
+        const mat = new THREE.MeshBasicMaterial({ color: 0x6ef0ff, transparent: true, depthTest: false, toneMapped: false });
+        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3, 6), mat);
+        beam.position.y = 1.5;
+        group.add(new THREE.Mesh(ringGeo, mat), beam);
+        this.overlay.add(group);
+        m = { group, mat, life: 0 };
+        this.marks.push(m);
+      }
+    }
+    m.life = 4;
+    m.group.position.set(x, 0.05, z);
+    m.group.visible = true;
+  }
+
+  private marks: { group: THREE.Group; mat: THREE.MeshBasicMaterial; life: number }[] = [];
+
+  private updateMarks(dt: number): void {
+    for (const m of this.marks) {
+      if (m.life <= 0) continue;
+      m.life -= dt;
+      m.mat.opacity = Math.min(1, m.life) * (0.7 + 0.3 * Math.sin(this.time * 8));
+      m.group.scale.setScalar(1 + Math.max(0, m.life - 3.6));
+      if (m.life <= 0) m.group.visible = false;
+    }
+  }
+
+  /** Kill cam: this actor is shown even outside your sight (-1 = none). */
+  forceReveal(id: number): void {
+    this.forcedReveal = id;
+  }
+
+  private forcedReveal = -1;
+
+  /** 0 turns camera shake off (a setting). */
+  shakeScale = 1;
+
+  /**
+   * Graphics quality. Low drops the pixel density to 1 and turns shadows off.
+   * Switching rebuilds every shader once, so it is a settings-menu action.
+   */
+  setQuality(quality: 'high' | 'low'): void {
+    const high = quality === 'high';
+    this.renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 1.75) : 1);
+    if (this.shadowsEnabled !== high) {
+      this.shadowsEnabled = high;
+      this.renderer.shadowMap.enabled = high;
+      for (const s of this.spotlights) s.light.castShadow = high;
+      this.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material;
+        if (!m) return;
+        for (const mat of Array.isArray(m) ? m : [m]) mat.needsUpdate = true;
+      });
+    }
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.resize();
   }
 
   // --------------------------------------------------------------- camera
@@ -1102,6 +1168,7 @@ export class Renderer {
     this.updateVision(dt, players);
 
     this.placeLamps(dt);
+    this.updateMarks(dt);
     // The bush you stand in turns see-through, so you can see yourself.
     for (const b of this.bushVisuals) {
       const inside = Math.hypot(this.camTarget.x - b.x, this.camTarget.z - b.z) < b.r + 0.3;
@@ -1224,7 +1291,7 @@ export class Renderer {
         continue;
       }
       const pos = visual.group.position;
-      let seen = !this.map;
+      let seen = !this.map || id === this.forcedReveal;
       for (const v of this.viewers) {
         if (!v.sees(pos.x, pos.z)) continue;
         // In a bush and quiet: only spotted right next to it.

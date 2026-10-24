@@ -1,6 +1,7 @@
 import './styles.css';
 import { Game } from './game/game';
 import { Hud } from './ui/hud';
+import { loadSettings, saveSettings } from './ui/settings';
 import { assets } from './render/assets';
 import { ARENAS, arenaGrid } from './game/arenas';
 import { modeInfo } from './game/modes';
@@ -167,6 +168,46 @@ window.addEventListener('keydown', (e) => {
 });
 
 hud.onPauseResume = () => game.resume();
+// Lobby: the host starts the match, a client toggles ready.
+hud.onLobbyAction = () => (game.isHost ? game.startMatch() : game.toggleReady());
+
+// Settings in the pause menu, applied at once and remembered.
+const settings = loadSettings();
+const setVolume = must<HTMLInputElement>('.set-volume');
+const setQuality = must<HTMLSelectElement>('.set-quality');
+const setShake = must<HTMLInputElement>('.set-shake');
+const setStats = must<HTMLInputElement>('.set-stats');
+function applySettings(): void {
+  game.audio.setVolume(settings.volume);
+  game.renderer.setQuality(settings.quality);
+  game.renderer.shakeScale = settings.shake ? 1 : 0;
+  hud.showStats(settings.stats);
+}
+setVolume.value = String(Math.round(settings.volume * 100));
+setQuality.value = settings.quality;
+setShake.checked = settings.shake;
+setStats.checked = settings.stats;
+setVolume.addEventListener('input', () => {
+  settings.volume = Number(setVolume.value) / 100;
+  game.audio.setVolume(settings.volume);
+  saveSettings(settings);
+});
+setQuality.addEventListener('change', () => {
+  settings.quality = setQuality.value === 'low' ? 'low' : 'high';
+  game.renderer.setQuality(settings.quality);
+  saveSettings(settings);
+});
+setShake.addEventListener('change', () => {
+  settings.shake = setShake.checked;
+  game.renderer.shakeScale = settings.shake ? 1 : 0;
+  saveSettings(settings);
+});
+setStats.addEventListener('change', () => {
+  settings.stats = setStats.checked;
+  hud.showStats(settings.stats);
+  saveSettings(settings);
+});
+applySettings();
 hud.onPauseMenu = () => backToMenu();
 
 function showError(message: string): void {

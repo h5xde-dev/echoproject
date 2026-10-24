@@ -65,6 +65,8 @@ export interface PlayerInput {
   grenadeKind?: GrenadeKind;
   /** Use key held (E): plant or defuse the bomb. */
   use?: boolean;
+  /** Team marker placed this tick (middle mouse / Z), at a ground point. */
+  mark?: { x: number; z: number };
 }
 
 /** Radius of a smoke cloud of this age: it billows out, then thins away. */
@@ -359,6 +361,7 @@ export class Sim {
       carrying: -1,
       using: false,
       useT: 0,
+      markCd: 0,
     };
   }
 
@@ -511,6 +514,11 @@ export class Sim {
     actor.ang = input.aim;
     actor.gait = input.gait ?? 'run';
     actor.using = !!input.use;
+    // Markers go to everyone; clients show them to the marker's allies only.
+    if (input.mark && actor.markCd <= 0) {
+      actor.markCd = 0.6;
+      this.events.push({ type: 'mark', ownerId: actor.id, x: input.mark.x, z: input.mark.z });
+    }
     if (input.buy) this.buy(actor, input.buy);
     // Competitive freeze time: look around and shop, but no moving or shooting.
     if (this.frozen) {
@@ -666,6 +674,7 @@ export class Sim {
     actor.grenadeCd = Math.max(0, actor.grenadeCd - dt);
     actor.blind = Math.max(0, actor.blind - dt);
     actor.revealT = Math.max(0, actor.revealT - dt);
+    actor.markCd = Math.max(0, actor.markCd - dt);
     const b = actor.buffs;
     b.damage = Math.max(0, b.damage - dt);
     b.rapid = Math.max(0, b.rapid - dt);

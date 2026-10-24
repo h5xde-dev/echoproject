@@ -5,6 +5,7 @@ import type {
   EventMsg,
   HostMessage,
   InputMsg,
+  LobbyMsg,
   OverMsg,
   PlayerJoinedMsg,
   PlayerLeftMsg,
@@ -23,6 +24,7 @@ export interface NetHostHandlers {
   onClientInput(input: InputMsg, playerId: number): void;
   onClientHello(name: string, playerId: number): void;
   onClientLeave(playerId: number): void;
+  onClientReady(playerId: number, ready: boolean): void;
   onStatus(text: string): void;
   onError(text: string): void;
 }
@@ -40,6 +42,7 @@ export interface NetClientHandlers {
   onLatency(ms: number): void;
   /** The channel to the host closed without us leaving. */
   onDisconnected(): void;
+  onLobby(msg: LobbyMsg): void;
 }
 
 export interface IceServerEntry {
@@ -223,6 +226,9 @@ export class Net {
       case 'input':
         this.hostHandlers?.onClientInput(msg, client.playerId);
         break;
+      case 'ready':
+        this.hostHandlers?.onClientReady(client.playerId, !!msg.ready);
+        break;
       case 'ping': {
         conn.send({ t: 'ping', id: msg.id, time: msg.time } as HostMessage);
         break;
@@ -341,6 +347,9 @@ export class Net {
         break;
       case 'left':
         this.clientHandlers?.onLeft(msg);
+        break;
+      case 'lobby':
+        this.clientHandlers?.onLobby(msg);
         break;
       case 'ping': {
         const sent = this.pingSentAt.get(msg.id);

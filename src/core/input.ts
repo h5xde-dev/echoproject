@@ -12,6 +12,7 @@ export type ActionName =
   | 'slot7'
   | 'slot8'
   | 'nade'
+  | 'mark'
   | 'grenade'
   | 'buy';
 
@@ -28,6 +29,8 @@ const ACTION_KEYS: Record<string, ActionName> = {
   Digit7: 'slot7',
   Digit8: 'slot8',
   KeyQ: 'nade',
+  // Team marker; the middle mouse button does the same.
+  KeyZ: 'mark',
   KeyG: 'grenade',
   KeyB: 'buy',
 };
@@ -71,6 +74,11 @@ export class Input {
 
   private onMouseDown = (e: MouseEvent) => {
     if (e.button === 0) this.mouseDown = true;
+    if (e.button === 1 && this.enabled) {
+      // Middle click: a team marker (and no autoscroll).
+      e.preventDefault();
+      this.pressed.add('mark');
+    }
   };
 
   private onMouseUp = (e: MouseEvent) => {
