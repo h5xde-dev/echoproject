@@ -52,6 +52,7 @@ export interface DisplayActor {
   blind: number;
   concealed: boolean;
   team: number;
+  carrying: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -394,6 +395,7 @@ export class Game {
         blind: a.blind,
         concealed: a.concealed,
         team: a.team,
+        carrying: a.carrying,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -423,6 +425,8 @@ export class Game {
       timeLeft: this.sim.timeLeft,
       teamScore: this.sim.teamScore,
       wave: this.waveState() ?? undefined,
+      flags: this.sim.flags.length > 0 ? this.sim.flags : undefined,
+      bases: this.sim.bases.length > 0 ? this.sim.bases : undefined,
       ack,
     };
   }
@@ -497,6 +501,8 @@ export class Game {
     this.sim.syncDoors(msg.doors);
     this.sim.syncLamps(msg.lampsOut ?? []);
     this.sim.syncSmokes(msg.smokes ?? []);
+    if (msg.flags) this.sim.syncFlags(msg.flags);
+    if (msg.bases) this.sim.bases = msg.bases;
     this.renderer.syncLamps(this.sim.lampAlive);
     this.sim.syncItems(msg.pickups ?? [], msg.powerups ?? [], msg.grenades ?? []);
     this.roundState = msg.round ?? null;
@@ -523,6 +529,8 @@ export class Game {
       mirror.vz = 0;
       mirror.alive = local.alive;
       mirror.buffs = { ...local.buffs };
+      // Carrying a flag slows you: prediction has to know.
+      mirror.carrying = local.carrying ?? -1;
       this.sim.applySpeed(mirror);
       for (const p of this.pendingInputs) {
         mirror.gait = p.input.gait ?? 'run';
@@ -714,6 +722,29 @@ export class Game {
       case 'roomEnter':
         this.hud.message(`Комната ${event.text}`, 'warn');
         break;
+      case 'flag': {
+        const ours = event.team === this.localTeam();
+        const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
+        const whose = ours ? 'наш' : 'их';
+        const lines: Record<string, string> = {
+          taken: `${who}: ${whose} флаг унесён`,
+          dropped: `${whose[0].toUpperCase() + whose.slice(1)} флаг брошен`,
+          returned: `${whose[0].toUpperCase() + whose.slice(1)} флаг возвращён на базу`,
+          captured: `${who} — захват!`,
+        };
+        const text = lines[event.text ?? ''] ?? '';
+        if (event.text === 'captured') {
+          // The flag that was captured belongs to the losing side.
+          this.hud.banner(ours ? 'ФЛАГ ПОТЕРЯН' : 'ЗАХВАТ', text);
+          this.audio.powerup();
+        } else {
+          // Ours taken: bad. Ours dropped or returned: their carrier failed, good.
+          // Theirs: the mirror image.
+          const good = event.text === 'taken' ? !ours : ours;
+          this.hud.message(text, good ? 'good' : 'warn');
+        }
+        break;
+      }
       case 'wave':
         if (event.text === 'start') {
           this.hud.banner(`ВОЛНА ${event.id ?? ''}`, 'Они идут на шум и свет');
@@ -1065,6 +1096,7 @@ export class Game {
           blind: a.blind,
           concealed: a.concealed,
           team: a.team,
+          carrying: a.carrying,
           isLocal,
           moving: a.moving,
         });
@@ -1093,6 +1125,12 @@ export class Game {
     this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
     this.renderer.setSmokes(this.sim.smokes);
+    // A carried flag follows its carrier as drawn (smooth), not the last snapshot.
+    const flags = this.sim.flags.map((f) => {
+      const d = f.carrier >= 0 ? this.display.get(f.carrier) : undefined;
+      return d ? { ...f, x: d.x, z: d.z } : f;
+    });
+    this.renderer.syncFlags(flags, this.sim.bases);
   }
 
   /**
@@ -1170,6 +1208,7 @@ export class Game {
         blind: b.blind ?? 0,
         concealed: b.concealed ?? false,
         team: b.team ?? -1,
+        carrying: b.carrying ?? -1,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1375,6 +1414,8 @@ export class Game {
       team: this.localTeam(),
       teamScore: this.isAuthority ? this.sim.teamScore : this.teamScore,
       wave: this.waveState(),
+      flags: this.sim.flags,
+      carrying: self.carrying,
       blind: self.blind,
       money: self.money,
       tier: self.tier,

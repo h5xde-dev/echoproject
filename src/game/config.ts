@@ -212,6 +212,17 @@ export const CONFIG = {
     hpGrowth: 0.12,
   },
 
+  /** Capture the flag. */
+  ctf: {
+    capLimit: 3,
+    /** A dropped flag goes home on its own after this long. */
+    returnTime: 20,
+    /** Reach for picking up / returning / capturing. */
+    touch: 1.3,
+    /** Carrier speed factor. */
+    carrySpeed: 0.9,
+  },
+
   /** Team deathmatch: first team to the limit wins; the clock is dm.timeLimit. */
   tdm: {
     scoreLimit: 30,

@@ -1,4 +1,4 @@
-import type { Buffs, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
+import type { Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
 import { GUN_LADDER, isArena, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
 import type { RoundState, WaveState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
@@ -52,6 +52,10 @@ export interface HudState {
   teamScore: [number, number];
   /** Waves mode progress. */
   wave: WaveState | null;
+  /** Capture the flag: both flags (team = index). */
+  flags: FlagState[];
+  /** Capture the flag: team of the flag the local player carries, or -1. */
+  carrying: number;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -414,7 +418,14 @@ export class Hud {
       } else if (isTeamMode(this.mode)) {
         const [blue, red] = state.teamScore;
         const mine = state.team >= 0 ? ` · ВЫ — ${TEAM_NAMES[state.team]}` : '';
-        this.objectiveEl.textContent = `${clock(state.timeLeft)} · ${TEAM_NAMES[0]} ${blue} : ${red} ${TEAM_NAMES[1]} · ДО ${CONFIG.tdm.scoreLimit}${mine}`;
+        const limit = this.mode === 'ctf' ? CONFIG.ctf.capLimit : CONFIG.tdm.scoreLimit;
+        let flag = '';
+        if (this.mode === 'ctf') {
+          const own = state.flags[state.team];
+          const where = !own ? '' : own.home ? 'НА БАЗЕ' : own.carrier >= 0 ? 'УНЕСЁН' : 'ЛЕЖИТ';
+          flag = state.carrying >= 0 ? ' · ВЫ НЕСЁТЕ ФЛАГ — НА БАЗУ!' : where ? ` · НАШ ФЛАГ ${where}` : '';
+        }
+        this.objectiveEl.textContent = `${clock(state.timeLeft)} · ${TEAM_NAMES[0]} ${blue} : ${red} ${TEAM_NAMES[1]} · ДО ${limit}${flag || mine}`;
       } else if (this.mode === 'gun') {
         this.objectiveEl.textContent = `${clock(state.timeLeft)} · СТУПЕНЬ ${state.tier + 1}/${GUN_LADDER.length} · ЛИДЕР ${leader}`;
       } else {

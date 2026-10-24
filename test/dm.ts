@@ -27,7 +27,7 @@ for (const info of ARENAS) {
   if (unreachable.length) console.log(info.id + '\n' + sim.nav.dump());
   check(map.spawns.length >= 6, `${info.id}: ${map.spawns.length} spawn points`);
 
-  for (const mode of ['dm', 'gun', 'comp', 'tdm'] as GameMode[]) {
+  for (const mode of ['dm', 'gun', 'comp', 'tdm', 'ctf'] as GameMode[]) {
     const tag = `${info.id}/${mode}`;
     const s = new Sim(buildArena(info.id, 777, mode));
     s.fillBots();
@@ -38,6 +38,7 @@ for (const info of ARENAS) {
     let buys = 0;
     let rounds = 0;
     let ladder = 0;
+    let flagsTaken = 0;
     let ended = '';
     const dt = CONFIG.tickDt;
     const limit = mode === 'comp' ? 1500 : CONFIG.dm.timeLimit + 2;
@@ -50,6 +51,7 @@ for (const info of ARENAS) {
         if (e.type === 'round' && e.text === 'end') rounds++;
         if (e.type === 'ladder') ladder = Math.max(ladder, Number(e.text));
         if (e.type === 'victory') ended = e.text ?? '?';
+        if (e.type === 'flag' && e.text === 'taken') flagsTaken++;
       }
       for (const b of s.actors.values()) {
         const l = last.get(b.id) ?? { x: b.x, z: b.z, still: 0 };
@@ -67,6 +69,7 @@ for (const info of ARENAS) {
     check(maxStill < 9, `${tag}: longest idle bot ${maxStill.toFixed(1)} s`);
     check(throws > 0, `${tag}: ${throws} grenades thrown`);
     if (mode === 'gun') check(ladder >= 2, `${tag}: best ladder tier ${ladder + 1}`);
+    if (mode === 'ctf') check(flagsTaken > 0, `${tag}: bots took a flag ${flagsTaken} times, score ${s.teamScore.join(':')}`);
     if (mode === 'comp') {
       check(rounds >= CONFIG.comp.roundsToWin, `${tag}: ${rounds} rounds played`);
       check(buys > 0, `${tag}: ${buys} purchases`);
@@ -447,6 +450,62 @@ for (const info of ARENAS) {
     for (const e of s.drainEvents()) if ((e.type === 'hurt' || e.type === 'death') && e.ownerId === p.id) hurt = t;
   }
   check(hurt > 0, `waves: guards track down a hidden player (first hit after ${hurt.toFixed(0)} s)`);
+}
+
+// Capture the flag rules.
+{
+  const s = new Sim(buildArena('sklad', 1616, 'ctf'));
+  const a = s.addPlayer('local', 'альфа', 1);
+  const b = s.addPlayer('c2', 'браво', 2);
+  const dt = CONFIG.tickDt;
+  const mid = (s.map.minX + s.map.maxX) / 2;
+  check(s.bases.length === 2 && s.bases[0].x < mid && s.bases[1].x > mid, 'each team has a base on its own half');
+  const enemyFlag = s.flags[1 - a.team];
+  const ownBase = s.bases[a.team];
+  const go = (actor: typeof a, x: number, z: number) => {
+    actor.x = x;
+    actor.z = z;
+    s.step(dt);
+  };
+  b.x = b.z = -500;
+  go(a, enemyFlag.x, enemyFlag.z);
+  check(a.carrying === enemyFlag.team && enemyFlag.carrier === a.id, 'touching the enemy flag picks it up');
+  // Our own flag is away: no capture at home.
+  const ownFlag = s.flags[a.team];
+  ownFlag.home = false;
+  ownFlag.x = ownFlag.z = -400;
+  go(a, ownBase.x, ownBase.z);
+  check(s.teamScore[a.team] === 0 && a.carrying >= 0, 'no capture while our own flag is away');
+  ownFlag.home = true;
+  ownFlag.x = ownBase.x;
+  ownFlag.z = ownBase.z;
+  go(a, ownBase.x, ownBase.z);
+  check(s.teamScore[a.team] === 1 && a.carrying === -1 && enemyFlag.home, 'bringing it home scores and resets the flag');
+
+  // Carrier down: the flag drops; its team touching it sends it home.
+  go(a, enemyFlag.x, enemyFlag.z);
+  a.x += 6;
+  s.step(dt);
+  a.shield = 0;
+  (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(a, 999, b.id);
+  check(!enemyFlag.home && enemyFlag.carrier === -1, 'a fallen carrier drops the flag');
+  const defender = [b].find((x) => x.team === enemyFlag.team) ?? s.addPlayer('c3', 'чарли', 3);
+  defender.team = enemyFlag.team;
+  go(defender, enemyFlag.x, enemyFlag.z);
+  check(enemyFlag.home, 'its own team touching a dropped flag returns it');
+
+  // Left alone, a dropped flag goes home by itself.
+  enemyFlag.home = false;
+  enemyFlag.x = enemyFlag.z = -300;
+  defender.x = defender.z = -500;
+  for (let t = 0; t < CONFIG.ctf.returnTime + 0.2; t += dt) s.step(dt);
+  check(enemyFlag.home, `a dropped flag returns after ${CONFIG.ctf.returnTime} s`);
+
+  s.teamScore = [CONFIG.ctf.capLimit, 0];
+  s.drainEvents();
+  s.step(dt);
+  const over = s.drainEvents().find((e) => e.type === 'victory');
+  check(!!over && over.team === 0, `${CONFIG.ctf.capLimit} captures win: ${over?.text ?? '—'}`);
 }
 
 out.push(`${failures} failures`);

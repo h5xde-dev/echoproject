@@ -4,7 +4,7 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'gun' | 'comp' | 'tdm' | 'waves';
+export type GameMode = 'coop' | 'dm' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf';
 
 export interface StaticBody {
   cx: number;
@@ -267,6 +267,21 @@ export interface Actor {
   revealT: number;
   /** Team in team modes (0 blue, 1 red); -1 otherwise. */
   team: number;
+  /** Capture the flag: team of the flag carried, -1 when none. */
+  carrying: number;
+}
+
+/** Capture the flag: one per team. */
+export interface FlagState {
+  team: number;
+  x: number;
+  z: number;
+  /** Standing on its base. */
+  home: boolean;
+  /** Actor carrying it, -1 when it stands or lies. */
+  carrier: number;
+  /** Seconds lying dropped (returns home after ctf.returnTime). */
+  dropT: number;
 }
 
 export interface Bullet {
@@ -326,6 +341,7 @@ export interface GameEvent {
     | 'step'
     | 'lampBreak'
     | 'wave'
+    | 'flag'
     | 'smoke'
     | 'flash'
     | 'impact'

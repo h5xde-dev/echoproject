@@ -35,6 +35,13 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'ctf',
+    title: 'Захват флага',
+    short: 'ФЛАГ',
+    desc: 'Две базы, два флага. Унесите чужой флаг к себе, пока ваш стоит на месте. Упавший флаг можно вернуть касанием. Три захвата — победа.',
+    arena: true,
+  },
+  {
     id: 'waves',
     title: 'Волны',
     short: 'ВОЛНЫ',
@@ -72,7 +79,7 @@ export function isCoopMode(mode: GameMode): boolean {
 
 /** Modes fought in two teams. */
 export function isTeamMode(mode: GameMode): boolean {
-  return mode === 'tdm';
+  return mode === 'tdm' || mode === 'ctf';
 }
 
 export const TEAM_NAMES = ['СИНИЕ', 'КРАСНЫЕ'] as const;

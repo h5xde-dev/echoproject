@@ -1,4 +1,4 @@
-import type { Buffs, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
+import type { Buffs, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -30,6 +30,7 @@ export interface ActorState {
   blind?: number;
   concealed?: boolean;
   team?: number;
+  carrying?: number;
 }
 
 export interface BulletState {
@@ -109,6 +110,9 @@ export interface SnapshotMsg {
   teamScore?: [number, number];
   /** Waves: current wave, phase, seconds left in a break, guards left. */
   wave?: WaveState;
+  /** Capture the flag: both flags and their bases. */
+  flags?: FlagState[];
+  bases?: { x: number; z: number }[];
   /** playerId -> last processed input sequence. */
   ack: Record<string, number>;
 }

@@ -10,6 +10,7 @@ import type {
   Actor,
   AiState,
   Bullet,
+  FlagState,
   Gait,
   GameEvent,
   GameMode,
@@ -145,6 +146,9 @@ export class Sim {
   matchOver = false;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
+  /** Capture the flag: the flags and the bases they belong on. */
+  flags: FlagState[] = [];
+  bases: { x: number; z: number }[] = [];
   /** Waves: current wave (0 before the first), its phase and phase clock. */
   wave = 0;
   wavePhase: 'break' | 'fight' = 'break';
@@ -221,6 +225,16 @@ export class Sim {
       this.round = 1;
       this.roundPhase = 'freeze';
       this.roundT = CONFIG.comp.freezeTime;
+    }
+    if (this.mode === 'ctf') {
+      // Each base sits among its team's spawn points.
+      for (const team of [0, 1]) {
+        const own = map.spawns.filter((s) => this.sideOf(s.x) === team);
+        const x = own.reduce((acc, s) => acc + s.x, 0) / Math.max(1, own.length);
+        const z = own.reduce((acc, s) => acc + s.z, 0) / Math.max(1, own.length);
+        this.bases.push({ x, z });
+        this.flags.push({ team, x, z, home: true, carrier: -1, dropT: 0 });
+      }
     }
   }
 
@@ -304,6 +318,7 @@ export class Sim {
       concealed: false,
       revealT: 0,
       team: -1,
+      carrying: -1,
     };
   }
 
@@ -335,6 +350,8 @@ export class Sim {
   }
 
   removeActor(id: number): void {
+    const actor = this.actors.get(id);
+    if (actor) this.dropFlag(actor);
     this.actors.delete(id);
     this.scores.delete(id);
   }
@@ -594,6 +611,7 @@ export class Sim {
     else if (this.mode === 'comp') this.updateRounds(dt);
     else if (this.mode === 'waves') this.updateWaves(dt);
     else this.updateMatch(dt);
+    if (this.mode === 'ctf') this.updateFlags(dt);
     this.noises = this.noises.filter((n) => this.time - n.time < 0.5);
   }
 
@@ -692,7 +710,7 @@ export class Sim {
   moveActor(actor: Actor, moveX: number, moveZ: number, dt: number): void {
     const hasInput = Math.abs(moveX) + Math.abs(moveZ) > 0.01;
     if (hasInput) {
-      const speed = actor.speed * CONFIG.gait.speed[actor.gait];
+      const speed = actor.speed * CONFIG.gait.speed[actor.gait] * (actor.carrying >= 0 ? CONFIG.ctf.carrySpeed : 1);
       const tvx = moveX * speed;
       const tvz = moveZ * speed;
       const maxDv = actor.accel * dt;
@@ -894,6 +912,7 @@ export class Sim {
     this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id) });
 
     this.dropWeapon(actor);
+    this.dropFlag(actor);
     if (this.arena) {
       // Competitive: back next round. Waves: players after the wave, guards never.
       actor.respawnT = this.mode === 'comp' || this.mode === 'waves' ? Infinity : CONFIG.dm.respawnDelay;
@@ -903,7 +922,7 @@ export class Sim {
       const suicide = sourceId === actor.id;
       if (killer) killer.kills += suicide ? -1 : 1;
       const k = this.actors.get(sourceId);
-      if (this.teams && k && !suicide && k.team >= 0 && k.team !== actor.team) this.teamScore[k.team]++;
+      if (this.mode === 'tdm' && k && !suicide && k.team >= 0 && k.team !== actor.team) this.teamScore[k.team]++;
       if (k && !suicide) this.rewardKill(k);
       // Waves: fallen guards are bodies, cleared like co-op corpses.
       if (this.mode === 'waves' && actor.kind === 'enemy') {
@@ -1174,7 +1193,8 @@ export class Sim {
       case 'patrol':
       case 'reposition': {
         if (ai.repathTimer <= 0 || dist(actor.x, actor.z, ai.targetX, ai.targetZ) < 1.2) {
-          ai.repathTimer = this.arena ? 6 + this.rng.next() * 4 : 2.4 + this.rng.next() * 2.4;
+          // Objectives move (a flag is carried off): replan often in CTF.
+          ai.repathTimer = this.mode === 'ctf' ? 1.2 : this.arena ? 6 + this.rng.next() * 4 : 2.4 + this.rng.next() * 2.4;
           const target = this.pickPatrolTarget(actor);
           ai.targetX = target.x;
           ai.targetZ = target.z;
@@ -1250,6 +1270,17 @@ export class Sim {
         const ang = Math.atan2(ai.lastKnownZ - actor.z, ai.lastKnownX - actor.x);
         this.throwGrenade(actor, ang, d, 'frag');
         ai.grenadeT = CONFIG.grenade.aiCooldown + this.rng.next() * 4;
+      }
+    }
+
+    // Carrying a flag: run it home whatever else is going on (still shooting
+    // and turning at whoever is in sight).
+    if (actor.carrying >= 0) {
+      const base = this.bases[actor.team];
+      const home = this.steer(actor, base.x, base.z, 0.5);
+      if (home.x !== 0 || home.z !== 0) {
+        move = home;
+        if (!canSee) wantAng = Math.atan2(home.z, home.x);
       }
     }
 
@@ -1485,6 +1516,22 @@ export class Sim {
       const p = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
       if (p) return { x: p.x + this.rng.range(-6, 6), z: p.z + this.rng.range(-6, 6) };
     }
+    // Capture the flag: carriers run home, attackers go for the enemy flag,
+    // defenders hold their own (and chase whoever took it).
+    if (this.mode === 'ctf' && actor.team >= 0) {
+      if (actor.carrying >= 0) return this.bases[actor.team];
+      const enemyFlag = this.flags[1 - actor.team];
+      const ownFlag = this.flags[actor.team];
+      if (ownFlag.carrier >= 0 || !ownFlag.home) return { x: ownFlag.x, z: ownFlag.z };
+      // Two in three go on the attack; the rest hold the base.
+      const attacker = actor.id % 3 !== 0;
+      if (attacker && enemyFlag.carrier < 0) return { x: enemyFlag.x, z: enemyFlag.z };
+      // A teammate has it: attackers escort the carrier home.
+      const carrier = this.actors.get(enemyFlag.carrier);
+      if (attacker && carrier) return { x: carrier.x + this.rng.range(-3, 3), z: carrier.z + this.rng.range(-3, 3) };
+      const base = this.bases[actor.team];
+      return { x: base.x + this.rng.range(-6, 6), z: base.z + this.rng.range(-6, 6) };
+    }
     if (this.mode === 'dm' || this.teams) {
       // Roam between items and spawn points; go for health when hurt.
       if (actor.hp < actor.maxHp * 0.5) {
@@ -1628,6 +1675,7 @@ export class Sim {
     actor.vz = 0;
     actor.armor = 0;
     actor.buffs.damage = actor.buffs.speed = actor.buffs.rapid = actor.buffs.nv = 0;
+    actor.carrying = -1;
     if (this.arena) {
       actor.hp = actor.maxHp;
       actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
@@ -1714,7 +1762,7 @@ export class Sim {
     const leader = this.leader();
     if (this.teams) {
       const [blue, red] = this.teamScore;
-      const limit = CONFIG.tdm.scoreLimit;
+      const limit = this.mode === 'ctf' ? CONFIG.ctf.capLimit : CONFIG.tdm.scoreLimit;
       if (blue >= limit || red >= limit || this.timeLeft <= 0) {
         const winner = blue === red ? undefined : blue > red ? 0 : 1;
         const text = winner === undefined ? `Ничья ${blue}:${red}` : `${TEAM_NAMES[winner]} победили ${Math.max(blue, red)}:${Math.min(blue, red)}`;
@@ -1726,6 +1774,83 @@ export class Sim {
     if (limitHit || this.timeLeft <= 0) {
       this.finishMatch(leader?.id, leader ? `${leader.name} — ${leader.score.kills} фрагов` : 'Ничья');
     }
+  }
+
+  /**
+   * Capture the flag: touch the enemy flag to take it, bring it to your base
+   * while your own flag is home to score. A dropped flag goes home when its
+   * team touches it, or on its own after a while.
+   */
+  private updateFlags(dt: number): void {
+    if (this.matchOver) return;
+    const C = CONFIG.ctf;
+    for (const flag of this.flags) {
+      const carrier = this.actors.get(flag.carrier);
+      if (carrier) {
+        flag.x = carrier.x;
+        flag.z = carrier.z;
+        // Home with the enemy flag, and ours is standing: a capture.
+        const own = this.flags[carrier.team];
+        const base = this.bases[carrier.team];
+        if (own.home && dist(carrier.x, carrier.z, base.x, base.z) < C.touch * 1.5) {
+          this.teamScore[carrier.team]++;
+          carrier.carrying = -1;
+          this.resetFlag(flag);
+          this.events.push({ type: 'flag', text: 'captured', team: flag.team, ownerId: carrier.id });
+        }
+        continue;
+      }
+      if (!flag.home) {
+        flag.dropT += dt;
+        if (flag.dropT >= C.returnTime) {
+          this.resetFlag(flag);
+          this.events.push({ type: 'flag', text: 'returned', team: flag.team });
+          continue;
+        }
+      }
+      for (const a of this.actors.values()) {
+        if (!a.alive || a.team < 0 || dist(a.x, a.z, flag.x, flag.z) > C.touch) continue;
+        if (a.team === flag.team) {
+          if (!flag.home) {
+            this.resetFlag(flag);
+            this.events.push({ type: 'flag', text: 'returned', team: flag.team, ownerId: a.id });
+          }
+        } else if (a.carrying < 0) {
+          flag.carrier = a.id;
+          flag.home = false;
+          a.carrying = flag.team;
+          this.events.push({ type: 'flag', text: 'taken', team: flag.team, ownerId: a.id });
+        }
+        break;
+      }
+    }
+  }
+
+  private resetFlag(flag: FlagState): void {
+    const base = this.bases[flag.team];
+    flag.x = base.x;
+    flag.z = base.z;
+    flag.home = true;
+    flag.carrier = -1;
+    flag.dropT = 0;
+  }
+
+  /** A carrier going down (or leaving) drops the flag where they stand. */
+  private dropFlag(actor: Actor): void {
+    if (actor.carrying < 0) return;
+    const flag = this.flags[actor.carrying];
+    actor.carrying = -1;
+    if (!flag) return;
+    flag.carrier = -1;
+    flag.x = actor.x;
+    flag.z = actor.z;
+    flag.dropT = 0;
+    this.events.push({ type: 'flag', text: 'dropped', team: flag.team, ownerId: actor.id });
+  }
+
+  /** Client: flags from a snapshot. */
+  syncFlags(flags: FlagState[]): void {
+    this.flags = flags;
   }
 
   /**

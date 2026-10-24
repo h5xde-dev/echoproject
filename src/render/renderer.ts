@@ -6,7 +6,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '../game/config';
-import type { FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody } from '../game/types';
+import type { FlagState, FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody } from '../game/types';
 import { smokeRadius } from '../game/sim';
 import type { WeaponId } from '../game/weapons';
 import { ActorVisual } from './actors';
@@ -90,6 +90,9 @@ export class Renderer {
   private smokeCircles: { x: number; z: number; r: number }[] = [];
   private smokeTexture = makeSmokeTexture();
   private bushVisuals: { x: number; z: number; r: number; material: THREE.MeshStandardMaterial }[] = [];
+  /** Capture the flag: flags and base rings, drawn above the dark. */
+  private flagVisuals: { group: THREE.Group; cloth: THREE.Mesh }[] = [];
+  private baseRings: THREE.Mesh[] = [];
   private powerupVisuals = new Map<number, THREE.Group>();
   private hostile: (id: number) => boolean = (id) => id >= 1000;
   private viewerCount = 2;
@@ -784,6 +787,63 @@ export class Renderer {
     this.shockwaves.spawn(x, z, 5, 0xffffff, 0.25);
   }
 
+  /**
+   * Flags and their bases. Both live in the overlay, above the fog of war:
+   * the objective is always in view.
+   */
+  syncFlags(flags: FlagState[], bases: { x: number; z: number }[]): void {
+    while (this.baseRings.length < bases.length) {
+      const team = this.baseRings.length;
+      const geo = new THREE.RingGeometry(1.5, 1.8, 48);
+      geo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({ color: TEAM_FLAG_COLORS[team], transparent: true, opacity: 0.55, depthTest: false, toneMapped: false }),
+      );
+      this.overlay.add(ring);
+      this.baseRings.push(ring);
+    }
+    this.baseRings.forEach((ring, i) => {
+      ring.visible = !!bases[i];
+      if (bases[i]) ring.position.set(bases[i].x, 0.06, bases[i].z);
+    });
+    while (this.flagVisuals.length < flags.length) {
+      const team = this.flagVisuals.length;
+      const group = new THREE.Group();
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.04, 2.2, 6),
+        new THREE.MeshBasicMaterial({ color: 0xd8dde2, depthTest: false }),
+      );
+      pole.position.y = 1.1;
+      // The camera looks down: the cloth leans toward it so it reads from above.
+      const cloth = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.25, 0.8),
+        new THREE.MeshBasicMaterial({ color: TEAM_FLAG_COLORS[team], side: THREE.DoubleSide, depthTest: false, toneMapped: false }),
+      );
+      cloth.position.set(0.65, 1.85, 0);
+      cloth.rotation.x = -1.15;
+      const glowGeo = new THREE.CircleGeometry(0.55, 24);
+      glowGeo.rotateX(-Math.PI / 2);
+      const glow = new THREE.Mesh(
+        glowGeo,
+        new THREE.MeshBasicMaterial({ color: TEAM_FLAG_COLORS[team], transparent: true, opacity: 0.5, depthTest: false, toneMapped: false }),
+      );
+      glow.position.y = 0.05;
+      group.add(glow, pole, cloth);
+      this.overlay.add(group);
+      this.flagVisuals.push({ group, cloth });
+    }
+    this.flagVisuals.forEach((v, i) => {
+      const f = flags[i];
+      v.group.visible = !!f;
+      if (!f) return;
+      v.group.position.set(f.x, f.carrier >= 0 ? 0.6 : 0, f.z);
+      // A lying flag tilts over; a standing or carried one waves.
+      v.group.rotation.z = !f.home && f.carrier < 0 ? 1.2 : 0;
+      v.cloth.rotation.z = Math.sin(this.time * 3 + i) * 0.12;
+    });
+  }
+
   /** Night vision goggles: the whole picture goes green and bright. */
   setNightVision(on: boolean): void {
     this.container.classList.toggle('night-vision', on);
@@ -1207,6 +1267,9 @@ function wallBox(w: StaticBody, height: number): THREE.BufferGeometry {
 
 /** Props whose model is long along X (turned when the box is long along Z). */
 const BUSH_BLOB_GEO = new THREE.IcosahedronGeometry(1, 1);
+
+/** Capture the flag: blue and red, as the team rings on soldiers. */
+const TEAM_FLAG_COLORS = [0x4aa8ff, 0xff5a4a];
 
 /** A ceiling lamp seen from above: a flat disc. */
 const LAMP_FIXTURE_GEO = new THREE.CylinderGeometry(0.34, 0.34, 0.06, 20);
