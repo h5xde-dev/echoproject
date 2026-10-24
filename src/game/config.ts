@@ -199,6 +199,11 @@ export const CONFIG = {
   /** Weapons dropped by the dead stay on the ground this long. */
   dropLife: 30,
 
+  /** Team deathmatch: first team to the limit wins; the clock is dm.timeLimit. */
+  tdm: {
+    scoreLimit: 30,
+  },
+
   dm: {
     fragLimit: 15,
     timeLimit: 300,

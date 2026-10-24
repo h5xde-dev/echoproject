@@ -1075,3 +1075,7 @@ kbd {
 /* The shop needs a real pointer. */
 .hud.shopping .shop, .hud.shopping .shop * { cursor: pointer; }
 .hud.mode-gun .weapon-slots { display: none; }
+
+/* Team modes: score table rows (scoreboard and game over) in team colours. */
+tr.team-0 > td:nth-child(2) { color: #6fbaff; }
+tr.team-1 > td:nth-child(2) { color: #ff7a6a; }

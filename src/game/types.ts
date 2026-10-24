@@ -4,7 +4,7 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'gun' | 'comp';
+export type GameMode = 'coop' | 'dm' | 'gun' | 'comp' | 'tdm';
 
 export interface StaticBody {
   cx: number;
@@ -265,6 +265,8 @@ export interface Actor {
   concealed: boolean;
   /** Seconds a shot keeps the shooter visible even in a bush. */
   revealT: number;
+  /** Team in team modes (0 blue, 1 red); -1 otherwise. */
+  team: number;
 }
 
 export interface Bullet {
@@ -348,6 +350,8 @@ export interface GameEvent {
   ownerId?: number;
   /** hurt/death: id of the actor who dealt the damage. */
   by?: number;
+  /** victory in team modes: the winning team. */
+  team?: number;
   shotSeq?: number;
   weapon?: WeaponId;
   powerup?: PowerupKind;

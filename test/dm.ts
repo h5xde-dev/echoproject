@@ -27,7 +27,7 @@ for (const info of ARENAS) {
   if (unreachable.length) console.log(info.id + '\n' + sim.nav.dump());
   check(map.spawns.length >= 6, `${info.id}: ${map.spawns.length} spawn points`);
 
-  for (const mode of ['dm', 'gun', 'comp'] as GameMode[]) {
+  for (const mode of ['dm', 'gun', 'comp', 'tdm'] as GameMode[]) {
     const tag = `${info.id}/${mode}`;
     const s = new Sim(buildArena(info.id, 777, mode));
     s.fillBots();
@@ -351,6 +351,49 @@ for (const info of ARENAS) {
   };
   check(!shootProp(false).alive, 'a crate or table breaks under fire');
   check(shootProp(true).alive, 'cars, blocks and cabinets stay as cover');
+}
+
+// Team deathmatch.
+{
+  const s = new Sim(buildArena('sklad', 1313, 'tdm'));
+  s.fighters = 8;
+  const a = s.addPlayer('local', 'альфа', 1);
+  const b = s.addPlayer('c2', 'браво', 2);
+  s.fillBots();
+  const all = [...s.actors.values()];
+  const sizes = [0, 1].map((t) => all.filter((x) => x.team === t).length);
+  check(a.team !== b.team, 'two humans are split between the teams');
+  check(sizes[0] === 4 && sizes[1] === 4, `8 fighters split 4/4 (got ${sizes.join('/')})`);
+  const mid = (s.map.minX + s.map.maxX) / 2;
+  check(all.every((x) => (x.team === 0 ? x.x < mid : x.x > mid)), 'each team spawns on its own half');
+  const hostile = (s as unknown as { hostileTo(x: unknown, y: unknown): boolean }).hostileTo.bind(s);
+  const mate = all.find((x) => x !== a && x.team === a.team)!;
+  const foe = all.find((x) => x.team !== a.team)!;
+  check(!hostile(a, mate) && hostile(a, foe), 'teammates are not targets, the other side is');
+
+  // A bullet through a teammate does no harm; through an enemy it does.
+  const hit = (target: typeof a, hp = target.maxHp) => {
+    target.hp = hp;
+    target.shield = 0;
+    target.armor = 0;
+    s.bullets.push({
+      id: `ff${target.id}`, ownerId: a.id, ownerKind: 'player',
+      x: target.x - 1.5, z: target.z, vx: 80, vz: 0, speed: 80,
+      damage: 25, damageMul: 1, life: 0.2, weapon: 'rifle', color: 0, range: 0,
+    });
+    for (let i = 0; i < 4; i++) s.step(CONFIG.tickDt);
+    return hp - target.hp;
+  };
+  for (const x of all) if (x !== mate && x !== foe) x.x = x.z = -500;
+  check(hit(mate) === 0, 'no friendly fire');
+  check(hit(foe) > 0, 'enemies take damage');
+
+  s.teamScore = a.team === 0 ? [CONFIG.tdm.scoreLimit - 1, 3] : [3, CONFIG.tdm.scoreLimit - 1];
+  s.drainEvents();
+  hit(foe, 1);
+  const over = s.drainEvents().find((e) => e.type === 'victory');
+  check(s.teamScore[a.team] === CONFIG.tdm.scoreLimit, `team score counts kills (${s.teamScore.join(':')})`);
+  check(!!over && over.team === a.team, `reaching ${CONFIG.tdm.scoreLimit} wins the match for that team`);
 }
 
 out.push(`${failures} failures`);

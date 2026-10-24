@@ -1,5 +1,5 @@
 import type { Buffs, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
-import { GUN_LADDER, isArena, SHOP } from '../game/modes';
+import { GUN_LADDER, isArena, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
 import type { RoundState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
 import { CONFIG } from '../game/config';
@@ -47,6 +47,9 @@ export interface HudState {
   flashes: number;
   /** Grenade kind G throws. */
   nadeKind: GrenadeKind;
+  /** Team modes: the local player's team and the kills per team. */
+  team: number;
+  teamScore: [number, number];
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -65,6 +68,8 @@ export interface HudScore {
   tier: number;
   isLocal: boolean;
   isBot: boolean;
+  /** Team modes: 0 blue, 1 red; -1 otherwise. */
+  team: number;
 }
 
 export interface HudPlate {
@@ -273,7 +278,7 @@ export class Hud {
     const extra = this.mode === 'comp' ? 'Раунды' : this.mode === 'gun' ? 'Оружие' : '';
     let html = `<tr><th></th><th>Боец</th>${extra ? `<th>${extra}</th>` : ''}<th>Фраги</th><th>Смерти</th></tr>`;
     rows.forEach((r, i) => {
-      const cls = `${r.isLocal ? 'local' : ''}${r.isBot ? ' bot' : ''}`;
+      const cls = `${r.isLocal ? 'local' : ''}${r.isBot ? ' bot' : ''}${r.team >= 0 ? ` team-${r.team}` : ''}`;
       const col =
         this.mode === 'comp'
           ? `<td>${r.rounds}</td>`
@@ -397,6 +402,10 @@ export class Hud {
         const r = state.round;
         const phase = !r ? '' : r.phase === 'freeze' ? `ПРИГОТОВЬТЕСЬ ${Math.ceil(r.t)}` : r.phase === 'live' ? clock(r.t) : 'РАУНД ОКОНЧЕН';
         this.objectiveEl.textContent = `РАУНД ${r?.n ?? 1} · ${phase} · ПОБЕД ${me?.rounds ?? 0}/${ROUNDS_TO_WIN} · ЛИДЕР ${leader}`;
+      } else if (isTeamMode(this.mode)) {
+        const [blue, red] = state.teamScore;
+        const mine = state.team >= 0 ? ` · ВЫ — ${TEAM_NAMES[state.team]}` : '';
+        this.objectiveEl.textContent = `${clock(state.timeLeft)} · ${TEAM_NAMES[0]} ${blue} : ${red} ${TEAM_NAMES[1]} · ДО ${CONFIG.tdm.scoreLimit}${mine}`;
       } else if (this.mode === 'gun') {
         this.objectiveEl.textContent = `${clock(state.timeLeft)} · СТУПЕНЬ ${state.tier + 1}/${GUN_LADDER.length} · ЛИДЕР ${leader}`;
       } else {
@@ -617,7 +626,7 @@ export class Hud {
 
   drawMinimap(
     map: MapData,
-    actors: { id: number; kind: string; x: number; z: number; ang: number; alive: boolean }[],
+    actors: { id: number; kind: string; x: number; z: number; ang: number; alive: boolean; ally?: boolean }[],
     localId: number,
     activeRoom: RoomDef | undefined,
   ): void {
@@ -666,7 +675,9 @@ export class Hud {
         ctx.fill();
       } else {
         ctx.arc(px(a.x), pz(a.z), isPlayer ? 3 : 2.2, 0, Math.PI * 2);
-        ctx.fillStyle = isPlayer ? '#ffb545' : '#e05268';
+        // Allies: humans amber, bots blue; anyone hostile red.
+        const ally = a.ally ?? isPlayer;
+        ctx.fillStyle = !ally ? '#e05268' : isPlayer ? '#ffb545' : '#6fbaff';
         ctx.fill();
       }
     }

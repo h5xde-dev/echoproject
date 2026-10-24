@@ -52,6 +52,7 @@ const SOLO_DESC: Record<GameMode, string> = {
   dm: 'Арена против ботов',
   gun: 'Гонка против ботов',
   comp: 'Раунды против ботов',
+  tdm: 'Ваша команда с ботами против ботов',
 };
 
 function selectMode(mode: GameMode): void {

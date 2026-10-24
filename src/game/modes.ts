@@ -28,6 +28,13 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'tdm',
+    title: 'Командный бой',
+    short: 'КОМАНДЫ',
+    desc: 'Синие против красных, игроки делятся поровну, боты добирают составы. Своих не ранить, обзор союзников общий. Первая команда с 30 фрагами побеждает.',
+    arena: true,
+  },
+  {
     id: 'gun',
     title: 'Гонка вооружений',
     short: 'ГОНКА',
@@ -50,6 +57,13 @@ export function modeInfo(mode: GameMode): ModeInfo {
 export function isArena(mode: GameMode): boolean {
   return mode !== 'coop';
 }
+
+/** Modes fought in two teams. */
+export function isTeamMode(mode: GameMode): boolean {
+  return mode === 'tdm';
+}
+
+export const TEAM_NAMES = ['СИНИЕ', 'КРАСНЫЕ'] as const;
 
 /** Gun game ladder, weakest first. */
 export const GUN_LADDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper'];

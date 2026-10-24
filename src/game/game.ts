@@ -8,7 +8,7 @@ import { buildArena } from './arenas';
 import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
 import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
-import { GUN_LADDER, isArena, modeInfo, SHOP } from './modes';
+import { GUN_LADDER, isArena, isTeamMode, modeInfo, SHOP } from './modes';
 import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
@@ -51,6 +51,7 @@ export interface DisplayActor {
   flashes: number;
   blind: number;
   concealed: boolean;
+  team: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -66,6 +67,8 @@ interface SnapFrame {
 }
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
+/** Team modes: blue and red, for humans and bots alike. */
+const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
 const POWERUP_TEXT: Record<PowerupKind, string> = {
   medkit: 'Аптечка +' + CONFIG.powerups.medkitHeal,
@@ -131,6 +134,8 @@ export class Game {
   private enemyCount = 0;
   private scores: [number, number, number, number][] = [];
   private timeLeft = 0;
+  /** Client: team kills from the last snapshot. */
+  private teamScore: [number, number] = [0, 0];
   private roundState: RoundState | null = null;
 
   // Interpolation state.
@@ -296,8 +301,16 @@ export class Game {
   /** Whose soldiers the fog of war hides from this player. */
   private isHostile(id: number): boolean {
     if (id === this.localId) return false;
+    if (isTeamMode(this.matchMode)) {
+      const other = this.display.get(id)?.team ?? -1;
+      return other < 0 || other !== this.localTeam();
+    }
     if (isArena(this.matchMode)) return true;
     return id >= 1000;
+  }
+
+  private localTeam(): number {
+    return this.display.get(this.localId)?.team ?? this.sim.actors.get(this.localId)?.team ?? -1;
   }
 
   // ------------------------------------------------------------------ host
@@ -378,6 +391,7 @@ export class Game {
         flashes: a.flashes,
         blind: a.blind,
         concealed: a.concealed,
+        team: a.team,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -405,6 +419,7 @@ export class Game {
       scores: this.scoreRows(),
       round: this.localRoundState(),
       timeLeft: this.sim.timeLeft,
+      teamScore: this.sim.teamScore,
       ack,
     };
   }
@@ -477,6 +492,7 @@ export class Game {
     this.sim.roomPhase = msg.phase;
     this.scores = msg.scores ?? [];
     this.timeLeft = msg.timeLeft ?? 0;
+    this.teamScore = msg.teamScore ?? [0, 0];
 
     // Reconcile the locally predicted player: rewind to the host state,
     // replay unacknowledged input, and keep the visual jump as a decaying
@@ -686,7 +702,10 @@ export class Game {
         this.hud.message(`Комната ${event.text}`, 'warn');
         break;
       case 'victory':
-        if (isArena(this.matchMode)) {
+        if (isTeamMode(this.matchMode)) {
+          const win = event.team === this.localTeam();
+          this.endGame(win, event.text ?? '', win ? 'ПОБЕДА' : event.team === -1 ? 'НИЧЬЯ' : 'ПОРАЖЕНИЕ');
+        } else if (isArena(this.matchMode)) {
           const win = event.ownerId === this.localId;
           this.endGame(win, event.text ?? '', win ? 'ПОБЕДА' : 'МАТЧ ОКОНЧЕН');
         } else {
@@ -811,7 +830,9 @@ export class Game {
 
       this.updateDisplay(dt);
     }
-    this.renderer.update(dt, this.playerLights(), isArena(this.matchMode) ? 1 : 2, this.beams());
+    // Solo arenas: only your own sight. Co-op and teams: your ally's too.
+    const shared = !isArena(this.matchMode) || isTeamMode(this.matchMode);
+    this.renderer.update(dt, this.playerLights(), shared ? 2 : 1, this.beams());
     this.renderer.render();
     this.updateHud();
     this.updateFootsteps(dt);
@@ -1019,6 +1040,7 @@ export class Game {
           flashes: a.flashes,
           blind: a.blind,
           concealed: a.concealed,
+          team: a.team,
           isLocal,
           moving: a.moving,
         });
@@ -1123,6 +1145,7 @@ export class Game {
         flashes: b.flashes ?? 0,
         blind: b.blind ?? 0,
         concealed: b.concealed ?? false,
+        team: b.team ?? -1,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1155,6 +1178,10 @@ export class Game {
   }
 
   private colorFor(id: number): number {
+    if (isTeamMode(this.matchMode)) {
+      const team = this.display.get(id)?.team ?? -1;
+      if (team >= 0) return TEAM_COLORS[team];
+    }
     if (id >= 1000) return COLORS.enemy;
     return PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length];
   }
@@ -1194,8 +1221,11 @@ export class Game {
    */
   private playerLights(): { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean }[] {
     const out: { id: number; x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean }[] = [];
+    const team = this.localTeam();
     for (const d of this.display.values()) {
       if (d.kind !== 'player') continue;
+      // Team modes: the other side's humans are not your eyes.
+      if (isTeamMode(this.matchMode) && d.team !== team) continue;
       out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive, nv: d.buffs.nv > 0 });
     }
     out.sort((a, b) => (a.id === this.localId ? 0 : 1) - (b.id === this.localId ? 0 : 1));
@@ -1242,9 +1272,12 @@ export class Game {
         tier: this.tierOf(id),
         isLocal: id === this.localId,
         isBot: id >= 1000,
+        team: this.display.get(id)?.team ?? -1,
       }))
       .sort((a, b) =>
-        this.matchMode === 'comp'
+        isTeamMode(this.matchMode) && a.team !== b.team
+          ? a.team - b.team
+          : this.matchMode === 'comp'
           ? b.rounds - a.rounds || b.kills - a.kills
           : this.matchMode === 'gun'
             ? b.tier - a.tier || b.kills - a.kills
@@ -1268,7 +1301,11 @@ export class Game {
 
     const def = WEAPONS[self.weapon];
     const players = [...this.display.values()]
-      .filter((d) => d.kind === 'player' && (this.matchMode === 'coop' || d.isLocal))
+      .filter(
+        (d) =>
+          d.kind === 'player' &&
+          (this.matchMode === 'coop' || d.isLocal || (isTeamMode(this.matchMode) && d.team === this.localTeam())),
+      )
       .map((d) => ({
         name: d.isLocal ? `${d.name} (вы)` : d.name,
         hp: d.hp,
@@ -1311,6 +1348,8 @@ export class Game {
       smokes: self.smokes,
       flashes: self.flashes,
       nadeKind: this.nadeKind,
+      team: this.localTeam(),
+      teamScore: this.isAuthority ? this.sim.teamScore : this.teamScore,
       blind: self.blind,
       money: self.money,
       tier: self.tier,
@@ -1320,7 +1359,9 @@ export class Game {
     });
 
     // Fog of war applies to the minimap too: only hostiles that are seen.
-    const known = [...this.display.values()].filter((d) => !this.isHostile(d.id) || this.renderer.isRevealed(d.id));
+    const known = [...this.display.values()]
+      .filter((d) => !this.isHostile(d.id) || this.renderer.isRevealed(d.id))
+      .map((d) => ({ ...d, ally: !this.isHostile(d.id) }));
     this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined);
     this.updatePlates();
   }

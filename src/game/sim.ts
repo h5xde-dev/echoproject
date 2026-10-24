@@ -3,7 +3,7 @@ import { clamp, dist, normalize, segCircleHit } from '../core/math';
 import { CONFIG, TILE } from './config';
 import { updateBullets, type BulletCtx } from './bullets';
 import { pickPowerup } from './levelgen';
-import { GUN_LADDER, isArena, SHOP } from './modes';
+import { GUN_LADDER, isArena, isTeamMode, SHOP, TEAM_NAMES } from './modes';
 import { NavGrid } from './nav';
 import { PhysicsWorld, resolveCircleBox, type DoorBody } from './physics';
 import type {
@@ -143,6 +143,8 @@ export class Sim {
   /** Deathmatch: seconds left in the match. */
   timeLeft = 0;
   matchOver = false;
+  /** Team modes: kills per team. */
+  teamScore: [number, number] = [0, 0];
   bulletSeq = 0;
   /** Arena head count; bots fill the places humans leave free. */
   fighters: number = CONFIG.dm.fighters;
@@ -222,6 +224,29 @@ export class Sim {
     return isArena(this.mode);
   }
 
+  get teams(): boolean {
+    return isTeamMode(this.mode);
+  }
+
+  /**
+   * Team for a newcomer: humans are split evenly first (so friends end up
+   * facing each other only when they outnumber a side), bots then even out
+   * the head count.
+   */
+  private teamFor(isHuman: boolean): number {
+    const count = [0, 0];
+    for (const a of this.actors.values()) {
+      if (a.team < 0) continue;
+      if (!isHuman || a.kind === 'player') count[a.team]++;
+    }
+    return count[1] < count[0] ? 1 : 0;
+  }
+
+  /** Arena half a spawn point belongs to: teams start on opposite sides. */
+  private sideOf(x: number): number {
+    return x < (this.map.minX + this.map.maxX) / 2 ? 0 : 1;
+  }
+
   // ---------------------------------------------------------------- actors
 
   private newActor(id: number, kind: Actor['kind'], name: string, x: number, z: number): Actor {
@@ -274,14 +299,16 @@ export class Sim {
       blind: 0,
       concealed: false,
       revealT: 0,
+      team: -1,
     };
   }
 
   addPlayer(peerId: string, name: string, id: number): Actor {
     let x = this.map.spawnX + (id === 1 ? -1.6 : 1.6);
     let z = this.map.spawnZ;
+    const team = this.teams ? this.teamFor(true) : -1;
     if (this.arena) {
-      const s = this.pickSpawn(null);
+      const s = this.pickSpawn(null, team);
       x = s.x;
       z = s.z;
     } else if (this.actors.size > 0) {
@@ -291,6 +318,7 @@ export class Sim {
     }
     const actor = this.newActor(id, 'player', name, x, z);
     actor.peerId = peerId;
+    actor.team = team;
     if (this.arena && this.mode !== 'comp') actor.shield = CONFIG.dm.spawnShield;
     // Joining a competitive round already under way: wait for the next one.
     if (this.mode === 'comp' && this.roundPhase !== 'freeze') {
@@ -319,8 +347,10 @@ export class Sim {
     const want = Math.max(0, this.fighters - humans);
     while (bots < want) {
       const id = this.nextActorId++;
-      const s = this.pickSpawn(null);
+      const team = this.teams ? this.teamFor(false) : -1;
+      const s = this.pickSpawn(null, team);
       const bot = this.newActor(id, 'enemy', BOT_NAMES[(id - ENEMY_ID_BASE) % BOT_NAMES.length], s.x, s.z);
+      bot.team = team;
       bot.maxHp = CONFIG.player.maxHp;
       bot.hp = bot.maxHp;
       bot.speed = CONFIG.player.maxSpeed * 0.92;
@@ -338,7 +368,8 @@ export class Sim {
       bots++;
     }
     while (bots > want) {
-      const bot = [...this.actors.values()].find((a) => a.kind === 'enemy');
+      const bigger = this.teams ? 1 - this.teamFor(false) : -1;
+      const bot = [...this.actors.values()].find((a) => a.kind === 'enemy' && (bigger < 0 || a.team === bigger));
       if (!bot) break;
       this.removeActor(bot.id);
       bots--;
@@ -799,8 +830,11 @@ export class Sim {
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
       } else if (hit.kind === 'actor') {
         const dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
-        // Co-op: no friendly fire (the bullet still stops on the body).
-        const friendly = this.mode === 'coop' && hit.bullet.ownerKind === hit.actor.kind;
+        // Co-op and teams: no friendly fire (the bullet still stops on the body).
+        const shooter = this.actors.get(hit.bullet.ownerId);
+        const friendly =
+          (this.mode === 'coop' && hit.bullet.ownerKind === hit.actor.kind) ||
+          (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team);
         if (!friendly) this.damageActor(hit.actor, dmg, hit.bullet.ownerId);
         this.events.push({
           type: 'impact',
@@ -862,6 +896,7 @@ export class Sim {
       const suicide = sourceId === actor.id;
       if (killer) killer.kills += suicide ? -1 : 1;
       const k = this.actors.get(sourceId);
+      if (this.teams && k && !suicide && k.team >= 0 && k.team !== actor.team) this.teamScore[k.team]++;
       if (k && !suicide) this.rewardKill(k);
       return;
     }
@@ -933,7 +968,10 @@ export class Sim {
       // Walls shield from the blast.
       if (!this.world.lineOfSight(x, z, actor.x, actor.z, this.scratch)) continue;
       const falloff = 1 - d / radius;
-      this.damageActor(actor, damage * falloff, sourceId);
+      // Teams: your grenade spares your side (but not you).
+      const thrower = this.actors.get(sourceId);
+      const ally = this.teams && !!thrower && thrower !== actor && thrower.team === actor.team;
+      if (!ally) this.damageActor(actor, damage * falloff, sourceId);
       const dir = normalize(actor.x - x, actor.z - z);
       actor.vx += dir.x * 16 * falloff;
       actor.vz += dir.z * 16 * falloff;
@@ -990,6 +1028,7 @@ export class Sim {
   /** Who this actor fights: co-op guards hunt players, arena bots everyone. */
   private hostileTo(actor: Actor, other: Actor): boolean {
     if (other === actor || !other.alive) return false;
+    if (this.teams) return other.team !== actor.team;
     if (this.arena) return true;
     return actor.kind === 'enemy' ? other.kind === 'player' : other.kind === 'enemy';
   }
@@ -1424,7 +1463,7 @@ export class Sim {
   }
 
   private pickPatrolTarget(actor: Actor): { x: number; z: number } {
-    if (this.mode === 'dm') {
+    if (this.mode === 'dm' || this.teams) {
       // Roam between items and spawn points; go for health when hurt.
       if (actor.hp < actor.maxHp * 0.5) {
         const heal = this.powerups
@@ -1505,8 +1544,12 @@ export class Sim {
   }
 
   /** Deathmatch spawn point: the safest of the arena's spawns. */
-  private pickSpawn(self: Actor | null): { x: number; z: number } {
-    const spawns = this.map.spawns.length > 0 ? this.map.spawns : [{ x: this.map.spawnX, z: this.map.spawnZ }];
+  private pickSpawn(self: Actor | null, team = self?.team ?? -1): { x: number; z: number } {
+    let spawns = this.map.spawns.length > 0 ? this.map.spawns : [{ x: this.map.spawnX, z: this.map.spawnZ }];
+    if (team >= 0) {
+      const own = spawns.filter((s) => this.sideOf(s.x) === team);
+      if (own.length > 0) spawns = own;
+    }
     let best = spawns[0];
     let bestScore = -Infinity;
     for (const s of spawns) {
@@ -1645,10 +1688,26 @@ export class Sim {
     if (this.matchOver) return;
     this.timeLeft = Math.max(0, this.timeLeft - dt);
     const leader = this.leader();
+    if (this.teams) {
+      const [blue, red] = this.teamScore;
+      const limit = CONFIG.tdm.scoreLimit;
+      if (blue >= limit || red >= limit || this.timeLeft <= 0) {
+        const winner = blue === red ? undefined : blue > red ? 0 : 1;
+        const text = winner === undefined ? `Ничья ${blue}:${red}` : `${TEAM_NAMES[winner]} победили ${Math.max(blue, red)}:${Math.min(blue, red)}`;
+        this.finishTeamMatch(winner, text);
+      }
+      return;
+    }
     const limitHit = this.mode === 'dm' && leader && leader.score.kills >= CONFIG.dm.fragLimit;
     if (limitHit || this.timeLeft <= 0) {
       this.finishMatch(leader?.id, leader ? `${leader.name} — ${leader.score.kills} фрагов` : 'Ничья');
     }
+  }
+
+  private finishTeamMatch(team: number | undefined, text: string): void {
+    if (this.matchOver) return;
+    this.matchOver = true;
+    this.events.push({ type: 'victory', team: team ?? -1, text });
   }
 
   private finishMatch(winner: number | undefined, text: string): void {

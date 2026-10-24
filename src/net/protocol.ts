@@ -29,6 +29,7 @@ export interface ActorState {
   flashes?: number;
   blind?: number;
   concealed?: boolean;
+  team?: number;
 }
 
 export interface BulletState {
@@ -97,6 +98,8 @@ export interface SnapshotMsg {
   scores: [number, number, number, number][];
   round: RoundState | null;
   timeLeft: number;
+  /** Team modes: kills per team. */
+  teamScore?: [number, number];
   /** playerId -> last processed input sequence. */
   ack: Record<string, number>;
 }
