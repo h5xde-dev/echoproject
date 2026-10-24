@@ -168,8 +168,12 @@ export class Renderer {
     }
     for (let i = 0; i < 2; i++) {
       const light = new THREE.SpotLight(0xfff0d6, 0, 34, 0.62, 0.6, 1.2);
-      light.castShadow = this.shadowsEnabled && i === 0;
-      light.shadow.mapSize.set(1024, 1024);
+      // Both beams need shadows: without one the teammate's light shines
+      // through walls into the next room. Always on: toggling castShadow
+      // changes the shadow count and rebuilds every shader.
+      light.castShadow = this.shadowsEnabled;
+      const res = i === 0 ? 1024 : 512;
+      light.shadow.mapSize.set(res, res);
       light.shadow.camera.near = 0.5;
       light.shadow.camera.far = 36;
       light.shadow.bias = -0.002;
@@ -524,6 +528,8 @@ export class Renderer {
     for (const v of this.powerupVisuals.values()) this.scene.remove(v);
     this.powerupVisuals.clear();
     this.lamps = [];
+    this.lampUsed.fill(-1);
+    for (const light of this.lampPool) light.intensity = 0;
     this.decals.clear();
     for (const id of [...this.actorVisuals.keys()]) this.removeActor(id);
   }
@@ -841,7 +847,7 @@ export class Renderer {
 
     this.updateVision(dt, players);
 
-    this.placeLamps();
+    this.placeLamps(dt);
 
     for (const f of this.flashLights) decayLight(f, dt);
     for (const b of this.boomLights) decayLight(b, dt);
@@ -893,32 +899,38 @@ export class Renderer {
     this.camera.lookAt(this.camPos.x + ox * 0.6, 0, this.camPos.z + oz * 0.6);
   }
 
-  /** Moves the lamp light pool onto the lamps nearest to the camera. */
-  private placeLamps(): void {
+  /**
+   * Keeps the lamp light pool on the lamps nearest to the camera. A light
+   * leaving a lamp fades out before it moves and fades in at the new one, so
+   * lamps never blink on or off as the camera pans.
+   */
+  private placeLamps(dt: number): void {
     const cx = this.camTarget.x;
     const cz = this.camTarget.z;
+    const pool = this.lampPool;
     const used = this.lampUsed;
-    used.fill(-1);
-    for (let k = 0; k < this.lampPool.length; k++) {
-      let best = -1;
-      let bestD = Infinity;
-      for (let i = 0; i < this.lamps.length; i++) {
-        if (used.includes(i)) continue;
-        const d = Math.hypot(this.lamps[i].x - cx, this.lamps[i].z - cz);
-        if (d < bestD) {
-          bestD = d;
-          best = i;
-        }
-      }
-      used[k] = best;
-      const light = this.lampPool[k];
-      if (best < 0) {
-        light.intensity = 0;
+    const wanted = this.lamps
+      .map((l, i) => ({ i, d: Math.hypot(l.x - cx, l.z - cz) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, pool.length)
+      .map((e) => e.i);
+    const step = LAMP_INTENSITY * Math.min(1, dt * 4);
+    for (let k = 0; k < pool.length; k++) {
+      const light = pool[k];
+      if (used[k] >= 0 && wanted.includes(used[k])) {
+        light.intensity = Math.min(LAMP_INTENSITY, light.intensity + step);
         continue;
       }
-      light.position.set(this.lamps[best].x, 3.4, this.lamps[best].z);
-      light.color.setHex(this.lamps[best].color);
-      light.intensity = 32;
+      if (light.intensity > 0) {
+        light.intensity = Math.max(0, light.intensity - step);
+        continue;
+      }
+      // Dark and free: take a wanted lamp no other light holds.
+      const next = wanted.find((i) => !used.includes(i)) ?? -1;
+      used[k] = next;
+      if (next < 0) continue;
+      light.position.set(this.lamps[next].x, 3.4, this.lamps[next].z);
+      light.color.setHex(this.lamps[next].color);
     }
   }
 
@@ -1039,6 +1051,9 @@ function wallBox(w: StaticBody, height: number): THREE.BufferGeometry {
 }
 
 /** Props whose model is long along X (turned when the box is long along Z). */
+/** Ceiling lamp brightness at full fade-in. */
+const LAMP_INTENSITY = 32;
+
 const LONG_PROPS = new Set<PropKind>(['cover', 'car', 'table', 'pallet', 'ammo', 'cabinet']);
 
 const FLOOR_STYLE: Record<RoomTheme, { tile: number; color: number; tex: 'asphalt' | 'concrete' | 'tiles' }> = {
