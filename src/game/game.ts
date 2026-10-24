@@ -105,6 +105,11 @@ export class Game {
   private snapBuffer: SnapFrame[] = [];
   private pendingInputs: PendingInput[] = [];
   private clientInputs = new Map<string, { input: PlayerInput; lastAck: number }>();
+  /** Client: last measured round trip to the host (ms). */
+  private rttMs = 0;
+  /** Client: the room code joined, reused to reconnect. */
+  private joinCode = '';
+  private reconnecting = false;
   private clientNames = new Map<number, string>();
   private frameMove = { x: 0, z: 0 };
   private frameAim = 0;
@@ -175,8 +180,12 @@ export class Game {
     this.mode = 'client';
     this.isAuthority = false;
     this.localName = name;
+    this.joinCode = code;
+    await this.connectToHost();
+  }
 
-    await this.net.join(code, {
+  private async connectToHost(): Promise<void> {
+    await this.net.join(this.joinCode, {
       onWelcome: (msg) => this.onWelcome(msg),
       onSnapshot: (msg) => this.onSnapshot(msg),
       onEvent: (msg) => this.onEvent(msg),
@@ -195,10 +204,46 @@ export class Game {
       },
       onStatus: (text) => this.hud.setStatus(text),
       onError: (text) => this.hud.setError(text),
-      onLatency: (ms) => this.hud.setLatency(ms),
+      onLatency: (ms) => {
+        this.rttMs = ms;
+        this.hud.setLatency(ms);
+      },
+      onDisconnected: () => void this.recoverConnection(),
     });
 
-    this.net.send({ t: 'hello', name });
+    this.net.send({ t: 'hello', name: this.localName });
+  }
+
+  /**
+   * The channel to the host dropped. Try the same room code a few times (the
+   * host greets us as a fresh player); if the room is gone, end the match
+   * with a clear reason instead of leaving a frozen screen.
+   */
+  private async recoverConnection(): Promise<void> {
+    if (this.reconnecting || !this.running || this.gameOver) return;
+    this.reconnecting = true;
+    for (let attempt = 1; attempt <= 3 && this.running; attempt++) {
+      this.hud.setStatus(`Связь с хостом потеряна — переподключение (${attempt}/3)…`);
+      this.net.disconnect();
+      try {
+        await this.connectToHost();
+        this.reconnecting = false;
+        return;
+      } catch {
+        await new Promise((r) => window.setTimeout(r, 1500));
+      }
+    }
+    this.reconnecting = false;
+    if (this.running) this.endGame(false, 'Хост вышел из игры или пропала сеть.', 'СВЯЗЬ ПОТЕРЯНА');
+  }
+
+  /** Forgets everything mirrored from a host session. */
+  private resetClientState(): void {
+    this.clientBullets = [];
+    this.latestActors.clear();
+    this.snapBuffer = [];
+    this.pendingInputs = [];
+    this.clockReady = false;
   }
 
   private beginAuthoritySession(opts: MatchOptions): void {
@@ -363,6 +408,8 @@ export class Game {
   // ---------------------------------------------------------------- client
 
   private onWelcome(msg: WelcomeMsg): void {
+    // A welcome after a reconnect starts a new mirror of the host.
+    this.resetClientState();
     this.map = msg.map;
     this.matchMode = msg.map.mode ?? 'coop';
     this.localId = msg.playerId;
@@ -689,10 +736,7 @@ export class Game {
     this.hud.hidePause();
     this.hud.hideGameOver();
     this.display.clear();
-    this.clientBullets = [];
-    this.latestActors.clear();
-    this.snapBuffer = [];
-    this.pendingInputs = [];
+    this.resetClientState();
     this.clientInputs.clear();
     this.clientNames.clear();
     this.buyOpen = false;
@@ -783,6 +827,7 @@ export class Game {
       grenade: this.pending.grenade,
       throwDist: this.frameThrow,
       buy: this.pending.buy,
+      rttMs: this.mode === 'client' ? this.rttMs : undefined,
     };
     this.pending.reload = false;
     this.pending.interact = false;
@@ -815,11 +860,22 @@ export class Game {
 
       for (const [key, state] of this.clientInputs) {
         const actor = this.sim.actors.get(Number(key));
-        if (actor) this.sim.applyInput(actor, state.input);
+        if (!actor) continue;
+        // One-way delay of this client's input, capped so a bad link cannot
+        // shoot far ahead of what everyone else sees.
+        actor.lagComp = Math.min(CONFIG.lagCompMax, (state.input.rttMs ?? 0) / 2000);
+        this.sim.applyInput(actor, state.input);
       }
 
       this.sim.step(dt);
       this.drainSimEvents();
+
+      // The host has no ping of its own; show the worst one its clients report.
+      if (this.tick % 60 === 0 && this.clientInputs.size > 0) {
+        let worst = 0;
+        for (const state of this.clientInputs.values()) worst = Math.max(worst, state.input.rttMs ?? 0);
+        this.hud.setLatency(worst);
+      }
 
       if (this.tick % Math.round(1 / CONFIG.snapshotRate / CONFIG.tickDt) === 0) {
         this.net.broadcast(this.buildSnapshot());

@@ -52,6 +52,8 @@ export interface PlayerInput {
   throwDist?: number;
   /** Competitive: item to buy this tick ('' = none). */
   buy?: ShopItem | '';
+  /** Client's measured round trip to the host, for lag compensation. */
+  rttMs?: number;
 }
 
 export interface DoorState {
@@ -243,6 +245,7 @@ export class Sim {
       ai: isPlayer ? null : makeAi(),
       slot: 0,
       shotSeq: 0,
+      lagComp: 0,
     };
   }
 
@@ -442,6 +445,7 @@ export class Sim {
     const srng = new Rng(shotSeed(actor.id, shotSeq, this.map.seed));
 
     const pelletDirs: { dx: number; dz: number; speed: number }[] = [];
+    const fresh: Bullet[] = [];
     for (let i = 0; i < count; i++) {
       const spread = (srng.next() - 0.5) * 2 * def.spread;
       const ang = baseAng + spread;
@@ -449,8 +453,14 @@ export class Sim {
       const dirZ = Math.sin(ang);
       const speed = def.bulletSpeed * (0.97 + srng.next() * 0.06);
       pelletDirs.push({ dx: dirX, dz: dirZ, speed });
-      this.bullets.push(this.makeBullet(actor, count > 1 ? `${id}-${i}` : id, dirX, dirZ, speed, muzzle));
+      fresh.push(this.makeBullet(actor, count > 1 ? `${id}-${i}` : id, dirX, dirZ, speed, muzzle));
     }
+    // Lag compensation: catch the shot up with the time its input spent on
+    // the wire, in ordinary ticks so walls and bodies on the way still count.
+    for (let t = actor.lagComp; t > 1e-4 && fresh.length; t -= CONFIG.tickDt) {
+      this.updateBullets(Math.min(CONFIG.tickDt, t), fresh);
+    }
+    this.bullets.push(...fresh);
 
     this.noises.push({ x: actor.x, z: actor.z, radius: def.noise, time: this.time, ownerId: actor.id });
     this.events.push({
@@ -675,14 +685,14 @@ export class Sim {
 
   // ---------------------------------------------------------------- bullets
 
-  private updateBullets(dt: number): void {
+  private updateBullets(dt: number, bullets = this.bullets): void {
     const ctx: BulletCtx = {
       world: this.world,
       props: this.props,
       actors: this.actors,
       scratch: this.scratch,
     };
-    for (const hit of updateBullets(this.bullets, ctx, dt)) {
+    for (const hit of updateBullets(bullets, ctx, dt)) {
       if (hit.kind === 'static') {
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
       } else if (hit.kind === 'actor') {

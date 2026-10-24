@@ -140,20 +140,100 @@ const fired = await page.evaluate(() => {
 check('host spawns bullets for the client', fired.peakHost > 0 && fired.hostShots > 0, JSON.stringify(fired));
 check('client replicates bullets locally', fired.peakClient > 0, `peakClient=${fired.peakClient}`);
 
+// The start room's door opens 1.5 s of game time in; headless runs slowly.
+await page.waitForFunction(() => window.__net.gameA.sim.time > 1.6, null, { timeout: 30000 });
 const health = await page.evaluate(() => {
   const { gameA } = window.__net;
   const start = gameA.map.rooms[0];
   const inStart = (a) => a.x >= start.minX && a.x <= start.maxX && a.z >= start.minZ && a.z <= start.maxZ;
   const enemies = [...gameA.sim.actors.values()].filter((a) => a.kind === 'enemy');
   return {
-    alive: enemies.filter((e) => e.alive).length,
+    spawned: enemies.length,
     inStart: enemies.filter((e) => e.alive && inStart(e)).length,
   };
 });
 // The first room is a safe start; the next room's guards are already posted
 // behind the door it opens.
 check('start room is safe', health.inStart === 0, `guards in start room=${health.inStart}`);
-check('next room is manned when its door opens', health.alive > 0, `alive guards=${health.alive}`);
+// Counted dead or alive: stray shots and barrels may already have hit them.
+check('next room is manned when its door opens', health.spawned > 0, `guards spawned=${health.spawned}`);
+
+// Lag compensation: the client reports its round trip with every input and
+// the host fast-forwards that player's shots by half of it.
+// Pinned: the real loopback ping would overwrite it every 1.5 s.
+await page.evaluate(() => {
+  window.__rttPin = setInterval(() => { window.__net.gameB.rttMs = 200; }, 5);
+});
+await page.waitForTimeout(400);
+const lag = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const sim = gameA.sim;
+  const reported = gameA.sim.actors.get(gameB.localId)?.lagComp ?? -1;
+  // Fire the host's own soldier from the room centre along the long axis,
+  // once without and once with compensation.
+  const me = sim.actors.get(gameA.localId);
+  const room = gameA.map.rooms[0];
+  const shot = (lagComp) => {
+    me.x = (room.minX + room.maxX) / 2;
+    me.z = (room.minZ + room.maxZ) / 2;
+    me.ang = room.maxX - room.minX >= room.maxZ - room.minZ ? 0 : Math.PI / 2;
+    me.ammo = 10;
+    me.lagComp = lagComp;
+    const before = sim.bullets.length;
+    sim.fireWeapon(me);
+    const b = sim.bullets[before];
+    me.lagComp = 0;
+    return b ? b.range : 'consumed';
+  };
+  clearInterval(window.__rttPin);
+  return { reported, plain: shot(0), compensated: shot(0.1) };
+});
+check('host derives lag compensation from client RTT', Math.abs(lag.reported - 0.1) < 1e-6, `lagComp=${lag.reported}`);
+check('uncompensated shot starts at the muzzle', lag.plain === 0, `range=${lag.plain}`);
+check(
+  'compensated shot is fast-forwarded ~100 ms',
+  lag.compensated === 'consumed' || lag.compensated > 5,
+  `range=${lag.compensated}`,
+);
+
+// A dropped channel: the client reconnects to the same room by itself.
+const oldId = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const id = gameB.localId;
+  for (const c of gameA.net.hostClients.values()) c.conn.close();
+  return id;
+});
+await page.waitForFunction(
+  (old) => {
+    const { gameB } = window.__net;
+    return gameB.localId !== old && gameB.latestActors.has(gameB.localId);
+  },
+  oldId,
+  { timeout: 15000 },
+).catch(() => {});
+const rejoined = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  return { id: gameB.localId, hostSees: gameA.sim.actors.has(gameB.localId), over: gameB.gameOver };
+});
+check(
+  'client reconnects after a dropped channel',
+  rejoined.id !== oldId && rejoined.hostSees && !rejoined.over,
+  JSON.stringify({ oldId, ...rejoined }),
+);
+
+// The host leaves for good: the client ends the match with a reason.
+await page.evaluate(() => {
+  const { gameA } = window.__net;
+  const clients = [...gameA.net.hostClients.values()];
+  gameA.returnToMenu();
+  for (const c of clients) c.conn.close();
+});
+await page.waitForFunction(() => window.__net.gameB.gameOver, null, { timeout: 20000 }).catch(() => {});
+const ended = await page.evaluate(() => ({
+  over: window.__net.gameB.gameOver,
+  title: document.querySelector('#hudB .gameover-title')?.textContent ?? '',
+}));
+check('client ends the match when the host is gone', ended.over, JSON.stringify(ended));
 
 check('no page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
 

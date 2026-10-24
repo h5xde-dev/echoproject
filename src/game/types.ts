@@ -235,6 +235,11 @@ export interface Actor {
   slot: number;
   /** Monotonic counter of shots fired, used to seed the shared spread RNG. */
   shotSeq: number;
+  /**
+   * Seconds the host fast-forwards this player's new bullets: the input
+   * reached it that late, so the shot is placed where it would be by now.
+   */
+  lagComp: number;
 }
 
 export interface Bullet {

@@ -10,6 +10,8 @@ export const CONFIG = {
 
   /** Render interpolation delay for remote entities. */
   interpDelayMs: 110,
+  /** Most a client's shot is fast-forwarded on the host (seconds). */
+  lagCompMax: 0.15,
 
   player: {
     radius: 0.55,

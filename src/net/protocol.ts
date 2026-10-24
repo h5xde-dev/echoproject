@@ -120,6 +120,7 @@ export interface InputMsg {
   grenade?: boolean;
   throwDist?: number;
   buy?: ShopItem | '';
+  rttMs?: number;
 }
 
 export interface EventMsg {

@@ -38,6 +38,8 @@ export interface NetClientHandlers {
   onStatus(text: string): void;
   onError(text: string): void;
   onLatency(ms: number): void;
+  /** The channel to the host closed without us leaving. */
+  onDisconnected(): void;
 }
 
 export interface IceServerEntry {
@@ -47,14 +49,15 @@ export interface IceServerEntry {
 }
 
 /**
- * Optional self-hosted PeerServer: `?signal=host:port` or a full URL.
- * Without it the public PeerJS cloud server is used.
+ * Optional self-hosted PeerServer: `?signal=host:port` or a full URL, or the
+ * `VITE_PEER_SIGNAL` build variable. Without either the public PeerJS cloud
+ * server is used.
  */
 function peerOptions(): PeerOptions {
   const params = new URLSearchParams(location.search);
   const options: PeerOptions = {};
 
-  const raw = params.get('signal');
+  const raw = params.get('signal') ?? import.meta.env.VITE_PEER_SIGNAL;
   if (raw) {
     try {
       const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
@@ -67,13 +70,15 @@ function peerOptions(): PeerOptions {
     }
   }
 
-  // Extra ICE servers (TURN) as JSON: ?ice=[{"urls":"turn:host:3478","username":"u","credential":"p"}]
-  const ice = params.get('ice');
+  // Own TURN servers as JSON, from ?ice= or the VITE_ICE_SERVERS build variable:
+  // [{"urls":"turn:host:3478","username":"u","credential":"p"}]. They replace
+  // PeerJS's public TURN; the STUN server stays for direct connections.
+  const ice = params.get('ice') ?? import.meta.env.VITE_ICE_SERVERS;
   if (ice) {
     try {
       const parsed = JSON.parse(ice) as IceServerEntry[];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        options.config = { iceServers: parsed };
+        options.config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...parsed] };
       }
     } catch {
       /* invalid ICE config is ignored */
@@ -100,6 +105,9 @@ export interface PeerLike {
   on(event: 'open', cb: (id: string) => void): unknown;
   on(event: 'error', cb: (err: { type?: string; message?: string }) => void): unknown;
   on(event: 'connection', cb: (conn: DataChannelLike) => void): unknown;
+  on(event: 'disconnected', cb: () => void): unknown;
+  /** Re-registers with the signalling server; open channels are unaffected. */
+  reconnect?(): void;
   connect(id: string, options?: { reliable?: boolean; serialization?: string }): DataChannelLike;
   destroy(): void;
 }
@@ -166,8 +174,22 @@ export class Net {
           });
         });
 
+        // Losing the signalling server does not drop players already in the
+        // room, but nobody new can join until the room code is registered again.
+        peer.on('disconnected', () => {
+          if (this.peer !== peer) return;
+          this.debug = 'host: signalling lost, reconnecting';
+          handlers.onStatus('Сервер связи недоступен — восстанавливаем комнату…');
+          window.setTimeout(() => {
+            if (this.peer === peer) peer.reconnect?.();
+          }, 1000);
+        });
+
         peer.on('error', (err) => {
           this.debug = `peer error: ${err.type} ${err.message ?? ''}`;
+          // While reconnecting to the signalling server, network errors are
+          // expected; the 'disconnected' handler keeps retrying.
+          if (this.code && (err.type === 'network' || err.type === 'server-error')) return;
           if (err.type === 'unavailable-id') {
             peer.destroy();
             attempt(makeRoomCode());
@@ -268,8 +290,8 @@ export class Net {
 
         conn.on('close', () => {
           this.debug = `channel closed (${conn.peer})`;
-          handlers.onStatus('Соединение закрыто');
-          handlers.onError('Соединение разорвано');
+          // Our own disconnect() clears `conn` first; anything else is a drop.
+          if (this.conn === conn) handlers.onDisconnected();
         });
 
         conn.on('error', (err) => {
@@ -280,6 +302,8 @@ export class Net {
 
       peer.on('error', (err) => {
         this.debug = `client peer error: ${err.type} ${err.message ?? ''}`;
+        // Once the channel is up the signalling server is no longer needed.
+        if (this.conn?.open && (err.type === 'network' || err.type === 'server-error')) return;
         handlers.onError(describePeerError(err));
         reject(err);
       });
@@ -355,10 +379,15 @@ export class Net {
   disconnect(): void {
     if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
     this.pingTimer = null;
-    this.conn?.close();
-    this.peer?.destroy();
+    // Cleared before closing, so the close/disconnected events that follow
+    // are recognised as ours and not reported as a dropped connection.
+    const conn = this.conn;
+    const peer = this.peer;
     this.conn = null;
     this.peer = null;
+    conn?.close();
+    peer?.destroy();
+    this.pingSentAt.clear();
     this.hostClients.clear();
     this.mode = 'offline';
   }
