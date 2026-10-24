@@ -9,7 +9,8 @@
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
     "assets": "node tools/build-assets.mjs",
-    "test:netcode": "node test/run-netcode.mjs"
+    "test:netcode": "node test/run-netcode.mjs",
+    "test:arenas": "node test/run-dm.mjs"
   },
   "dependencies": {
     "peerjs": "^1.5.5",
