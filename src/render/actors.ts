@@ -73,6 +73,8 @@ function blobShadow(): THREE.Mesh {
 }
 
 export class ActorVisual {
+  /** Hiding in a bush: enemies only see it up close. */
+  concealed = false;
   readonly group = new THREE.Group();
   readonly bodyGroup = new THREE.Group();
   /** Muzzle point (child of the weapon holder). */

@@ -115,6 +115,13 @@ export interface FloorRect {
   theme: RoomTheme;
 }
 
+/** A bush: no collision, but whoever keeps still or quiet inside is hidden. */
+export interface BushDef {
+  x: number;
+  z: number;
+  r: number;
+}
+
 export interface LampDef {
   x: number;
   z: number;
@@ -136,6 +143,7 @@ export interface MapData {
   powerups: PowerupDef[];
   floors: FloorRect[];
   lamps: LampDef[];
+  bushes?: BushDef[];
   /** Deathmatch spawn points (empty for co-op levels). */
   spawns: { x: number; z: number }[];
   spawnX: number;
@@ -251,6 +259,10 @@ export interface Actor {
   flashes: number;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
+  /** In a bush and quiet: unseen beyond `bush.spotDist`. */
+  concealed: boolean;
+  /** Seconds a shot keeps the shooter visible even in a bush. */
+  revealT: number;
 }
 
 export interface Bullet {

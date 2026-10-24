@@ -241,6 +241,70 @@ for (const info of ARENAS) {
   check(s.buy(p, 'smoke') && s.buy(p, 'flash') && p.smokes === 1 && p.flashes === 1, 'competitive: smoke and flash can be bought');
 }
 
+// Bushes: hide whoever keeps quiet in them.
+{
+  const dvor = buildArena('dvor', 8080, 'dm');
+  check((dvor.bushes?.length ?? 0) >= 10, `Двор has ${dvor.bushes?.length ?? 0} bushes (mirrored)`);
+  const yards = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => generateMap(seed * 7919)).filter((m) => m.rooms.some((r) => r.theme === 'yard'));
+  check(yards.length > 0 && yards.every((m) => (m.bushes?.length ?? 0) > 0), 'co-op yard rooms grow bushes');
+
+  const s = new Sim(generateMap(4711));
+  const priv = s as unknown as { populateRoom(i: number): void; updateAi(a: unknown, dt: number): void };
+  priv.populateRoom(1);
+  const guard = [...s.actors.values()].find((a) => a.kind === 'enemy')!;
+  const p = s.addPlayer('local', 'тест', 1);
+  const dt = CONFIG.tickDt;
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  s.map.bushes = [{ x: guard.x + 5, z: guard.z, r: 1.5 }];
+  const placeInBush = () => {
+    p.x = guard.x + 5;
+    p.z = guard.z;
+    p.vx = p.vz = 0;
+  };
+  placeInBush();
+  s.applyInput(p, { ...input, gait: 'crouch' });
+  placeInBush();
+  s.step(dt);
+  check(p.concealed, 'crouching in a bush hides you');
+  s.applyInput(p, { ...input, gait: 'run', moveX: 1 });
+  s.step(dt);
+  check(!p.concealed, 'running through a bush does not');
+  placeInBush();
+  p.revealT = CONFIG.bush.revealAfterShot;
+  s.applyInput(p, { ...input, gait: 'crouch' });
+  placeInBush();
+  s.step(dt);
+  check(!p.concealed, 'firing gives you away for a moment');
+
+  // A guard looking straight at the bush, 5 m off, does not notice; 2 m off it does.
+  const post = { x: guard.x, z: guard.z };
+  const watch = (gap: number, hidden = true) => {
+    // The control round lets the guard chase; every round starts at its post.
+    guard.x = post.x;
+    guard.z = post.z;
+    guard.vx = guard.vz = 0;
+    p.x = guard.x + gap;
+    p.z = guard.z;
+    p.concealed = hidden;
+    // The control round may end with the guard shooting the player.
+    p.alive = true;
+    p.hp = p.maxHp;
+    guard.ang = 0;
+    guard.blind = 0;
+    guard.ai!.mode = 'idle';
+    guard.ai!.awareness = 0;
+    s.time = 30;
+    for (let i = 0; i < 60; i++) {
+      p.concealed = hidden;
+      priv.updateAi(guard, dt);
+    }
+    return guard.ai!.awareness;
+  };
+  check(watch(5, false) > 0, 'control: the same guard spots an unhidden player 5 m away');
+  check(watch(5) === 0, 'a guard 5 m away does not spot a hidden player');
+  check(watch(2) > 0, 'a guard 2 m away does');
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

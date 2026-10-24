@@ -89,6 +89,7 @@ export class Renderer {
   /** The same clouds as circles, for line of sight. */
   private smokeCircles: { x: number; z: number; r: number }[] = [];
   private smokeTexture = makeSmokeTexture();
+  private bushVisuals: { x: number; z: number; r: number; material: THREE.MeshStandardMaterial }[] = [];
   private powerupVisuals = new Map<number, THREE.Group>();
   private hostile: (id: number) => boolean = (id) => id >= 1000;
   private viewerCount = 2;
@@ -363,6 +364,27 @@ export class Renderer {
       return { x: l.x, z: l.z, color: l.color, on: true, fixture };
     });
 
+    // Bushes: a clump of leafy blobs each; see-through while you stand in one.
+    this.bushVisuals = (map.bushes ?? []).map((b, i) => {
+      const material = new THREE.MeshStandardMaterial({ color: 0x2c4424, roughness: 0.95, transparent: true });
+      const group = new THREE.Group();
+      group.position.set(b.x, 0, b.z);
+      const blobs = 6;
+      for (let k = 0; k < blobs; k++) {
+        const a = (k / blobs) * Math.PI * 2 + i;
+        const off = k === 0 ? 0 : b.r * 0.5;
+        const blob = new THREE.Mesh(BUSH_BLOB_GEO, material);
+        const size = b.r * (k === 0 ? 0.75 : 0.55 + ((k * 37 + i * 11) % 10) * 0.02);
+        blob.scale.set(size, size * 0.85, size);
+        blob.position.set(Math.cos(a) * off, size * 0.6, Math.sin(a) * off);
+        blob.castShadow = true;
+        blob.receiveShadow = true;
+        group.add(blob);
+      }
+      g.add(group);
+      return { x: b.x, z: b.z, r: b.r, material };
+    });
+
     // Props: asset models fitted to the collision boxes, primitives otherwise.
     const barrelMat = new THREE.MeshStandardMaterial({ map: makeBarrelTexture(), roughness: 0.6, metalness: 0.25 });
     const boxMat = new THREE.MeshStandardMaterial({ color: 0x6a5434, roughness: 0.9 });
@@ -545,6 +567,7 @@ export class Renderer {
     for (const v of this.powerupVisuals.values()) this.scene.remove(v);
     this.powerupVisuals.clear();
     this.lamps = [];
+    this.bushVisuals = [];
     this.lampUsed.fill(-1);
     for (const light of this.lampPool) light.intensity = 0;
     this.decals.clear();
@@ -963,6 +986,11 @@ export class Renderer {
     this.updateVision(dt, players);
 
     this.placeLamps(dt);
+    // The bush you stand in turns see-through, so you can see yourself.
+    for (const b of this.bushVisuals) {
+      const inside = Math.hypot(this.camTarget.x - b.x, this.camTarget.z - b.z) < b.r + 0.3;
+      b.material.opacity += ((inside ? 0.35 : 1) - b.material.opacity) * Math.min(1, dt * 8);
+    }
 
     for (const f of this.flashLights) decayLight(f, dt);
     for (const b of this.boomLights) decayLight(b, dt);
@@ -1080,7 +1108,12 @@ export class Renderer {
       }
       const pos = visual.group.position;
       let seen = !this.map;
-      for (const v of this.viewers) if (v.sees(pos.x, pos.z)) seen = true;
+      for (const v of this.viewers) {
+        if (!v.sees(pos.x, pos.z)) continue;
+        // In a bush and quiet: only spotted right next to it.
+        if (visual.concealed && Math.hypot(v.x - pos.x, v.z - pos.z) > CONFIG.bush.spotDist) continue;
+        seen = true;
+      }
       const prev = this.reveal.get(id) ?? 0;
       const a = seen ? Math.min(1, prev + dt * VISION.fadeIn) : Math.max(0, prev - dt * VISION.fadeOut);
       this.reveal.set(id, a);
@@ -1167,6 +1200,8 @@ function wallBox(w: StaticBody, height: number): THREE.BufferGeometry {
 }
 
 /** Props whose model is long along X (turned when the box is long along Z). */
+const BUSH_BLOB_GEO = new THREE.IcosahedronGeometry(1, 1);
+
 /** A ceiling lamp seen from above: a flat disc. */
 const LAMP_FIXTURE_GEO = new THREE.CylinderGeometry(0.34, 0.34, 0.06, 20);
 

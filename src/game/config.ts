@@ -21,6 +21,17 @@ export const CONFIG = {
     noise: 12,
   },
 
+  /** Bushes hide whoever walks, crouches or stands in them. */
+  bush: {
+    radius: { min: 1.2, max: 1.7 },
+    /** Bushes per yard room in co-op levels. */
+    perYardRoom: { min: 3, max: 5 },
+    /** A hidden soldier is still spotted this close. */
+    spotDist: 2.5,
+    /** Firing gives the shooter away for this long. */
+    revealAfterShot: 1.2,
+  },
+
   /** Run (default), walk (Shift) and crouch (C). */
   gait: {
     speed: { run: 1, walk: 0.55, crouch: 0.38 },

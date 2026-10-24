@@ -272,6 +272,8 @@ export class Sim {
       smokes: isPlayer && this.mode !== 'comp' ? CONFIG.grenade.startUtility : 0,
       flashes: isPlayer && this.mode !== 'comp' ? CONFIG.grenade.startUtility : 0,
       blind: 0,
+      concealed: false,
+      revealT: 0,
     };
   }
 
@@ -464,6 +466,7 @@ export class Sim {
     actor.recoil = Math.min(0.5, actor.recoil + def.recoil);
     // Shooting ends spawn protection.
     actor.shield = 0;
+    actor.revealT = CONFIG.bush.revealAfterShot;
 
     const shotSeq = actor.shotSeq++;
     const id = `${actor.id}-${shotSeq}`;
@@ -542,6 +545,7 @@ export class Sim {
       if (actor.kind === 'enemy' && !this.frozen) this.updateAi(actor, dt);
       this.updateActorCommon(actor, dt);
       this.updateFootsteps(actor, dt);
+      this.updateConcealment(actor);
       this.collectItems(actor);
     }
 
@@ -562,6 +566,7 @@ export class Sim {
     actor.shield = Math.max(0, actor.shield - dt);
     actor.grenadeCd = Math.max(0, actor.grenadeCd - dt);
     actor.blind = Math.max(0, actor.blind - dt);
+    actor.revealT = Math.max(0, actor.revealT - dt);
     const b = actor.buffs;
     b.damage = Math.max(0, b.damage - dt);
     b.rapid = Math.max(0, b.rapid - dt);
@@ -604,6 +609,13 @@ export class Sim {
   /** Client: lamp states from a snapshot (indices of broken lamps). */
   syncLamps(broken: number[]): void {
     this.lampAlive = this.map.lamps.map((_, i) => !broken.includes(i));
+  }
+
+  /** Hidden while in a bush and quiet (not running, not just fired). */
+  private updateConcealment(actor: Actor): void {
+    const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
+    const quiet = actor.gait !== 'run' || Math.hypot(actor.vx, actor.vz) < 0.4;
+    actor.concealed = inBush && quiet && actor.revealT <= 0;
   }
 
   /** Every few metres a moving soldier makes noise: loud running, quiet walking, none crouched. */
@@ -1011,7 +1023,9 @@ export class Sim {
     // it is full, so walking into a room is not an instant firefight.
     let inSight = false;
     let detectRange = 0;
-    if (nearest && this.time > P.startGrace) {
+    // A target hiding in a bush is only spotted right next to it.
+    const hidden = !!nearest && nearest.concealed && nearestD > CONFIG.bush.spotDist;
+    if (nearest && !hidden && this.time > P.startGrace) {
       const d = nearestD;
       const lit = this.isLit(nearest.x, nearest.z);
       detectRange = P.darkRange;
@@ -1451,6 +1465,7 @@ export class Sim {
     actor.cooldown = weaponCooldown(def) * 1.9 * (actor.buffs.rapid > 0 ? CONFIG.powerups.rapidMul : 1);
     actor.recoil = Math.min(0.5, actor.recoil + def.recoil);
     actor.shield = 0;
+    actor.revealT = CONFIG.bush.revealAfterShot;
 
     this.noises.push({ x: actor.x, z: actor.z, radius: def.noise, time: this.time, ownerId: actor.id });
     this.events.push({

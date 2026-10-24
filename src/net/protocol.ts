@@ -28,6 +28,7 @@ export interface ActorState {
   smokes?: number;
   flashes?: number;
   blind?: number;
+  concealed?: boolean;
 }
 
 export interface BulletState {

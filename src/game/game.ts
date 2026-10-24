@@ -50,6 +50,7 @@ export interface DisplayActor {
   smokes: number;
   flashes: number;
   blind: number;
+  concealed: boolean;
   isLocal: boolean;
   moving: boolean;
 }
@@ -375,6 +376,7 @@ export class Game {
         smokes: a.smokes,
         flashes: a.flashes,
         blind: a.blind,
+        concealed: a.concealed,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -1015,6 +1017,7 @@ export class Game {
           smokes: a.smokes,
           flashes: a.flashes,
           blind: a.blind,
+          concealed: a.concealed,
           isLocal,
           moving: a.moving,
         });
@@ -1026,6 +1029,7 @@ export class Game {
 
     for (const d of this.display.values()) {
       const visual = this.renderer.ensureActor(d.id, this.colorFor(d.id), d.kind === 'player');
+      visual.concealed = d.concealed;
       visual.update(d, dt);
     }
     // Actors gone from the simulation (left, cleared bodies) leave the scene.
@@ -1117,6 +1121,7 @@ export class Game {
         smokes: b.smokes ?? 0,
         flashes: b.flashes ?? 0,
         blind: b.blind ?? 0,
+        concealed: b.concealed ?? false,
         isLocal: id === this.localId,
         moving: false,
       };

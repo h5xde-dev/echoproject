@@ -1,6 +1,7 @@
 import { Rng } from '../core/rng';
 import { CONFIG, TILE } from './config';
 import type {
+  BushDef,
   FloorRect,
   LampDef,
   MapData,
@@ -87,6 +88,9 @@ export function pickPowerup(roll: number): PowerupKind {
 
 export function generateMap(seed: number): MapData {
   const rng = new Rng(seed);
+  // Own stream, so adding bushes leaves every other layout decision as it was.
+  const bushRng = new Rng(seed ^ 0xb054);
+  const bushes: BushDef[] = [];
   const roomCount = rng.int(CONFIG.roomsMin, CONFIG.roomsMax);
   const raw: RawRoom[] = [];
 
@@ -346,6 +350,22 @@ export function generateMap(seed: number): MapData {
       return null;
     };
 
+    // Yards grow bushes to hide in.
+    if (room.theme === 'yard') {
+      const B = CONFIG.bush;
+      const want = bushRng.int(B.perYardRoom.min, B.perYardRoom.max);
+      for (let i = 0, tries = 0; i < want && tries < 30; tries++) {
+        const r = bushRng.range(B.radius.min, B.radius.max);
+        const x = bushRng.range(room.minX + r + 0.8, room.maxX - r - 0.8);
+        const z = bushRng.range(room.minZ + r + 0.8, room.maxZ - r - 0.8);
+        if (props.some((p) => Math.abs(p.x - x) < p.hw + r * 0.7 && Math.abs(p.z - z) < p.hh + r * 0.7)) continue;
+        if (bushes.some((b) => Math.hypot(b.x - x, b.z - z) < b.r + r + 1.2)) continue;
+        if (nearDoor(x, z, 3.5) || !clearOfWalls(x, z, r, r, 0.3)) continue;
+        bushes.push({ x, z, r });
+        i++;
+      }
+    }
+
     // The start room hands out a first upgrade; later rooms 1-2 weapons.
     const weaponCount = room.index === 0 ? 1 : rng.int(1, 2);
     for (let i = 0; i < weaponCount; i++) {
@@ -386,6 +406,7 @@ export function generateMap(seed: number): MapData {
     powerups,
     floors,
     lamps,
+    bushes,
     spawns: [],
     spawnX: spawnRoom.wx,
     spawnZ: spawnRoom.wz,

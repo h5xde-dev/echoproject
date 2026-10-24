@@ -1,5 +1,6 @@
 import { mergeWallCells, PROP_TABLE, THEME_LAMP } from './levelgen';
 import type {
+  BushDef,
   FloorRect,
   GameMode,
   LampDef,
@@ -23,6 +24,7 @@ import type { WeaponId } from './weapons';
 //   D drum  M electrical cabinet  A ammo box  t table  c chair
 //   1 SMG  2 shotgun  3 rifle  4 sniper (weapon pickups)
 //   h medkit  r armor  x damage  s speed  f rapid fire (powerups)
+//   Y bush (no collision; hides whoever keeps quiet in it)
 
 export const CELL = 1.5;
 
@@ -73,20 +75,20 @@ export const ARENAS: ArenaInfo[] = [
     '#S.......L.......#...',
     '#................#.h.',
     '#..V.....T.......#...',
-    '#....................',
+    '#.....Y..............',
     '#.......####......L..',
     '#..K....#..1.........',
     '#.......#.......V....',
-    '#.............T......',
+    '#...Y.........T......',
     '#####...........#####',
     '#...#..L........#....',
     '#.r.#...........#..x.',
-    '#...#....K......#....',
+    '#...#....K...Y..#....',
     '#..................L.',
     '#S......T............',
-    '#..........#####.....',
+    '#....Y.....#####.....',
     '#..V.......#...#..3..',
-    '#..........#.f.#.....',
+    '#..........#.f.#..Y..',
     '#....L.....#...#.....',
     '#S...................',
     '#####################',
@@ -165,6 +167,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
   const pickups: PickupDef[] = [];
   const powerups: PowerupDef[] = [];
   const lamps: LampDef[] = [];
+  const bushes: BushDef[] = [];
   const spawns: { x: number; z: number }[] = [];
   const seen = new Uint8Array(gw * gh);
 
@@ -174,6 +177,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
       const p = centre(x, z);
       if (ch === 'S') spawns.push(p);
       else if (ch === 'L') lamps.push({ ...p, color: THEME_LAMP[info.theme] });
+      else if (ch === 'Y') bushes.push({ ...p, r: 1.4 });
       else if (WEAPON_CHARS[ch]) pickups.push({ id: pickups.length + 1, weapon: WEAPON_CHARS[ch], ...p, room: 0 });
       else if (POWERUP_CHARS[ch]) powerups.push({ id: powerups.length + 1, kind: POWERUP_CHARS[ch], ...p, room: 0 });
       else if (PROP_CHARS[ch] && !seen[z * gw + x]) {
@@ -271,6 +275,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
     powerups,
     floors,
     lamps,
+    bushes,
     spawns,
     spawnX: spawns[0]?.x ?? maxX / 2,
     spawnZ: spawns[0]?.z ?? maxZ / 2,
