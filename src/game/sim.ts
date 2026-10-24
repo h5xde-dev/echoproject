@@ -808,7 +808,9 @@ export class Sim {
   private objectiveOf(actor: Actor): { x: number; z: number; reach: number } | null {
     const bomb = this.bomb;
     if (this.mode === 'bomb' && bomb && this.roundPhase === 'live') {
-      if (!bomb.planted && bomb.carrier === actor.id) return { ...this.sites[this.bombGoal], reach: CONFIG.bomb.siteRadius * 0.6 };
+      if (!bomb.planted && bomb.carrier === actor.id && this.attackPhase === 'execute') {
+        return { ...this.sites[this.bombGoal], reach: CONFIG.bomb.siteRadius * 0.6 };
+      }
       if (bomb.planted && actor.team === this.defendTeam) return { x: bomb.x, z: bomb.z, reach: CONFIG.bomb.defuseReach * 0.7 };
     }
     if (this.mode === 'ctf' && actor.carrying >= 0) return { ...this.bases[actor.team], reach: CONFIG.ctf.touch };
@@ -1750,6 +1752,8 @@ export class Sim {
       for (const g of guns) if (this.buy(bot, g)) break;
     }
     if (bot.money >= 650) this.buy(bot, 'armor');
+    // Bomb attackers want a smoke for the push onto the site.
+    if (this.mode === 'bomb' && bot.team === this.attackTeam && bot.money >= 300) this.buy(bot, 'smoke');
     if (bot.money >= 300 && this.rng.next() < 0.6) this.buy(bot, 'grenade');
   }
 
@@ -1833,12 +1837,22 @@ export class Sim {
       const bomb = this.bomb;
       const jitter = () => ({ x: this.rng.range(-4, 4), z: this.rng.range(-4, 4) });
       if (actor.team === this.attackTeam) {
-        if (!bomb) return this.sites[this.bombGoal];
-        if (bomb.carrier === actor.id) return this.sites[this.bombGoal];
-        const carrier = this.actors.get(bomb.carrier);
-        const at = carrier ?? bomb;
+        const site = this.sites[this.bombGoal];
+        if (!bomb) return site;
+        // Planted: hold a spot on a ring around it, each bot its own.
+        if (bomb.planted) {
+          const a = (actor.id * 2.4) % (Math.PI * 2);
+          return this.nearestWalkable(bomb.x + Math.cos(a) * 7, bomb.z + Math.sin(a) * 7);
+        }
+        if (bomb.carrier < 0) return { x: bomb.x, z: bomb.z };
+        // Gather short of the site first, then everyone pushes in.
+        if (this.attackPhase === 'stage') {
+          const j = jitter();
+          return { x: this.stagePoint.x + j.x * 0.5, z: this.stagePoint.z + j.z * 0.5 };
+        }
+        if (bomb.carrier === actor.id) return site;
         const j = jitter();
-        return bomb.carrier < 0 && !bomb.planted ? { x: bomb.x, z: bomb.z } : { x: at.x + j.x, z: at.z + j.z };
+        return { x: site.x + j.x * 0.75, z: site.z + j.z * 0.75 };
       }
       if (bomb?.planted) return { x: bomb.x, z: bomb.z };
       const site = this.sites[actor.id % 2];
@@ -2408,6 +2422,40 @@ export class Sim {
     this.bomb = carrier
       ? { x: carrier.x, z: carrier.z, carrier: carrier.id, planted: false, timer: 0, site: -1 }
       : null;
+    // The attack's plan for the round: gather short of the site, then go in
+    // together behind a smoke.
+    const site = this.sites[this.bombGoal];
+    const from = attackers.length > 0 ? attackers.reduce((acc, a) => ({ x: acc.x + a.x / attackers.length, z: acc.z + a.z / attackers.length }), { x: 0, z: 0 }) : site;
+    this.stagePoint = this.nearestWalkable(from.x + (site.x - from.x) * 0.6, from.z + (site.z - from.z) * 0.6, site);
+    this.attackPhase = 'stage';
+    this.smokeThrown = false;
+  }
+
+  /** Bomb, attacking bots: gather at the stage point, then execute on the site. */
+  private attackPhase: 'stage' | 'execute' = 'stage';
+  private stagePoint = { x: 0, z: 0 };
+  private smokeThrown = false;
+
+  /** Bomb, attacking bots: move from gathering to the push, and smoke the site. */
+  private updateAttackPlan(): void {
+    const attackers = [...this.actors.values()].filter((a) => a.alive && a.team === this.attackTeam);
+    if (this.attackPhase === 'stage') {
+      const gathered = attackers.filter((a) => dist(a.x, a.z, this.stagePoint.x, this.stagePoint.z) < 6).length;
+      const inLive = CONFIG.bomb.roundTime - this.roundT;
+      if (gathered >= Math.ceil(attackers.length * 0.6) || inLive > 15) this.attackPhase = 'execute';
+      return;
+    }
+    if (this.smokeThrown || this.bomb?.planted) return;
+    const site = this.sites[this.bombGoal];
+    // Close to the site: smoke off the defence's side of it.
+    const thrower = attackers.find((a) => a.ai && a.smokes > 0 && dist(a.x, a.z, site.x, site.z) < 14);
+    if (!thrower) return;
+    const away = Math.atan2(site.z - this.stagePoint.z, site.x - this.stagePoint.x);
+    const tx = site.x + Math.cos(away) * 4;
+    const tz = site.z + Math.sin(away) * 4;
+    thrower.grenadeCd = 0;
+    this.throwGrenade(thrower, Math.atan2(tz - thrower.z, tx - thrower.x), dist(thrower.x, thrower.z, tx, tz), 'smoke');
+    this.smokeThrown = true;
   }
 
   /**
@@ -2417,6 +2465,7 @@ export class Sim {
    */
   private updateBomb(dt: number): void {
     const B = CONFIG.bomb;
+    this.updateAttackPlan();
     const alive = [...this.actors.values()].filter((a) => a.alive);
     const attackers = alive.filter((a) => a.team === this.attackTeam);
     const defenders = alive.filter((a) => a.team === this.defendTeam);

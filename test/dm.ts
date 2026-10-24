@@ -40,6 +40,9 @@ for (const info of ARENAS) {
     let ladder = 0;
     let flagsTaken = 0;
     let plants = 0;
+    let attackWins = 0;
+    let attacking = 0;
+    let defenceWins = 0;
     let bombEnds = 0;
     let ended = '';
     const dt = CONFIG.tickDt;
@@ -55,6 +58,12 @@ for (const info of ARENAS) {
         if (e.type === 'victory') ended = e.text ?? '?';
         if (e.type === 'flag' && e.text === 'taken') flagsTaken++;
         if (e.type === 'bomb' && e.text === 'planted') plants++;
+        // Events come in order: a round end is scored before any halftime swap.
+        if (mode === 'bomb' && e.type === 'round' && e.text === 'swap') attacking = 1 - attacking;
+        if (mode === 'bomb' && e.type === 'round' && e.text === 'end' && e.team !== undefined) {
+          if (e.team === attacking) attackWins++;
+          else defenceWins++;
+        }
         if (e.type === 'bomb' && (e.text === 'exploded' || e.text === 'defused')) bombEnds++;
       }
       for (const b of s.actors.values()) {
@@ -75,7 +84,7 @@ for (const info of ARENAS) {
     check(maxStill < 9, `${tag}: longest idle bot ${maxStill.toFixed(1)} s`);
     check(throws > 0, `${tag}: ${throws} grenades thrown`);
     if (mode === 'gun') check(ladder >= 2, `${tag}: best ladder tier ${ladder + 1}`);
-    if (mode === 'bomb') check(plants > 0, `${tag}: ${plants} plants, ${bombEnds} blasts/defuses, ${rounds} rounds, score ${s.teamScore.join(':')}`);
+    if (mode === 'bomb') check(plants > 0, `${tag}: ${plants} plants, ${bombEnds} blasts/defuses, ${rounds} rounds, attack ${attackWins} : ${defenceWins} defence`);
     if (mode === 'ctf') check(flagsTaken > 0, `${tag}: bots took a flag ${flagsTaken} times, score ${s.teamScore.join(':')}`);
     if (mode === 'comp') {
       check(rounds >= CONFIG.comp.roundsToWin, `${tag}: ${rounds} rounds played`);
