@@ -180,9 +180,14 @@ check('next room is manned when its door opens', health.spawned > 0, `guards spa
 
 // Lag compensation: the client reports its round trip with every input and
 // the host fast-forwards that player's shots by half of it.
-// Pinned: the real loopback ping would overwrite it every 1.5 s.
+// The real loopback ping would overwrite it every 1.5 s: stop the pinger.
 await page.evaluate(() => {
-  window.__rttPin = setInterval(() => { window.__net.gameB.rttMs = 200; }, 5);
+  const { gameB } = window.__net;
+  clearInterval(gameB.net.pingTimer);
+  gameB.net.pingTimer = null;
+  // Replies to pings already in flight are dropped when nothing waits for them.
+  gameB.net.pingSentAt.clear();
+  gameB.rttMs = 200;
 });
 await page.waitForTimeout(400);
 const lag = await page.evaluate(() => {
@@ -205,7 +210,6 @@ const lag = await page.evaluate(() => {
     me.lagComp = 0;
     return b ? b.range : 'consumed';
   };
-  clearInterval(window.__rttPin);
   return { reported, plain: shot(0), compensated: shot(0.1) };
 });
 check('host derives lag compensation from client RTT', Math.abs(lag.reported - 0.1) < 1e-6, `lagComp=${lag.reported}`);
