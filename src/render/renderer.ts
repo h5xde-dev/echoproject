@@ -784,6 +784,11 @@ export class Renderer {
     this.shockwaves.spawn(x, z, 5, 0xffffff, 0.25);
   }
 
+  /** Night vision goggles: the whole picture goes green and bright. */
+  setNightVision(on: boolean): void {
+    this.container.classList.toggle('night-vision', on);
+  }
+
   /** A lamp shot out: the light dies at once (no fade), glass rains down. */
   breakLamp(index: number): void {
     const lamp = this.lamps[index];
@@ -957,7 +962,7 @@ export class Renderer {
    */
   update(
     dt: number,
-    players: { x: number; z: number; ang: number; flashOn: boolean; alive: boolean }[],
+    players: { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv?: boolean }[],
     viewerCount = 2,
     beams: { x: number; z: number; ang: number }[] = [],
   ): void {
@@ -1078,7 +1083,7 @@ export class Renderer {
     }
   }
 
-  private updateVision(dt: number, players: { x: number; z: number; ang: number; alive: boolean; flashOn: boolean }[]): void {
+  private updateVision(dt: number, players: { x: number; z: number; ang: number; alive: boolean; flashOn: boolean; nv?: boolean }[]): void {
     const map = this.map;
     for (let i = 0; i < this.viewers.length; i++) {
       const v = this.viewers[i];
@@ -1088,7 +1093,8 @@ export class Renderer {
       this.exploredMeshes[i].visible = v.active;
       if (!p || !map) continue;
       // Flashlight on: long sight; off: eyes adjust, but you see less.
-      v.range = p.flashOn ? CONFIG.flashlight.visionOn : CONFIG.flashlight.visionOff;
+      // Night vision gives the long sight without the giveaway beam.
+      v.range = p.flashOn || p.nv ? CONFIG.flashlight.visionOn : CONFIG.flashlight.visionOff;
       // Only walls (and closed doors) that can intersect the sight radius.
       const r = VISION.range + 2;
       const near = this.visionWalls;
@@ -1223,6 +1229,7 @@ export const POWERUP_COLOR: Record<PowerupKind, number> = {
   damage: 0xff4a4a,
   speed: 0xffe04a,
   rapid: 0xff9a2a,
+  nv: 0x7dff6a,
 };
 
 /** Painted lines: warehouse lanes, parking bays in yards, hazard edges in bunkers. */

@@ -117,6 +117,9 @@ export const CONFIG = {
     /** Fire-rate and reload-time factor while the buff lasts. */
     rapidMul: 0.6,
     rapidTime: 10,
+    nvTime: 10,
+    /** Night vision amplifies a flash grenade too. */
+    nvBlindMul: 1.5,
     /** Chance that a killed guard drops a powerup (co-op). */
     dropChance: 0.35,
     /** Respawn time of map powerups / weapon pickups in deathmatch. */

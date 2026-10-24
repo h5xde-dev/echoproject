@@ -6,7 +6,7 @@
  */
 import { ARENAS, buildArena } from '../src/game/arenas';
 import { CONFIG } from '../src/game/config';
-import { generateMap } from '../src/game/levelgen';
+import { generateMap, pickPowerup } from '../src/game/levelgen';
 import { Sim } from '../src/game/sim';
 import type { GameMode } from '../src/game/types';
 
@@ -303,6 +303,54 @@ for (const info of ARENAS) {
   check(watch(5, false) > 0, 'control: the same guard spots an unhidden player 5 m away');
   check(watch(5) === 0, 'a guard 5 m away does not spot a hidden player');
   check(watch(2) > 0, 'a guard 2 m away does');
+}
+
+// Night vision powerup.
+{
+  const s = new Sim(buildArena('bunker', 9090, 'dm'));
+  const p = s.addPlayer('local', 'тест', 1);
+  check(s.map.powerups.some((u) => u.kind === 'nv'), 'Бункер has night vision on the map');
+  const rolls = Array.from({ length: 1000 }, (_, i) => pickPowerup(i / 1000));
+  check(rolls.includes('nv') && rolls.includes('speed'), 'night vision is in the random powerup mix (and speed still is)');
+  (s as unknown as { applyPowerup(a: unknown, k: string): boolean }).applyPowerup(p, 'nv');
+  check(p.buffs.nv === CONFIG.powerups.nvTime, `night vision lasts ${p.buffs.nv} s`);
+  p.x = s.map.spawns[0].x;
+  p.z = s.map.spawns[0].z;
+  // A direction with a clear line, so the flash reaches the player.
+  const world = (s as unknown as { world: { lineOfSight(a: number, b: number, c: number, d: number, s: unknown[]): boolean } }).world;
+  const dir = [0, Math.PI / 2, Math.PI, -Math.PI / 2].find((a) => world.lineOfSight(p.x, p.z, p.x + Math.cos(a) * 3, p.z + Math.sin(a) * 3, []))!;
+  const flash = () => {
+    p.blind = 0;
+    p.ang = dir;
+    s.grenades.push({ id: 1, kind: 'flash', ownerId: p.id, x: p.x + Math.cos(dir) * 3, y: 0.2, z: p.z + Math.sin(dir) * 3, vx: 0, vy: 0, vz: 0, fuse: 0.001 });
+    s.step(CONFIG.tickDt);
+    return p.blind;
+  };
+  const withNv = flash();
+  p.buffs.nv = 0;
+  const without = flash();
+  check(withNv > without * 1.4, `night vision makes a flash worse: ${withNv.toFixed(1)} s vs ${without.toFixed(1)} s`);
+}
+
+// Light props break under fire; anchored ones do not.
+{
+  const s = new Sim(buildArena('sklad', 1212, 'dm'));
+  const p = s.addPlayer('local', 'тест', 1);
+  p.x = p.z = -500;
+  const shootProp = (fixed: boolean) => {
+    const prop = s.props.find((q) => q.alive && q.fixed === fixed && !q.explosive)!;
+    for (let i = 0; i < 40 && prop.alive; i++) {
+      s.bullets.push({
+        id: `pp${fixed}${i}`, ownerId: p.id, ownerKind: 'player',
+        x: prop.x - 4, z: prop.z, vx: 80, vz: 0, speed: 80,
+        damage: 30, damageMul: 1, life: 0.2, weapon: 'rifle', color: 0, range: 0,
+      });
+      for (let t = 0; t < 6; t++) s.step(CONFIG.tickDt);
+    }
+    return prop;
+  };
+  check(!shootProp(false).alive, 'a crate or table breaks under fire');
+  check(shootProp(true).alive, 'cars, blocks and cabinets stay as cover');
 }
 
 out.push(`${failures} failures`);

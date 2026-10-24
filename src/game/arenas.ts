@@ -23,7 +23,7 @@ import type { WeaponId } from './weapons';
 //   C crate  B barrel  K concrete block  V car  T tires  P pallet
 //   D drum  M electrical cabinet  A ammo box  t table  c chair
 //   1 SMG  2 shotgun  3 rifle  4 sniper (weapon pickups)
-//   h medkit  r armor  x damage  s speed  f rapid fire (powerups)
+//   h medkit  r armor  x damage  s speed  f rapid fire  n night vision (powerups)
 //   Y bush (no collision; hides whoever keeps quiet in it)
 
 export const CELL = 1.5;
@@ -105,7 +105,7 @@ export const ARENAS: ArenaInfo[] = [
     '#...D.......M.......#',
     '#...........#...L...#',
     '#####..##########..##',
-    '#..........#........#',
+    '#....n.....#........#',
     '#.L..AA....#..K.....#',
     '#..........#.....1...',
     '#..K.......D.........',
@@ -128,7 +128,7 @@ const PROP_CHARS: Record<string, PropKind> = {
   D: 'drum', M: 'cabinet', A: 'ammo', t: 'table', c: 'chair',
 };
 const WEAPON_CHARS: Record<string, WeaponId> = { '1': 'smg', '2': 'shotgun', '3': 'rifle', '4': 'sniper' };
-const POWERUP_CHARS: Record<string, PowerupKind> = { h: 'medkit', r: 'armor', x: 'damage', s: 'speed', f: 'rapid' };
+const POWERUP_CHARS: Record<string, PowerupKind> = { h: 'medkit', r: 'armor', x: 'damage', s: 'speed', f: 'rapid', n: 'nv' };
 
 /** Expands the mirrored rows into the full grid. */
 export function arenaGrid(info: ArenaInfo): string[] {

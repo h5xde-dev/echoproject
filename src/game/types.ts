@@ -96,7 +96,7 @@ export interface PickupDef {
   room: number;
 }
 
-export type PowerupKind = 'medkit' | 'armor' | 'damage' | 'speed' | 'rapid';
+export type PowerupKind = 'medkit' | 'armor' | 'damage' | 'speed' | 'rapid' | 'nv';
 
 export interface PowerupDef {
   id: number;
@@ -201,6 +201,8 @@ export interface Buffs {
   damage: number;
   speed: number;
   rapid: number;
+  /** Night vision: full sight range without the flashlight. */
+  nv: number;
 }
 
 export interface Actor {

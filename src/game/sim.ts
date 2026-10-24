@@ -261,7 +261,7 @@ export class Sim {
       money: CONFIG.comp.startMoney,
       tier: 0,
       tierKills: 0,
-      buffs: { damage: 0, speed: 0, rapid: 0 },
+      buffs: { damage: 0, speed: 0, rapid: 0, nv: 0 },
       ai: isPlayer ? null : makeAi(),
       slot: 0,
       shotSeq: 0,
@@ -570,6 +570,7 @@ export class Sim {
     const b = actor.buffs;
     b.damage = Math.max(0, b.damage - dt);
     b.rapid = Math.max(0, b.rapid - dt);
+    b.nv = Math.max(0, b.nv - dt);
     b.speed = Math.max(0, b.speed - dt);
     this.applySpeed(actor);
 
@@ -753,6 +754,9 @@ export class Sim {
         return true;
       case 'rapid':
         actor.buffs.rapid = P.rapidTime;
+        return true;
+      case 'nv':
+        actor.buffs.nv = P.nvTime;
         return true;
     }
   }
@@ -1314,7 +1318,8 @@ export class Sim {
       if (!this.world.lineOfSight(g.x, g.z, a.x, a.z, this.scratch)) continue;
       const facing = Math.cos(Math.atan2(g.z - a.z, g.x - a.x) - a.ang);
       const look = F.behind + (1 - F.behind) * clamp((facing + 0.2) / 1.2, 0, 1);
-      a.blind = Math.max(a.blind, F.maxBlind * (1 - (d / F.radius) * 0.6) * look);
+      const amp = a.buffs.nv > 0 ? CONFIG.powerups.nvBlindMul : 1;
+      a.blind = Math.max(a.blind, F.maxBlind * (1 - (d / F.radius) * 0.6) * look * amp);
       if (a.ai) a.ai.awareness = 0;
     }
     this.noises.push({ x: g.x, z: g.z, radius: 22, time: this.time, ownerId: g.ownerId });
@@ -1555,7 +1560,7 @@ export class Sim {
     actor.vx = 0;
     actor.vz = 0;
     actor.armor = 0;
-    actor.buffs.damage = actor.buffs.speed = actor.buffs.rapid = 0;
+    actor.buffs.damage = actor.buffs.speed = actor.buffs.rapid = actor.buffs.nv = 0;
     if (this.arena) {
       actor.hp = actor.maxHp;
       actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
@@ -1727,7 +1732,7 @@ export class Sim {
       a.vx = a.vz = 0;
       a.hp = a.maxHp;
       a.respawnT = 0;
-      a.buffs.damage = a.buffs.speed = a.buffs.rapid = 0;
+      a.buffs.damage = a.buffs.speed = a.buffs.rapid = a.buffs.nv = 0;
       if (!survived) {
         a.weapons = ['pistol'];
         a.armor = 0;

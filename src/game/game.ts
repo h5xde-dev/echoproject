@@ -73,6 +73,7 @@ const POWERUP_TEXT: Record<PowerupKind, string> = {
   damage: 'Усиленный урон',
   speed: 'Скорость',
   rapid: 'Скорострельность',
+  nv: 'Ночное зрение',
 };
 
 /** Error below this is smoothed out; above it the player snaps (teleport). */
@@ -1108,7 +1109,7 @@ export class Game {
         alive: b.alive,
         weapon: b.weapon,
         weapons: b.weapons ?? [b.weapon],
-        buffs: b.buffs ?? { damage: 0, speed: 0, rapid: 0 },
+        buffs: b.buffs ?? { damage: 0, speed: 0, rapid: 0, nv: 0 },
         shield: b.shield ?? 0,
         grenades: b.grenades ?? 0,
         money: b.money ?? 0,
@@ -1191,11 +1192,11 @@ export class Game {
    * Flashlights to draw (local first: the renderer pairs spotlights by
    * index). In deathmatch only the local player's sight counts as vision.
    */
-  private playerLights(): { x: number; z: number; ang: number; flashOn: boolean; alive: boolean }[] {
-    const out: { id: number; x: number; z: number; ang: number; flashOn: boolean; alive: boolean }[] = [];
+  private playerLights(): { x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean }[] {
+    const out: { id: number; x: number; z: number; ang: number; flashOn: boolean; alive: boolean; nv: boolean }[] = [];
     for (const d of this.display.values()) {
       if (d.kind !== 'player') continue;
-      out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive });
+      out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive, nv: d.buffs.nv > 0 });
     }
     out.sort((a, b) => (a.id === this.localId ? 0 : 1) - (b.id === this.localId ? 0 : 1));
     return out.slice(0, 2);
@@ -1262,6 +1263,8 @@ export class Game {
     this.renderer.setCameraTarget(cameraTarget.x, cameraTarget.z);
 
     if (!self) return;
+
+    this.renderer.setNightVision(self.alive && self.buffs.nv > 0);
 
     const def = WEAPONS[self.weapon];
     const players = [...this.display.values()]
