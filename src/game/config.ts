@@ -222,6 +222,20 @@ export const CONFIG = {
     hpGrowth: 0.12,
   },
 
+  /** Co-op with two or more players: knocked down instead of killed. */
+  down: {
+    /** Health of a downed player: the next burst finishes them. */
+    hp: 30,
+    bleedOut: 20,
+    /** Seconds a teammate holds E next to them. */
+    reviveTime: 3,
+    reach: 1.6,
+    /** Crawling speed factor. */
+    crawl: 0.22,
+    /** Share of health they get up with. */
+    reviveHp: 0.3,
+  },
+
   /** Bomb planting (rounds and money as in comp). */
   bomb: {
     plantTime: 3,

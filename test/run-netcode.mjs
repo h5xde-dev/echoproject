@@ -187,6 +187,35 @@ check('start room is safe', health.inStart === 0, `guards in start room=${health
 // Counted dead or alive: stray shots and barrels may already have hit them.
 check('next room is manned when its door opens', health.spawned > 0, `guards spawned=${health.spawned}`);
 
+// Co-op downed state over the network: the client goes down and sees it,
+// the host holds E next to them and gets them up.
+await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const client = gameA.sim.actors.get(gameB.localId);
+  const host = gameA.sim.actors.get(gameA.localId);
+  client.shield = 0;
+  client.armor = 0;
+  gameA.sim.damageActor(client, 999, 1000);
+  window.__pinRevive = setInterval(() => { host.x = client.x + 0.7; host.z = client.z; }, 5);
+});
+const sawDown = await page
+  .waitForFunction(() => window.__net.gameB.display.get(window.__net.gameB.localId)?.downed === true, null, { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+check('the client sees itself downed', sawDown);
+await page.keyboard.down('KeyE');
+const revived = await page
+  .waitForFunction(() => {
+    const { gameA, gameB } = window.__net;
+    const c = gameA.sim.actors.get(gameB.localId);
+    return c.alive && !c.downed;
+  }, null, { timeout: 20000 })
+  .then(() => true)
+  .catch(() => false);
+await page.keyboard.up('KeyE');
+await page.evaluate(() => clearInterval(window.__pinRevive));
+check('the host revives the client by holding E', revived);
+
 // Lobby: a hosted room starts as a warm-up; the client says ready, the host
 // starts the match on a fresh map with everyone in it.
 const lobbyBefore = await page.evaluate(() => {

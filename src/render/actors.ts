@@ -24,6 +24,8 @@ export interface ActorView {
   shield?: number;
   /** Crouched soldiers are drawn lower (others can tell they are sneaking). */
   crouched?: boolean;
+  /** Co-op: knocked down, drawn low to the ground. */
+  downed?: boolean;
 }
 
 interface HoldSpec {
@@ -208,7 +210,8 @@ export class ActorVisual {
   private crouch = 0;
 
   update(actor: ActorView, dt: number): void {
-    this.crouch += ((actor.crouched && actor.alive ? 1 : 0) - this.crouch) * Math.min(1, dt * 10);
+    const low = !actor.alive ? 0 : actor.downed ? 2.5 : actor.crouched ? 1 : 0;
+    this.crouch += (low - this.crouch) * Math.min(1, dt * 10);
     this.bodyGroup.scale.y = 1 - 0.22 * this.crouch;
     // Velocity from positions works for local, simulated and interpolated actors.
     if (Number.isNaN(this.prevX) || dt <= 0) {

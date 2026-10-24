@@ -433,10 +433,10 @@ for (const info of ARENAS) {
   b.hp = 1;
   b.shield = 0;
   (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(b, 50, g1.id);
-  check(!b.alive, 'a player can fall mid-wave');
+  check(b.alive && b.downed, 'a player can go down mid-wave');
   for (const g of guards()) (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(g, 999, a.id);
   s.step(dt);
-  check(s.wavePhase === 'break' && b.alive, 'clearing the wave brings the fallen back');
+  check(s.wavePhase === 'break' && b.alive && !b.downed, 'clearing the wave gets the downed back up');
   for (let t = 0; t < CONFIG.waves.breakTime + 0.1; t += dt) s.step(dt);
   const w2 = guards();
   check(s.wave === 2 && w2.length === CONFIG.waves.base + CONFIG.waves.perWave && w2[0].maxHp > hp1, `wave 2: ${w2.length} tougher guards`);
@@ -628,6 +628,66 @@ for (const info of ARENAS) {
   const easy = spotTime('easy');
   const hard = spotTime('hard');
   check(hard < easy, `hard guards spot you sooner: ${hard.toFixed(2)} s vs ${easy.toFixed(2)} s on easy`);
+}
+
+// Co-op downed state and revive.
+{
+  const make = () => {
+    const s = new Sim(generateMap(5555));
+    const a = s.addPlayer('local', 'альфа', 1);
+    const b = s.addPlayer('c2', 'браво', 2);
+    for (const p of [a, b]) p.shield = 0;
+    return { s, a, b };
+  };
+  const dt = CONFIG.tickDt;
+  const dmg = (s: Sim, who: unknown, amount: number) =>
+    (s as unknown as { damageActor(x: unknown, d: number, by: number): void }).damageActor(who, amount, 1000);
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+
+  {
+    const { s, a, b } = make();
+    dmg(s, a, 999);
+    check(a.alive && a.downed, 'co-op: lethal damage knocks you down instead of killing');
+    const hostile = (s as unknown as { hostileTo(x: unknown, y: unknown): boolean }).hostileTo.bind(s);
+    const guard = { ...a, id: 999, kind: 'enemy' as const, downed: false, alive: true };
+    check(!hostile(guard, a) && hostile(guard, b), 'guards leave the downed alone and go for who still fights');
+    // Crawl: much slower than running.
+    a.vx = a.vz = 0;
+    for (let i = 0; i < 60; i++) s.applyInput(a, { ...input, moveX: 1 });
+    check(Math.hypot(a.vx, a.vz) < CONFIG.player.maxSpeed * 0.3, `downed players crawl (${Math.hypot(a.vx, a.vz).toFixed(1)} m/s)`);
+    // A teammate holds E next to them.
+    b.x = a.x + 0.8;
+    b.z = a.z;
+    for (let t = 0; t < CONFIG.down.reviveTime + 0.1; t += dt) {
+      s.applyInput(b, { ...input, use: true });
+      b.x = a.x + 0.8;
+      b.z = a.z;
+      s.step(dt);
+    }
+    check(!a.downed && a.alive && Math.abs(a.hp - a.maxHp * CONFIG.down.reviveHp) < 1, `a teammate gets them up (hp ${a.hp.toFixed(0)})`);
+  }
+  {
+    const { s, a, b } = make();
+    b.x = b.z = -500;
+    dmg(s, a, 999);
+    for (let t = 0; t < CONFIG.down.bleedOut + 0.2; t += dt) s.step(dt);
+    check(!a.alive && !a.downed, 'left alone, a downed player bleeds out');
+  }
+  {
+    const { s, a, b } = make();
+    dmg(s, a, 999);
+    dmg(s, b, 999);
+    s.step(dt);
+    const over = s.drainEvents().find((e) => e.type === 'gameOver');
+    check(!!over && s.matchOver, `nobody standing ends the run: ${over?.text ?? '—'}`);
+  }
+  {
+    const s = new Sim(generateMap(5555));
+    const a = s.addPlayer('local', 'соло', 1);
+    a.shield = 0;
+    dmg(s, a, 999);
+    check(!a.alive && !a.downed, 'solo co-op: no one to revive you, so no downed state');
+  }
 }
 
 out.push(`${failures} failures`);

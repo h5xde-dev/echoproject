@@ -282,6 +282,14 @@ export interface Actor {
   useT: number;
   /** Seconds until this player may place another team marker. */
   markCd: number;
+  /** Co-op: knocked down, crawling, waiting for a teammate (see CONFIG.down). */
+  downed: boolean;
+  /** Seconds left before a downed player bleeds out. */
+  downT: number;
+  /** Seconds a teammate has spent reviving them. */
+  reviveT: number;
+  /** Who knocked them down (credited if they bleed out). */
+  downBy: number;
 }
 
 /** Bomb planting: the one bomb of a round. */
@@ -370,6 +378,8 @@ export interface GameEvent {
     | 'flag'
     | 'bomb'
     | 'mark'
+    | 'down'
+    | 'revive'
     | 'smoke'
     | 'flash'
     | 'impact'

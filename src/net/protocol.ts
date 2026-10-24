@@ -35,6 +35,10 @@ export interface ActorState {
   useT?: number;
   /** Crouched: drawn lower for everyone. */
   crouched?: boolean;
+  /** Co-op: knocked down, bleed-out clock, revive progress. */
+  downed?: boolean;
+  downT?: number;
+  reviveT?: number;
 }
 
 export interface BulletState {

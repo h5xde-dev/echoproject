@@ -56,6 +56,9 @@ export interface DisplayActor {
   carrying: number;
   useT: number;
   crouched: boolean;
+  downed: boolean;
+  downT: number;
+  reviveT: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -495,6 +498,9 @@ export class Game {
         carrying: a.carrying,
         useT: a.useT,
         crouched: a.gait === 'crouch',
+        downed: a.downed,
+        downT: a.downT,
+        reviveT: a.reviveT,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -634,8 +640,9 @@ export class Game {
       mirror.vz = 0;
       mirror.alive = local.alive;
       mirror.buffs = { ...local.buffs };
-      // Carrying a flag slows you: prediction has to know.
+      // Carrying a flag or crawling downed slows you: prediction has to know.
       mirror.carrying = local.carrying ?? -1;
+      mirror.downed = local.downed ?? false;
       this.sim.applySpeed(mirror);
       for (const p of this.pendingInputs) {
         mirror.gait = p.input.gait ?? 'run';
@@ -847,6 +854,15 @@ export class Game {
         this.audio.tone(1300, 1700, 0.12, 0.05, 'triangle');
         break;
       }
+      case 'down': {
+        const mine = event.ownerId === this.localId;
+        this.hud.message(mine ? 'Вы ранены — союзник может поднять вас (E)' : `${this.nameOf(event.ownerId)} ранен — поднимите (зажать E)`, 'warn');
+        break;
+      }
+      case 'revive':
+        this.hud.message(event.ownerId === this.localId ? 'Вас подняли' : `${this.nameOf(event.ownerId)} снова в строю`, 'good');
+        this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.powerup());
+        break;
       case 'bomb': {
         const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
         const site = event.id === '1' ? 'B' : 'A';
@@ -1252,6 +1268,9 @@ export class Game {
           useT: a.useT,
           // The local player's own stance is known now, not a tick later.
           crouched: isLocal ? this.frameGait === 'crouch' : a.gait === 'crouch',
+          downed: a.downed,
+          downT: a.downT,
+          reviveT: a.reviveT,
           isLocal,
           moving: a.moving,
         });
@@ -1371,6 +1390,9 @@ export class Game {
         carrying: b.carrying ?? -1,
         useT: b.useT ?? 0,
         crouched: b.id === this.localId ? this.frameGait === 'crouch' : (b.crouched ?? false),
+        downed: b.downed ?? false,
+        downT: b.downT ?? 0,
+        reviveT: b.reviveT ?? 0,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1439,6 +1461,23 @@ export class Game {
       if (d.id !== this.localId && d.alive && !this.isHostile(d.id)) return d;
     }
     return null;
+  }
+
+  /** Co-op: what a downed player, or someone next to one, should do. */
+  private downedPrompt(self: DisplayActor | null): string {
+    if (!self?.alive) return '';
+    const D = CONFIG.down;
+    if (self.downed) {
+      return self.reviveT > 0
+        ? `ВАС ПОДНИМАЮТ · ${Math.round((self.reviveT / D.reviveTime) * 100)}%`
+        : `ВЫ РАНЕНЫ · ЖДИТЕ ПОМОЩИ · ${Math.ceil(self.downT)} С`;
+    }
+    for (const d of this.display.values()) {
+      if (d.id === this.localId || !d.alive || !d.downed || this.isHostile(d.id)) continue;
+      if (Math.hypot(d.x - self.x, d.z - self.z) > D.reach + 1) continue;
+      return d.reviveT > 0 ? `ПОДНИМАЕТЕ · ${Math.round((d.reviveT / D.reviveTime) * 100)}%` : `ЗАЖМИТЕ E — ПОДНЯТЬ ${d.name.toUpperCase()}`;
+    }
+    return '';
   }
 
   /** Minimap noise radar: an unseen enemy's shot or step leaves a blip. */
@@ -1566,7 +1605,11 @@ export class Game {
     const watched = this.spectateTarget(self);
     const cameraTarget = watched ?? self ?? { x: this.map.spawnX, z: this.map.spawnZ };
     this.renderer.setCameraTarget(cameraTarget.x, cameraTarget.z);
-    this.hud.setSpectating(watched && watched.id !== this.localId ? `${watched.id === this.spectate?.killer ? 'ВАС УБИЛ' : 'НАБЛЮДЕНИЕ'}: ${watched.name.toUpperCase()}` : '');
+    this.hud.setSpectating(
+      watched && watched.id !== this.localId
+        ? `${watched.id === this.spectate?.killer ? 'ВАС УБИЛ' : 'НАБЛЮДЕНИЕ'}: ${watched.name.toUpperCase()}`
+        : this.downedPrompt(self),
+    );
 
     if (!self) return;
 

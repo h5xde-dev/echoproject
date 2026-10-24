@@ -365,6 +365,10 @@ export class Sim {
       using: false,
       useT: 0,
       markCd: 0,
+      downed: false,
+      downT: 0,
+      reviveT: 0,
+      downBy: -1,
     };
   }
 
@@ -516,6 +520,12 @@ export class Sim {
 
     actor.ang = input.aim;
     actor.gait = input.gait ?? 'run';
+    // Downed: crawl and look around, nothing else.
+    if (actor.downed) {
+      actor.using = false;
+      this.moveActor(actor, input.moveX, input.moveZ, input.dt);
+      return;
+    }
     actor.using = !!input.use;
     // Markers go to everyone; clients show them to the marker's allies only.
     if (input.mark && actor.markCd <= 0) {
@@ -660,6 +670,7 @@ export class Sim {
     this.updateBullets(dt);
     this.updateGrenades(dt);
     this.updateSmokes(dt);
+    this.updateDowned(dt);
     this.updateProps(dt);
     this.updateItems(dt);
     if (this.mode === 'coop') this.updateRoomProgress();
@@ -738,6 +749,66 @@ export class Sim {
     return null;
   }
 
+  /** Co-op players go down rather than die, when someone could pick them up. */
+  private canGoDown(actor: Actor): boolean {
+    if (actor.kind !== 'player' || actor.downed || !isCoopMode(this.mode)) return false;
+    let players = 0;
+    for (const a of this.actors.values()) if (a.kind === 'player') players++;
+    return players >= 2;
+  }
+
+  private knockDown(actor: Actor, by: number): void {
+    actor.downed = true;
+    actor.hp = CONFIG.down.hp;
+    actor.downT = CONFIG.down.bleedOut;
+    actor.reviveT = 0;
+    actor.downBy = by;
+    actor.reloading = false;
+    actor.using = false;
+    this.dropFlag(actor);
+    this.events.push({ type: 'down', ownerId: actor.id, by, x: actor.x, z: actor.z });
+  }
+
+  /**
+   * Co-op: a teammate holding use next to a downed player gets them up; left
+   * alone they bleed out. Nobody left standing ends the run.
+   */
+  private updateDowned(dt: number): void {
+    if (!isCoopMode(this.mode) || this.matchOver) return;
+    const D = CONFIG.down;
+    const players = [...this.actors.values()].filter((a) => a.kind === 'player');
+    for (const p of players) {
+      if (!p.alive || !p.downed) continue;
+      const helper = players.find(
+        (h) => h !== p && h.alive && !h.downed && h.using && dist(h.x, h.z, p.x, p.z) < D.reach,
+      );
+      if (helper) {
+        p.reviveT += dt;
+        helper.useT = p.reviveT;
+        if (p.reviveT >= D.reviveTime) {
+          p.downed = false;
+          p.hp = p.maxHp * D.reviveHp;
+          p.shield = 1;
+          p.reviveT = 0;
+          helper.useT = 0;
+          this.events.push({ type: 'revive', ownerId: p.id, by: helper.id, x: p.x, z: p.z });
+        }
+        continue;
+      }
+      p.reviveT = 0;
+      p.downT -= dt;
+      if (p.downT <= 0) {
+        p.shield = 0;
+        p.armor = 0;
+        this.damageActor(p, 9999, p.downBy);
+      }
+    }
+    if (players.length >= 2 && players.some((p) => p.downed) && !players.some((p) => p.alive && !p.downed)) {
+      this.matchOver = true;
+      this.events.push({ type: 'gameOver', text: this.mode === 'waves' ? `Отряд погиб на волне ${this.wave}` : 'Отряд погиб: некому было поднять раненых' });
+    }
+  }
+
   /** Hidden while in a bush and quiet (not running, not just fired). */
   private updateConcealment(actor: Actor): void {
     const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
@@ -781,7 +852,11 @@ export class Sim {
   moveActor(actor: Actor, moveX: number, moveZ: number, dt: number): void {
     const hasInput = Math.abs(moveX) + Math.abs(moveZ) > 0.01;
     if (hasInput) {
-      const speed = actor.speed * CONFIG.gait.speed[actor.gait] * (actor.carrying >= 0 ? CONFIG.ctf.carrySpeed : 1);
+      const speed =
+        actor.speed *
+        CONFIG.gait.speed[actor.gait] *
+        (actor.carrying >= 0 ? CONFIG.ctf.carrySpeed : 1) *
+        (actor.downed ? CONFIG.down.crawl : 1);
       const tvx = moveX * speed;
       const tvz = moveZ * speed;
       const maxDv = actor.accel * dt;
@@ -975,8 +1050,14 @@ export class Sim {
       return;
     }
 
+    if (this.canGoDown(actor)) {
+      this.knockDown(actor, sourceId);
+      return;
+    }
+
     actor.hp = 0;
     actor.alive = false;
+    actor.downed = false;
     actor.vx = 0;
     actor.vz = 0;
     actor.reloading = false;
@@ -1134,7 +1215,8 @@ export class Sim {
 
   /** Who this actor fights: co-op guards hunt players, arena bots everyone. */
   private hostileTo(actor: Actor, other: Actor): boolean {
-    if (other === actor || !other.alive) return false;
+    // Downed players are left alone: the bots turn to whoever still fights.
+    if (other === actor || !other.alive || other.downed) return false;
     if (this.teams) return other.team !== actor.team;
     if (this.arena && this.mode !== 'waves') return true;
     return actor.kind === 'enemy' ? other.kind === 'player' : other.kind === 'enemy';
@@ -1839,6 +1921,7 @@ export class Sim {
     actor.armor = 0;
     actor.buffs.damage = actor.buffs.speed = actor.buffs.rapid = actor.buffs.nv = 0;
     actor.carrying = -1;
+    actor.downed = false;
     if (this.arena) {
       actor.hp = actor.maxHp;
       actor.weapons = this.mode === 'gun' ? [] : ['pistol'];
@@ -2043,7 +2126,14 @@ export class Sim {
     if (left) return;
     this.wavePhase = 'break';
     this.waveT = CONFIG.waves.breakTime;
-    for (const p of players) if (!p.alive) this.revive(p);
+    for (const p of players) {
+      if (!p.alive) this.revive(p);
+      else if (p.downed) {
+        // Wave over: the downed get up too.
+        p.downed = false;
+        p.hp = p.maxHp * CONFIG.down.reviveHp;
+      }
+    }
     this.events.push({ type: 'wave', text: 'clear', id: String(this.wave) });
   }
 
@@ -2083,6 +2173,7 @@ export class Sim {
   private revive(actor: Actor): void {
     const at = this.findSafeSpawn(actor);
     actor.alive = true;
+    actor.downed = false;
     actor.x = at.x;
     actor.z = at.z;
     actor.vx = actor.vz = 0;
