@@ -1,4 +1,4 @@
-import type { BombState, Buffs, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, EnemyRole, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -39,6 +39,9 @@ export interface ActorState {
   downed?: boolean;
   downT?: number;
   reviveT?: number;
+  /** Guard type (drawn differently) and a sniper's laser when on target. */
+  role?: EnemyRole;
+  aiming?: boolean;
 }
 
 export interface BulletState {

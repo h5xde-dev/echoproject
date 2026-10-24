@@ -26,6 +26,8 @@ export interface ActorView {
   crouched?: boolean;
   /** Co-op: knocked down, drawn low to the ground. */
   downed?: boolean;
+  /** Guard type: heavies are drawn bigger. */
+  role?: string;
 }
 
 interface HoldSpec {
@@ -212,7 +214,8 @@ export class ActorVisual {
   update(actor: ActorView, dt: number): void {
     const low = !actor.alive ? 0 : actor.downed ? 2.5 : actor.crouched ? 1 : 0;
     this.crouch += (low - this.crouch) * Math.min(1, dt * 10);
-    this.bodyGroup.scale.y = 1 - 0.22 * this.crouch;
+    const big = actor.role === 'heavy' ? 1.15 : 1;
+    this.bodyGroup.scale.set(big, big * (1 - 0.22 * this.crouch), big);
     // Velocity from positions works for local, simulated and interpolated actors.
     if (Number.isNaN(this.prevX) || dt <= 0) {
       this.prevX = actor.x;

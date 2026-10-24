@@ -11,6 +11,7 @@ import type {
   AiState,
   BombState,
   Difficulty,
+  EnemyRole,
   Bullet,
   FlagState,
   Gait,
@@ -369,6 +370,7 @@ export class Sim {
       downT: 0,
       reviveT: 0,
       downBy: -1,
+      role: 'grunt',
     };
   }
 
@@ -493,7 +495,37 @@ export class Sim {
       actor.ai!.hasLight = rng.next() < 0.4;
       actor.grenades = rng.next() < 0.3 + room.index * 0.05 ? 1 : 0;
       this.equip(actor, weapon);
+      this.giveRole(actor, this.pickRole(room.index, rng));
       this.actors.set(id, actor);
+    }
+  }
+
+  /** A guard type for room / wave `level`: specialists get likelier deeper in. */
+  private pickRole(level: number, rng: Rng): EnemyRole {
+    let roll = rng.next();
+    for (const role of ['heavy', 'sniper', 'scout'] as const) {
+      const R = CONFIG.roles[role];
+      const p = Math.min(R.max, R.base + R.perLevel * level);
+      if (roll < p) return role;
+      roll -= p;
+    }
+    return 'grunt';
+  }
+
+  /** Kit and habits of a guard type (health, armor, weapon, light, gait). */
+  private giveRole(actor: Actor, role: EnemyRole): void {
+    actor.role = role;
+    if (role === 'grunt') return;
+    const R = CONFIG.roles[role];
+    actor.maxHp = actor.hp = Math.round(actor.maxHp * R.hp);
+    actor.armor = R.armor;
+    if (role === 'heavy') this.equip(actor, 'shotgun');
+    if (role === 'sniper') this.equip(actor, 'sniper');
+    if (role === 'scout') {
+      // No light, quiet feet.
+      actor.ai!.hasLight = false;
+      actor.flashOn = false;
+      actor.gait = 'walk';
     }
   }
 
@@ -842,7 +874,8 @@ export class Sim {
   /** Max speed from the base value and the speed buff (also used by prediction). */
   applySpeed(actor: Actor): void {
     const base = actor.kind === 'player' ? CONFIG.player.maxSpeed : this.arena ? CONFIG.player.maxSpeed * 0.92 : CONFIG.enemy.maxSpeed;
-    actor.speed = base * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1);
+    const role = actor.role === 'grunt' ? 1 : CONFIG.roles[actor.role].speed;
+    actor.speed = base * role * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1);
   }
 
   /**
@@ -1310,7 +1343,9 @@ export class Sim {
       ai.aimT += dt;
       if (!ai.sawTarget) {
         ai.sawTarget = true;
-        ai.reactT = (P.reactMin + this.rng.next() * P.reactRand) * CONFIG.difficulty[this.difficulty].react;
+        // Snipers take longer to settle: their laser gives you a moment.
+        ai.reactT =
+          (P.reactMin + this.rng.next() * P.reactRand) * CONFIG.difficulty[this.difficulty].react * (actor.role === 'sniper' ? 1.8 : 1);
       }
       ai.mode = 'attack';
       ai.lastKnownX = nearest.x;
@@ -1379,7 +1414,16 @@ export class Sim {
         break;
       }
       case 'chase': {
-        move = this.steer(actor, ai.lastKnownX, ai.lastKnownZ, 1.2);
+        // Scouts come round the side rather than straight down the line.
+        let cx = ai.lastKnownX;
+        let cz = ai.lastKnownZ;
+        const away = dist(actor.x, actor.z, cx, cz);
+        if (actor.role === 'scout' && away > 5) {
+          const side = actor.id % 2 === 0 ? 1 : -1;
+          cx += (-(cz - actor.z) / away) * 6 * side;
+          cz += ((ai.lastKnownX - actor.x) / away) * 6 * side;
+        }
+        move = this.steer(actor, cx, cz, 1.2);
         if (move.x !== 0 || move.z !== 0) wantAng = Math.atan2(move.z, move.x);
         if (ai.timer <= 0 || (move.x === 0 && move.z === 0)) {
           ai.mode = 'patrol';
@@ -1391,11 +1435,12 @@ export class Sim {
       case 'attack': {
         wantAng = Math.atan2(ai.targetZ - actor.z, ai.targetX - actor.x);
         if (nearest) {
-          const ideal = Math.min(16, def.falloffStart * 0.8);
+          // Snipers hold far back; heavies close in and never give ground.
+          const ideal = actor.role === 'sniper' ? 22 : actor.role === 'heavy' ? 5 : Math.min(16, def.falloffStart * 0.8);
           const d = nearestD;
           if (d > ideal * 1.25) {
             move = this.steer(actor, nearest.x, nearest.z, ideal);
-          } else if (d < ideal * 0.55) {
+          } else if (d < ideal * 0.55 && actor.role !== 'heavy') {
             move = { x: -Math.cos(wantAng), z: -Math.sin(wantAng) };
           } else {
             // Strafe around the target.
@@ -1807,7 +1852,8 @@ export class Sim {
     // Accuracy settles in over the first second on target.
     const settle = clamp(0.35 + (actor.ai?.aimT ?? 1) * 0.65, 0.35, 1);
     const accuracy = clamp(0.42 - dist(actor.x, actor.z, target.x, target.z) * 0.02, 0.06, 0.36) * settle;
-    const spread = def.spread * (1 + (1 - accuracy) * 10) * CONFIG.difficulty[this.difficulty].spread;
+    const spread =
+      def.spread * (1 + (1 - accuracy) * 10) * CONFIG.difficulty[this.difficulty].spread * (actor.role === 'sniper' ? 0.45 : 1);
     const shotSeq = actor.shotSeq++;
     const srng = new Rng(shotSeed(actor.id, shotSeq, this.map.seed));
     const pellets: { dx: number; dz: number; speed: number }[] = [];
@@ -2156,6 +2202,7 @@ export class Sim {
       guard.ai!.hasLight = this.rng.next() < 0.5;
       guard.flashOn = guard.ai!.hasLight;
       guard.grenades = this.wave >= 3 && this.rng.next() < 0.3 ? 1 : 0;
+      this.giveRole(guard, this.pickRole(this.wave, this.rng));
       // They come looking: straight for where the squad was last heard.
       const target = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
       if (target) {

@@ -222,6 +222,16 @@ export const CONFIG = {
     hpGrowth: 0.12,
   },
 
+  /**
+   * Guard types. Chance grows with the room / wave number n:
+   * base + perLevel * n, capped. Grunts fill the rest.
+   */
+  roles: {
+    heavy: { base: 0.06, perLevel: 0.035, max: 0.25, hp: 2.2, armor: 60, speed: 0.72 },
+    sniper: { base: 0.04, perLevel: 0.03, max: 0.18, hp: 0.85, armor: 0, speed: 0.95 },
+    scout: { base: 0.08, perLevel: 0.03, max: 0.22, hp: 0.9, armor: 0, speed: 1.1 },
+  },
+
   /** Co-op with two or more players: knocked down instead of killed. */
   down: {
     /** Health of a downed player: the next burst finishes them. */

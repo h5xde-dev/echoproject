@@ -427,7 +427,9 @@ for (const info of ARENAS) {
   const hostile = (s as unknown as { hostileTo(x: unknown, y: unknown): boolean }).hostileTo.bind(s);
   const [g1, g2] = guards();
   check(hostile(g1, a) && !hostile(g1, g2) && !hostile(a, b), 'guards hunt players, not each other; players are allies');
-  const hp1 = g1.maxHp;
+  // Health without the guard type's own factor: what the wave itself gives.
+  const baseHp = (g: { maxHp: number; role: string }) => g.maxHp / (g.role === 'grunt' ? 1 : CONFIG.roles[g.role as 'heavy'].hp);
+  const hp1 = baseHp(g1);
 
   // One player down, the rest of the wave cleared: the fallen one is back.
   b.hp = 1;
@@ -439,7 +441,7 @@ for (const info of ARENAS) {
   check(s.wavePhase === 'break' && b.alive && !b.downed, 'clearing the wave gets the downed back up');
   for (let t = 0; t < CONFIG.waves.breakTime + 0.1; t += dt) s.step(dt);
   const w2 = guards();
-  check(s.wave === 2 && w2.length === CONFIG.waves.base + CONFIG.waves.perWave && w2[0].maxHp > hp1, `wave 2: ${w2.length} tougher guards`);
+  check(s.wave === 2 && w2.length === CONFIG.waves.base + CONFIG.waves.perWave && baseHp(w2[0]) > hp1, `wave 2: ${w2.length} tougher guards`);
 
   // Everyone down at once: the run is over.
   s.drainEvents();
@@ -688,6 +690,39 @@ for (const info of ARENAS) {
     dmg(s, a, 999);
     check(!a.alive && !a.downed, 'solo co-op: no one to revive you, so no downed state');
   }
+}
+
+// Guard types.
+{
+  const s = new Sim(generateMap(777));
+  const priv = s as unknown as { pickRole(level: number, rng: { next(): number }): string; giveRole(a: unknown, r: string): void };
+  let seed = 1;
+  const rng = { next: () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648) };
+  const share = (level: number) => {
+    const n = 2000;
+    let special = 0;
+    for (let i = 0; i < n; i++) if (priv.pickRole(level, rng) !== 'grunt') special++;
+    return special / n;
+  };
+  const early = share(1);
+  const late = share(7);
+  check(early < late && late > 0.4, `specialist guards grow deeper in: ${(early * 100).toFixed(0)}% → ${(late * 100).toFixed(0)}%`);
+
+  type heavyType = ReturnType<typeof s.addPlayer>;
+  let nextId = 5000;
+  const make = (role: string) => {
+    const g = (s as unknown as { newActor(id: number, k: string, n: string, x: number, z: number): heavyType }).newActor(nextId++, 'enemy', role, 0, 0);
+    priv.giveRole(g, role);
+    s.applySpeed(g);
+    return g;
+  };
+  const grunt = make('grunt');
+  const heavy = make('heavy');
+  const sniper = make('sniper');
+  const scout = make('scout');
+  check(heavy.maxHp > grunt.maxHp * 2 && heavy.armor > 0 && heavy.weapon === 'shotgun' && heavy.speed < grunt.speed, 'heavy: tough, armoured, shotgun, slow');
+  check(sniper.weapon === 'sniper', 'sniper carries a sniper rifle');
+  check(!scout.flashOn && scout.gait === 'walk' && !scout.ai!.hasLight, 'scout: no light, quiet feet');
 }
 
 out.push(`${failures} failures`);

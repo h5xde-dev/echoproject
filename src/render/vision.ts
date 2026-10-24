@@ -211,7 +211,7 @@ export class Beam {
 }
 
 /** Distance along the ray to an axis-aligned box, or -1. Origin inside -> -1. */
-function rayBox(ox: number, oz: number, dx: number, dz: number, b: StaticBody): number {
+export function rayBox(ox: number, oz: number, dx: number, dz: number, b: StaticBody): number {
   const minX = b.cx - b.hw;
   const maxX = b.cx + b.hw;
   const minZ = b.cz - b.hh;

@@ -14,7 +14,7 @@ import { assets } from './assets';
 import { Decals, Ghosts, Particles, Shockwaves, SoundPings } from './fx';
 import { makeBarrelTexture, makeFloorTexture, makeGlowTexture, makeGrassTexture, makeWallTexture } from './textures';
 import { setRagdollWalls } from './ragdoll';
-import { Beam, Viewer, VISION, VISION_SHADER } from './vision';
+import { Beam, VISION, VISION_SHADER, Viewer, rayBox } from './vision';
 
 // Frame: scene -> vision darkening (mask of what the squad can see) -> bloom
 // -> output; then an overlay scene (tracers, sound markers) is drawn on top
@@ -1038,6 +1038,38 @@ export class Renderer {
   shake(amount: number): void {
     this.shakeAmount = Math.min(1.6, this.shakeAmount + amount * this.shakeScale);
   }
+
+  /** Sniper lasers: thin red lines from the muzzle to the first wall. */
+  syncLasers(lasers: { x: number; z: number; ang: number }[]): void {
+    while (this.laserMeshes.length < lasers.length) {
+      const geo = new THREE.BoxGeometry(1, 0.03, 0.03);
+      geo.translate(0.5, 0, 0);
+      const mesh = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.75, depthTest: false, toneMapped: false }),
+      );
+      this.overlay.add(mesh);
+      this.laserMeshes.push(mesh);
+    }
+    this.laserMeshes.forEach((m, i) => {
+      const l = lasers[i];
+      m.visible = !!l && !!this.map;
+      if (!l || !this.map) return;
+      const dx = Math.cos(l.ang);
+      const dz = Math.sin(l.ang);
+      let len = 40;
+      for (const w of this.map.walls) {
+        const t = rayBox(l.x, l.z, dx, dz, w);
+        if (t >= 0 && t < len) len = t;
+      }
+      m.position.set(l.x + dx * 0.6, GUN_HEIGHT, l.z + dz * 0.6);
+      m.rotation.set(0, -l.ang, 0);
+      m.scale.x = Math.max(0.1, len - 0.6);
+      (m.material as THREE.MeshBasicMaterial).opacity = 0.55 + 0.25 * Math.sin(this.time * 14);
+    });
+  }
+
+  private laserMeshes: THREE.Mesh[] = [];
 
   /** Team marker: a cyan ring and beam above the fog, fading over 4 s. */
   markAt(x: number, z: number): void {

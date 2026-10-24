@@ -158,6 +158,9 @@ export interface MapData {
 
 export type ActorKind = 'player' | 'enemy';
 
+/** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
+export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout';
+
 /** How sharp bots and guards are. */
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
@@ -290,6 +293,7 @@ export interface Actor {
   reviveT: number;
   /** Who knocked them down (credited if they bleed out). */
   downBy: number;
+  role: EnemyRole;
 }
 
 /** Bomb planting: the one bomb of a round. */

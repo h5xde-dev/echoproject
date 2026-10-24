@@ -10,7 +10,7 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, Difficulty, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
+import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 
@@ -59,6 +59,8 @@ export interface DisplayActor {
   downed: boolean;
   downT: number;
   reviveT: number;
+  role: EnemyRole;
+  aiming: boolean;
   isLocal: boolean;
   moving: boolean;
 }
@@ -74,6 +76,8 @@ interface SnapFrame {
 }
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
+/** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
+const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff };
 /** Team modes: blue and red, for humans and bots alike. */
 const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
@@ -501,6 +505,8 @@ export class Game {
         downed: a.downed,
         downT: a.downT,
         reviveT: a.reviveT,
+        role: a.role,
+        aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -1271,6 +1277,8 @@ export class Game {
           downed: a.downed,
           downT: a.downT,
           reviveT: a.reviveT,
+          role: a.role,
+          aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
           isLocal,
           moving: a.moving,
         });
@@ -1310,6 +1318,10 @@ export class Game {
     const carrier = bomb && bomb.carrier >= 0 ? this.display.get(bomb.carrier) : undefined;
     const shownBomb = !bomb ? null : carrier ? (this.isHostile(carrier.id) ? null : { ...bomb, x: carrier.x, z: carrier.z }) : bomb;
     this.renderer.syncBomb(shownBomb, this.sim.sites);
+    // Snipers on target: a red laser (drawn above the dark — the warning).
+    const lasers: { x: number; z: number; ang: number }[] = [];
+    for (const d of this.display.values()) if (d.alive && d.aiming && this.isHostile(d.id)) lasers.push({ x: d.x, z: d.z, ang: d.ang });
+    this.renderer.syncLasers(lasers);
   }
 
   /**
@@ -1393,6 +1405,8 @@ export class Game {
         downed: b.downed ?? false,
         downT: b.downT ?? 0,
         reviveT: b.reviveT ?? 0,
+        role: b.role ?? 'grunt',
+        aiming: b.aiming ?? false,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1429,7 +1443,7 @@ export class Game {
       const team = this.display.get(id)?.team ?? -1;
       if (team >= 0) return TEAM_COLORS[team];
     }
-    if (id >= 1000) return COLORS.enemy;
+    if (id >= 1000) return ROLE_COLORS[this.display.get(id)?.role ?? 'grunt'];
     return PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length];
   }
 
