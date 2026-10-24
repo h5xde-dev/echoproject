@@ -126,3 +126,42 @@ export function makeBarrelTexture(): THREE.Texture {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+/** Forest floor: dark grass and earth, patchy. */
+export function makeGrassTexture(size = 512): THREE.Texture {
+  const cv = noiseCanvas(size, [58, 78, 42], 0.45, 0x5eed6a55);
+  const ctx = cv.getContext('2d')!;
+  // Bare earth and darker clumps.
+  for (let i = 0; i < 40; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 14 + Math.random() * 46;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const earth = Math.random() < 0.5;
+    g.addColorStop(0, earth ? 'rgba(82,66,42,0.3)' : 'rgba(20,34,14,0.18)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Blades: short strokes.
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 2600; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+    const l = 3 + Math.random() * 5;
+    ctx.strokeStyle = Math.random() < 0.5 ? 'rgba(96,128,64,0.35)' : 'rgba(24,40,18,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}

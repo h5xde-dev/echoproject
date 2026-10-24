@@ -257,6 +257,10 @@ for (const info of ARENAS) {
   check((dvor.bushes?.length ?? 0) >= 10, `Двор has ${dvor.bushes?.length ?? 0} bushes (mirrored)`);
   const yards = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => generateMap(seed * 7919)).filter((m) => m.rooms.some((r) => r.theme === 'yard'));
   check(yards.length > 0 && yards.every((m) => (m.bushes?.length ?? 0) > 0), 'co-op yard rooms grow bushes');
+  const forests = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => generateMap(seed * 104729)).filter((m) => m.rooms.some((r) => r.theme === 'forest'));
+  const inForest = (m: (typeof forests)[number]) =>
+    (m.bushes ?? []).filter((b) => m.rooms.some((r) => r.theme === 'forest' && b.x > r.minX && b.x < r.maxX && b.z > r.minZ && b.z < r.maxZ)).length;
+  check(forests.length > 0 && forests.every((m) => inForest(m) >= 4), `co-op forest rooms are thick with bushes (${forests.map(inForest).join(', ')})`);
 
   const s = new Sim(generateMap(4711));
   const priv = s as unknown as { populateRoom(i: number): void; updateAi(a: unknown, dt: number): void };
@@ -306,6 +310,9 @@ for (const info of ARENAS) {
     s.time = 30;
     for (let i = 0; i < 60; i++) {
       p.concealed = hidden;
+      // Perception at this distance only: the guard may not patrol closer.
+      guard.x = post.x;
+      guard.z = post.z;
       priv.updateAi(guard, dt);
     }
     return guard.ai!.awareness;
@@ -525,7 +532,7 @@ for (const info of ARENAS) {
   check(a.team === 0 && d.team === 1 && s.sites.length === 2, 'bomb: attackers, defenders and two sites');
   const mid = (s.map.minX + s.map.maxX) / 2;
   check(s.sites.every((x) => x.x > mid && s.nav.walkable(x.x, x.z)), 'both sites are walkable, on the defenders\' half');
-  for (const id of ['sklad', 'dvor', 'bunker']) {
+  for (const { id } of ARENAS) {
     const m = new Sim(buildArena(id, 1, 'bomb'));
     const from = m.map.spawns.find((p) => p.x < (m.map.minX + m.map.maxX) / 2)!;
     check(m.sites.every((x) => !!m.nav.find(from.x, from.z, x.x, x.z)), `${id}: both bomb sites reachable from the attackers' spawn`);

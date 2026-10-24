@@ -103,13 +103,20 @@ function drawPreview(): void {
 document.querySelectorAll<HTMLButtonElement>('.mode-card').forEach((btn) => {
   btn.addEventListener('click', () => selectMode((btn.dataset.mode as GameMode) ?? 'coop'));
 });
-document.querySelectorAll<HTMLButtonElement>('.arena-btn').forEach((btn) => {
+// One button per arena, straight from the arena list.
+const arenaList = must<HTMLElement>('.arena-list');
+for (const info of ARENAS) {
+  const btn = document.createElement('button');
+  btn.className = `arena-btn${info.id === arena ? ' active' : ''}`;
+  btn.dataset.arena = info.id;
+  btn.textContent = info.name;
   btn.addEventListener('click', () => {
-    arena = btn.dataset.arena ?? 'sklad';
-    document.querySelectorAll('.arena-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    arena = info.id;
+    arenaList.querySelectorAll('.arena-btn').forEach((b) => b.classList.toggle('active', b === btn));
     drawPreview();
   });
-});
+  arenaList.appendChild(btn);
+}
 fightersRange.addEventListener('input', () => {
   fighters = Number(fightersRange.value);
   fightersValue.textContent = String(fighters);

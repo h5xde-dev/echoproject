@@ -12,7 +12,7 @@ import type { WeaponId } from '../game/weapons';
 import { ActorVisual } from './actors';
 import { assets } from './assets';
 import { Decals, Ghosts, Particles, Shockwaves, SoundPings } from './fx';
-import { makeBarrelTexture, makeFloorTexture, makeGlowTexture, makeWallTexture } from './textures';
+import { makeBarrelTexture, makeFloorTexture, makeGlowTexture, makeGrassTexture, makeWallTexture } from './textures';
 import { setRagdollWalls } from './ragdoll';
 import { Beam, Viewer, VISION, VISION_SHADER } from './vision';
 
@@ -313,9 +313,11 @@ export class Renderer {
     // Walls: one merged mesh with world-scaled UVs; a pale cap on top so the
     // layout reads from above even in the dark.
     const wallTex = assets.textures.wall ?? makeWallTexture(256);
+    // A forest's walls are tree lines: dark green-brown instead of concrete grey.
+    const forest = map.floors.length > 0 && map.floors.every((f) => f.theme === 'forest');
     const wallMat = new THREE.MeshStandardMaterial({
       map: wallTex,
-      color: 0xb4bac4,
+      color: forest ? 0x4a5a38 : 0xb4bac4,
       roughness: 0.88,
       metalness: 0.04,
       vertexColors: true,
@@ -493,7 +495,9 @@ export class Renderer {
         ? assets.textures.floor ?? makeFloorTexture(512)
         : style.tex === 'tiles'
           ? makeTileTexture()
-          : assets.textures.wall ?? makeWallTexture(256);
+          : style.tex === 'grass'
+            ? makeGrassTexture(512)
+            : assets.textures.wall ?? makeWallTexture(256);
     return new THREE.MeshStandardMaterial({
       map,
       normalMap: style.tex === 'asphalt' ? assets.textures.floorNormal ?? null : null,
@@ -1326,7 +1330,8 @@ const LAMP_INTENSITY = 32;
 
 const LONG_PROPS = new Set<PropKind>(['cover', 'car', 'table', 'pallet', 'ammo', 'cabinet']);
 
-const FLOOR_STYLE: Record<RoomTheme, { tile: number; color: number; tex: 'asphalt' | 'concrete' | 'tiles' }> = {
+const FLOOR_STYLE: Record<RoomTheme, { tile: number; color: number; tex: 'asphalt' | 'concrete' | 'tiles' | 'grass' }> = {
+  forest: { tile: 5, color: 0x9cb486, tex: 'grass' },
   yard: { tile: 3.5, color: 0xa4a8ae, tex: 'asphalt' },
   warehouse: { tile: 4, color: 0x9a948a, tex: 'concrete' },
   office: { tile: 2.4, color: 0xb6b8b4, tex: 'tiles' },

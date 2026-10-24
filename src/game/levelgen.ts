@@ -60,6 +60,8 @@ const DRESSING: Record<RoomTheme, [PropKind, number, number][]> = {
   office: [['table', 1, 3], ['chair', 2, 4], ['cabinet', 1, 2], ['crate', 0, 1]],
   yard: [['car', 1, 1], ['tires', 1, 2], ['cover', 1, 2], ['barrel', 0, 2], ['chair', 0, 1]],
   bunker: [['ammo', 2, 3], ['cover', 1, 2], ['crate', 1, 2], ['barrel', 1, 2], ['cabinet', 0, 1]],
+  // Rocks (concrete blocks), a forgotten pallet or two.
+  forest: [['cover', 1, 3], ['pallet', 0, 2], ['drum', 0, 1]],
 };
 
 export const THEME_LAMP: Record<RoomTheme, number> = {
@@ -67,6 +69,8 @@ export const THEME_LAMP: Record<RoomTheme, number> = {
   office: 0xdfe8ff,
   yard: 0x9fb8e0,
   bunker: 0xb0ff9a,
+  // Moonlight through the trees: pale and cold.
+  forest: 0x8fa8c8,
 };
 
 const POWERUP_WEIGHTS: [PowerupKind, number][] = [
@@ -235,7 +239,7 @@ export function generateMap(seed: number): MapData {
 
   // Room themes: the start is always a quiet warehouse, then a shuffled
   // rotation so neighbouring rooms differ.
-  const themeCycle: RoomTheme[] = ['office', 'yard', 'bunker', 'warehouse'];
+  const themeCycle: RoomTheme[] = ['office', 'yard', 'bunker', 'warehouse', 'forest'];
   for (let i = themeCycle.length - 1; i > 0; i--) {
     const j = rng.int(0, i);
     [themeCycle[i], themeCycle[j]] = [themeCycle[j], themeCycle[i]];
@@ -351,10 +355,10 @@ export function generateMap(seed: number): MapData {
       return null;
     };
 
-    // Yards grow bushes to hide in.
-    if (room.theme === 'yard') {
+    // Yards grow bushes to hide in; forests a thicket of them.
+    if (room.theme === 'yard' || room.theme === 'forest') {
       const B = CONFIG.bush;
-      const want = bushRng.int(B.perYardRoom.min, B.perYardRoom.max);
+      const want = room.theme === 'forest' ? bushRng.int(6, 9) : bushRng.int(B.perYardRoom.min, B.perYardRoom.max);
       for (let i = 0, tries = 0; i < want && tries < 30; tries++) {
         const r = bushRng.range(B.radius.min, B.radius.max);
         const x = bushRng.range(room.minX + r + 0.8, room.maxX - r - 0.8);

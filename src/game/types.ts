@@ -14,7 +14,7 @@ export interface StaticBody {
 }
 
 /** Visual and dressing style of a room (or a whole arena). */
-export type RoomTheme = 'warehouse' | 'office' | 'yard' | 'bunker';
+export type RoomTheme = 'warehouse' | 'office' | 'yard' | 'bunker' | 'forest';
 
 export interface RoomDef {
   index: number;
