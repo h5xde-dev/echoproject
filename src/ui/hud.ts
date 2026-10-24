@@ -254,7 +254,8 @@ export class Hud {
     const root = this.hudRoot();
     root.classList.toggle('mode-dm', isArena(mode));
     root.classList.toggle('mode-gun', mode === 'gun');
-    root.classList.toggle('mode-comp', isRoundMode(mode));
+    // Modes with a shop (B): rounds, and waves between waves.
+    root.classList.toggle('mode-comp', isRoundMode(mode) || mode === 'waves');
     if (isArena(mode)) this.roomEl.textContent = `${(title || mode).toUpperCase()} · ${arenaName.toUpperCase()}`;
   }
 
@@ -268,11 +269,11 @@ export class Hud {
   }
 
   /** Competitive shop overlay. */
-  showBuyMenu(open: boolean, money: number, round: RoundState | null): void {
+  showBuyMenu(open: boolean, money: number, round: RoundState | null, waveBreak = 0): void {
     this.shopEl.classList.toggle('visible', open);
     this.hudRoot().classList.toggle('shopping', open);
     if (!open) return;
-    const key = `${money}|${Math.ceil(round?.t ?? 0)}`;
+    const key = `${money}|${Math.ceil(round?.t ?? waveBreak)}`;
     if (key === this.shopKey) return;
     this.shopKey = key;
     const items = SHOP.map((e, i) => {
@@ -504,7 +505,7 @@ export class Hud {
         this.objectiveEl.textContent = !w
           ? ''
           : w.phase === 'break'
-            ? `ВОЛНА ${w.n + 1} ЧЕРЕЗ ${Math.ceil(w.t)} · ОТБИТО ${w.n}`
+            ? `ВОЛНА ${w.n + 1} ЧЕРЕЗ ${Math.ceil(w.t)} · ОТБИТО ${w.n} · МАГАЗИН — B`
             : `ВОЛНА ${w.n} · ВРАГОВ ${w.left}`;
       } else if (isTeamMode(this.mode)) {
         const [blue, red] = state.teamScore;
@@ -584,7 +585,7 @@ export class Hud {
     this.baseSpread += (state.spread - this.baseSpread) * 0.2;
 
     // Under the ammo: grenades, flashlight, money.
-    const money = isRoundMode(this.mode) ? `<span class="money">$${state.money}</span>` : '';
+    const money = isRoundMode(this.mode) || this.mode === 'waves' ? `<span class="money">$${state.money}</span>` : '';
     const kinds: [GrenadeKind, number, string][] = [
       ['frag', state.grenades, 'осколочная'],
       ['smoke', state.smokes, 'дымовая'],

@@ -220,6 +220,11 @@ export const CONFIG = {
     max: 14,
     /** Extra guard health per wave. */
     hpGrowth: 0.12,
+    /** Money: per kill, and to everyone for a cleared wave (shop in the break). */
+    killReward: 200,
+    clearBonus: 400,
+    /** A boss ("Комендант") with every this-many waves. */
+    bossEvery: 5,
   },
 
   /**
@@ -230,6 +235,8 @@ export const CONFIG = {
     heavy: { base: 0.06, perLevel: 0.035, max: 0.25, hp: 2.2, armor: 60, speed: 0.72 },
     sniper: { base: 0.04, perLevel: 0.03, max: 0.18, hp: 0.85, armor: 0, speed: 0.95 },
     scout: { base: 0.08, perLevel: 0.03, max: 0.22, hp: 0.9, armor: 0, speed: 1.1 },
+    /** Waves: every bossEvery-th wave brings one (never rolled at random). */
+    boss: { base: 0, perLevel: 0, max: 0, hp: 6, armor: 100, speed: 0.65 },
   },
 
   /** Co-op room tasks: from room `fromRoom` on, a room has one with this chance. */

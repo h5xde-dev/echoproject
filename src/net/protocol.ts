@@ -73,6 +73,8 @@ export interface WaveState {
   phase: 'break' | 'fight';
   t: number;
   left: number;
+  /** The shop is open (the break). */
+  canBuy?: boolean;
 }
 
 export interface RoundState {

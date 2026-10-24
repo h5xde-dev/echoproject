@@ -785,6 +785,28 @@ for (const info of ARENAS) {
   }
 }
 
+// Waves: money, the shop in the break, a boss every few waves.
+{
+  const s = new Sim(buildArena('sklad', 1818, 'waves'));
+  const a = s.addPlayer('local', 'альфа', 1);
+  const dt = CONFIG.tickDt;
+  const dmg = (who: unknown, by: number) => (s as unknown as { damageActor(x: unknown, d: number, b: number): void }).damageActor(who, 9999, by);
+  for (let t = 0; t < CONFIG.waves.firstBreak + 0.1; t += dt) s.step(dt);
+  check(!s.canBuy, 'waves: no shopping mid-wave');
+  const money0 = a.money;
+  const guards = [...s.actors.values()].filter((g) => g.kind === 'enemy' && g.alive);
+  for (const g of guards) dmg(g, a.id);
+  s.step(dt);
+  check(a.money === money0 + guards.length * CONFIG.waves.killReward + CONFIG.waves.clearBonus, `kills and the cleared wave pay: $${money0} → $${a.money}`);
+  check(s.canBuy && s.buy(a, 'armor'), 'the shop is open between waves');
+  // Fast-forward to the boss wave.
+  s.wave = CONFIG.waves.bossEvery - 1;
+  s.waveT = 0.01;
+  s.step(dt);
+  const boss = [...s.actors.values()].find((g) => g.role === 'boss');
+  check(!!boss && boss.maxHp > CONFIG.enemy.maxHp * 5 && boss.name === 'Комендант', `wave ${s.wave} brings the boss (${boss?.maxHp ?? 0} hp)`);
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

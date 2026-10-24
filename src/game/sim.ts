@@ -516,6 +516,15 @@ export class Sim {
     return 'grunt';
   }
 
+  /** Waves: the boss — a commander with his own name and a lot of health. */
+  private makeBoss(guard: Actor): void {
+    this.giveRole(guard, 'boss');
+    guard.name = 'Комендант';
+    this.equip(guard, 'rifle');
+    guard.grenades = 2;
+    this.events.push({ type: 'wave', text: 'boss', id: String(this.wave), ownerId: guard.id });
+  }
+
   /** Kit and habits of a guard type (health, armor, weapon, light, gait). */
   private giveRole(actor: Actor, role: EnemyRole): void {
     actor.role = role;
@@ -1167,7 +1176,9 @@ export class Sim {
 
   /** Kill rewards: money in competitive, the next gun in gun game. */
   private rewardKill(killer: Actor): void {
-    if (this.rounds) {
+    if (this.mode === 'waves' && killer.kind === 'player') {
+      killer.money = Math.min(CONFIG.comp.maxMoney, killer.money + CONFIG.waves.killReward);
+    } else if (this.rounds) {
       killer.money = Math.min(CONFIG.comp.maxMoney, killer.money + CONFIG.comp.killReward);
     } else if (this.mode === 'gun') {
       killer.tierKills++;
@@ -1440,11 +1451,12 @@ export class Sim {
         wantAng = Math.atan2(ai.targetZ - actor.z, ai.targetX - actor.x);
         if (nearest) {
           // Snipers hold far back; heavies close in and never give ground.
-          const ideal = actor.role === 'sniper' ? 22 : actor.role === 'heavy' ? 5 : Math.min(16, def.falloffStart * 0.8);
+          const tank = actor.role === 'heavy' || actor.role === 'boss';
+          const ideal = actor.role === 'sniper' ? 22 : tank ? 5 : Math.min(16, def.falloffStart * 0.8);
           const d = nearestD;
           if (d > ideal * 1.25) {
             move = this.steer(actor, nearest.x, nearest.z, ideal);
-          } else if (d < ideal * 0.55 && actor.role !== 'heavy') {
+          } else if (d < ideal * 0.55 && !tank) {
             move = { x: -Math.cos(wantAng), z: -Math.sin(wantAng) };
           } else {
             // Strafe around the target.
@@ -1675,6 +1687,8 @@ export class Sim {
 
   /** Competitive buy window: the first seconds of a round. */
   get canBuy(): boolean {
+    // Waves: the shop is open between waves.
+    if (this.mode === 'waves') return this.wavePhase === 'break';
     return this.rounds && this.roundAge < CONFIG.comp.buyTime && this.roundPhase !== 'end';
   }
 
@@ -2241,6 +2255,7 @@ export class Sim {
     if (left) return;
     this.wavePhase = 'break';
     this.waveT = CONFIG.waves.breakTime;
+    for (const p of players) p.money = Math.min(CONFIG.comp.maxMoney, p.money + CONFIG.waves.clearBonus);
     for (const p of players) {
       if (!p.alive) this.revive(p);
       else if (p.downed) {
@@ -2272,6 +2287,7 @@ export class Sim {
       guard.flashOn = guard.ai!.hasLight;
       guard.grenades = this.wave >= 3 && this.rng.next() < 0.3 ? 1 : 0;
       this.giveRole(guard, this.pickRole(this.wave, this.rng));
+      if (i === 0 && this.wave % CONFIG.waves.bossEvery === 0) this.makeBoss(guard);
       // They come looking: straight for where the squad was last heard.
       const target = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
       if (target) {

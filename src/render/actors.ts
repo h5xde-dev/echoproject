@@ -214,7 +214,7 @@ export class ActorVisual {
   update(actor: ActorView, dt: number): void {
     const low = !actor.alive ? 0 : actor.downed ? 2.5 : actor.crouched ? 1 : 0;
     this.crouch += (low - this.crouch) * Math.min(1, dt * 10);
-    const big = actor.role === 'heavy' ? 1.15 : 1;
+    const big = actor.role === 'boss' ? 1.4 : actor.role === 'heavy' ? 1.15 : 1;
     this.bodyGroup.scale.set(big, big * (1 - 0.22 * this.crouch), big);
     // Velocity from positions works for local, simulated and interpolated actors.
     if (Number.isNaN(this.prevX) || dt <= 0) {

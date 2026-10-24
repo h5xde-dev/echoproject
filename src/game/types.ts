@@ -159,7 +159,7 @@ export interface MapData {
 export type ActorKind = 'player' | 'enemy';
 
 /** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
-export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout';
+export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss';
 
 /** How sharp bots and guards are. */
 export type Difficulty = 'easy' | 'normal' | 'hard';

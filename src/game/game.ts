@@ -77,7 +77,7 @@ interface SnapFrame {
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
 /** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
-const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff };
+const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a };
 /** Team modes: blue and red, for humans and bots alike. */
 const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
@@ -555,7 +555,7 @@ export class Game {
     if (!this.isAuthority) return this.wave;
     let left = 0;
     for (const a of this.sim.actors.values()) if (a.kind === 'enemy' && a.alive) left++;
-    return { n: this.sim.wave, phase: this.sim.wavePhase, t: Math.max(0, this.sim.waveT), left };
+    return { n: this.sim.wave, phase: this.sim.wavePhase, t: Math.max(0, this.sim.waveT), left, canBuy: this.sim.canBuy };
   }
 
   /** Competitive round info (host: from the sim; client: from snapshots). */
@@ -924,8 +924,10 @@ export class Game {
       case 'wave':
         if (event.text === 'start') {
           this.hud.banner(`ВОЛНА ${event.id ?? ''}`, 'Они идут на шум и свет');
+        } else if (event.text === 'boss') {
+          this.hud.banner(`ВОЛНА ${event.id ?? ''} — КОМЕНДАНТ`, 'Тяжёлая броня, много здоровья');
         } else {
-          this.hud.banner('ВОЛНА ОТБИТА', `Передышка ${CONFIG.waves.breakTime} с · павшие возвращаются`);
+          this.hud.banner('ВОЛНА ОТБИТА', `Передышка ${CONFIG.waves.breakTime} с · магазин — B · павшие возвращаются`);
           this.audio.powerup();
         }
         break;
@@ -1094,7 +1096,8 @@ export class Game {
     // Competitive shop: B toggles it during the buy window; while open,
     // number keys buy instead of switching weapons.
     const round = this.localRoundState();
-    const canBuy = !!round?.canBuy && !!this.localDisplay()?.alive;
+    // Comp / bomb: the buy window of a round; waves: the break between waves.
+    const canBuy = (!!round?.canBuy || !!this.waveState()?.canBuy) && !!this.localDisplay()?.alive;
     if (this.input.consume('buy') && canBuy) this.buyOpen = !this.buyOpen;
     if (!canBuy) this.buyOpen = false;
     for (let i = 0; i < SHOP.length; i++) {
@@ -1102,7 +1105,7 @@ export class Game {
       if (this.buyOpen) this.pending.buy = SHOP[i].item;
       else if (i < 5) this.pending.slot = i;
     }
-    this.hud.showBuyMenu(this.buyOpen, this.localDisplay()?.money ?? 0, round?.canBuy ? round : null);
+    this.hud.showBuyMenu(this.buyOpen, this.localDisplay()?.money ?? 0, round?.canBuy ? round : null, this.waveState()?.t ?? 0);
     this.hud.showScores(this.input.keys.has('Tab'));
 
     this.renderer.setPointer(this.input.mouseX, this.input.mouseY);
