@@ -189,7 +189,14 @@ await page.evaluate(() => {
   gameB.net.pingSentAt.clear();
   gameB.rttMs = 200;
 });
-await page.waitForTimeout(400);
+// Headless runs at a few frames per second: wait until the host has both
+// received and applied an input carrying the new round trip.
+await page
+  .waitForFunction(() => {
+    const { gameA, gameB } = window.__net;
+    return Math.abs((gameA.sim.actors.get(gameB.localId)?.lagComp ?? 0) - 0.1) < 1e-6;
+  }, null, { timeout: 15000 })
+  .catch(() => {});
 const lag = await page.evaluate(() => {
   const { gameA, gameB } = window.__net;
   const sim = gameA.sim;
