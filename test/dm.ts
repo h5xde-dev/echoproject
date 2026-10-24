@@ -6,6 +6,7 @@
  */
 import { ARENAS, buildArena } from '../src/game/arenas';
 import { CONFIG } from '../src/game/config';
+import { generateMap } from '../src/game/levelgen';
 import { Sim } from '../src/game/sim';
 import type { GameMode } from '../src/game/types';
 
@@ -73,6 +74,78 @@ for (const info of ARENAS) {
     if (mode !== 'gun') check(true, `${tag}: pickups left on map ${s.pickups.length}`);
   }
 }
+// Gait: run / walk / crouch on a quiet arena with a single player.
+{
+  const s = new Sim(buildArena('sklad', 4242, 'dm'));
+  s.fighters = 1;
+  const me = s.addPlayer('local', 'тест', 1);
+  const dt = CONFIG.tickDt;
+  const base = { seq: 0, moveX: 1, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  // Speed at the end of a 1 s run in the open, and footstep noise made meanwhile.
+  const trial = (gait: 'run' | 'walk' | 'crouch') => {
+    me.x = s.map.spawns[0].x;
+    me.z = s.map.spawns[0].z;
+    me.vx = me.vz = 0;
+    me.stepDist = 0;
+    s.drainEvents();
+    let steps = 0;
+    let stepNoise = 0;
+    for (let t = 0; t < 1; t += dt) {
+      // Back and forth so walls never stop the soldier.
+      const dir = Math.floor(t * 4) % 2 === 0 ? 1 : -1;
+      s.applyInput(me, { ...base, moveX: dir, gait });
+      s.step(dt);
+      for (const n of s.noises) if (n.step && n.ownerId === me.id && s.time - n.time < dt / 2) stepNoise = n.radius;
+      for (const e of s.drainEvents()) if (e.type === 'step' && e.ownerId === me.id) steps++;
+    }
+    return { speed: Math.hypot(me.vx, me.vz), steps, stepNoise };
+  };
+  const run = trial('run');
+  const walk = trial('walk');
+  const crouch = trial('crouch');
+  check(run.speed > walk.speed * 1.5 && walk.speed > crouch.speed * 1.2, `gait speeds run ${run.speed.toFixed(1)} > walk ${walk.speed.toFixed(1)} > crouch ${crouch.speed.toFixed(1)}`);
+  check(run.steps > 0 && run.stepNoise === CONFIG.gait.stepNoise.run, `running is heard: ${run.steps} steps, radius ${run.stepNoise}`);
+  check(walk.steps > 0 && walk.stepNoise === CONFIG.gait.stepNoise.walk, `walking is quieter: ${walk.steps} steps, radius ${walk.stepNoise}`);
+  check(crouch.steps === 0, `crouching is silent: ${crouch.steps} steps`);
+
+  // Spread: crouched and still < standing still < running.
+  const spreadAt = (gait: 'run' | 'walk' | 'crouch', vx: number) => {
+    me.gait = gait;
+    me.vx = vx;
+    me.vz = 0;
+    me.recoil = 0;
+    return s.spreadMul(me);
+  };
+  const crouchStill = spreadAt('crouch', 0);
+  const still = spreadAt('run', 0);
+  const moving = spreadAt('run', CONFIG.player.maxSpeed);
+  check(crouchStill < still && still < moving, `spread crouched ${crouchStill.toFixed(2)} < still ${still.toFixed(2)} < running ${moving.toFixed(2)}`);
+  me.vx = 0;
+  me.recoil = 0.5;
+  check(s.spreadMul(me) > still * 1.5, `recoil widens spread: ${s.spreadMul(me).toFixed(2)}`);
+}
+
+// Co-op guards ignore each other's footsteps but hear a running player's.
+{
+  const s = new Sim(generateMap(31337));
+  const priv = s as unknown as { populateRoom(i: number): void; updateAi(a: unknown, dt: number): void };
+  priv.populateRoom(1);
+  const [g1, g2] = [...s.actors.values()].filter((a) => a.kind === 'enemy');
+  const p = s.addPlayer('local', 'тест', 1);
+  // The player is far away and out of sight; only the noise can alert the guard.
+  p.x = -500;
+  p.z = -500;
+  const hears = (ownerId: number) => {
+    g1.ai!.mode = 'idle';
+    g1.ai!.awareness = 0;
+    s.noises = [{ x: g1.x + 2, z: g1.z, radius: CONFIG.gait.stepNoise.run, time: s.time, ownerId, step: true }];
+    priv.updateAi(g1, CONFIG.tickDt);
+    return (g1.ai!.mode as string) === 'alert';
+  };
+  check(!hears(g2.id), "co-op guard ignores another guard's footsteps");
+  check(hears(p.id), "co-op guard hears the player's footsteps");
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

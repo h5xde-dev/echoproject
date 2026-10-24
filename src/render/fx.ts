@@ -331,13 +331,14 @@ function splatTexture(kind: 'blood' | 'scorch'): THREE.Texture {
  */
 export class SoundPings {
   readonly group = new THREE.Group();
-  private items: { mesh: THREE.Mesh; life: number }[] = [];
+  private items: { mesh: THREE.Mesh; life: number; size: number; alpha: number }[] = [];
   static readonly LIFE = 1.1;
 
   constructor() {
     const geo = new THREE.RingGeometry(0.55, 0.85, 36);
     geo.rotateX(-Math.PI / 2);
-    for (let i = 0; i < 12; i++) {
+    // Footsteps of a full arena share the pool with gunshots.
+    for (let i = 0; i < 24; i++) {
       const mat = new THREE.MeshBasicMaterial({
         color: 0xff3048,
         transparent: true,
@@ -349,13 +350,16 @@ export class SoundPings {
       const mesh = new THREE.Mesh(geo, mat);
       mesh.visible = false;
       this.group.add(mesh);
-      this.items.push({ mesh, life: 0 });
+      this.items.push({ mesh, life: 0, size: 1, alpha: 0.9 });
     }
   }
 
-  spawn(x: number, z: number): void {
+  /** `size` and `alpha` scale the ring: gunshots 1, footsteps smaller and dimmer. */
+  spawn(x: number, z: number, size = 1, alpha = 0.9): void {
     const item = this.items.find((i) => i.life <= 0) ?? this.items[0];
     item.life = SoundPings.LIFE;
+    item.size = size;
+    item.alpha = alpha;
     item.mesh.position.set(x, 0.1, z);
     item.mesh.visible = true;
   }
@@ -365,9 +369,9 @@ export class SoundPings {
       if (item.life <= 0) continue;
       item.life -= dt;
       const t = 1 - Math.max(0, item.life) / SoundPings.LIFE;
-      const s = 0.7 + t * 1.6;
+      const s = (0.7 + t * 1.6) * item.size;
       item.mesh.scale.set(s, 1, s);
-      (item.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.9;
+      (item.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * item.alpha;
       if (item.life <= 0) item.mesh.visible = false;
     }
   }

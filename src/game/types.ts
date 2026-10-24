@@ -150,6 +150,9 @@ export interface MapData {
 
 export type ActorKind = 'player' | 'enemy';
 
+/** How a soldier moves: speed, noise and accuracy depend on it. */
+export type Gait = 'run' | 'walk' | 'crouch';
+
 export interface AiState {
   mode: 'idle' | 'patrol' | 'alert' | 'chase' | 'attack' | 'reposition';
   timer: number;
@@ -240,6 +243,9 @@ export interface Actor {
    * reached it that late, so the shot is placed where it would be by now.
    */
   lagComp: number;
+  gait: Gait;
+  /** Distance walked since the last footstep noise. */
+  stepDist: number;
 }
 
 export interface Bullet {
@@ -285,6 +291,7 @@ export interface NoiseEvent {
 export interface GameEvent {
   type:
     | 'shot'
+    | 'step'
     | 'impact'
     | 'explosion'
     | 'death'

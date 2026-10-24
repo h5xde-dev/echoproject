@@ -10,7 +10,7 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, modeInfo, SHOP } from './modes';
 import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, GameEvent, GameMode as MatchMode, MapData, PowerupKind, ShopItem } from './types';
+import type { Buffs, Bullet, Gait, GameEvent, GameMode as MatchMode, MapData, PowerupKind, ShopItem } from './types';
 import { WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 
@@ -112,6 +112,8 @@ export class Game {
   private reconnecting = false;
   private clientNames = new Map<number, string>();
   private frameMove = { x: 0, z: 0 };
+  /** Shift walks, C crouches (crouch wins when both are held). */
+  private frameGait: Gait = 'run';
   private frameAim = 0;
   private frameFire = false;
   private pending = { reload: false, interact: false, flashlight: false, slot: -1, grenade: false, buy: '' as ShopItem | '' };
@@ -478,6 +480,7 @@ export class Game {
       mirror.buffs = { ...local.buffs };
       this.sim.applySpeed(mirror);
       for (const p of this.pendingInputs) {
+        mirror.gait = p.input.gait ?? 'run';
         this.sim.moveActor(mirror, p.input.moveX, p.input.moveZ, p.input.dt);
       }
       const ex = beforeX - mirror.x;
@@ -532,6 +535,15 @@ export class Game {
         }
         this.renderer.ensureActor(owner, this.colorFor(owner), this.isPlayerId(owner)).triggerFlash();
         if (!this.isAuthority) this.spawnClientBullets(event);
+        break;
+      }
+      case 'step': {
+        // Own steps are played from local input (no network delay).
+        const owner = event.ownerId ?? 0;
+        if (owner === this.localId) break;
+        this.renderer.stepFrom(owner, event.x ?? 0, event.z ?? 0);
+        const d = this.localActorPosition(event.x ?? 0, event.z ?? 0);
+        if (d < 16) this.audio.step(0.9 * (1 - d / 16));
         break;
       }
       case 'impact':
@@ -782,6 +794,8 @@ export class Game {
     const move = this.input.moveVector();
     this.frameMove.x = move.x;
     this.frameMove.z = move.z;
+    const keys = this.input.keys;
+    this.frameGait = keys.has('KeyC') ? 'crouch' : keys.has('ShiftLeft') || keys.has('ShiftRight') ? 'walk' : 'run';
     this.frameFire = this.input.mouseDown && !this.buyOpen;
 
     if (this.input.consume('reload')) this.pending.reload = true;
@@ -828,6 +842,7 @@ export class Game {
       throwDist: this.frameThrow,
       buy: this.pending.buy,
       rttMs: this.mode === 'client' ? this.rttMs : undefined,
+      gait: this.frameGait,
     };
     this.pending.reload = false;
     this.pending.interact = false;
@@ -886,6 +901,7 @@ export class Game {
         this.mirrorPrev.x = mirror.x;
         this.mirrorPrev.z = mirror.z;
         mirror.ang = input.aim;
+        mirror.gait = input.gait ?? 'run';
         if (mirror.alive) this.sim.moveActor(mirror, input.moveX, input.moveZ, dt);
       }
       this.pendingInputs.push({ seq: input.seq, input });
@@ -1106,6 +1122,12 @@ export class Game {
     return this.display.get(this.localId) ?? null;
   }
 
+  /** Current spread multiplier of the local player, for the crosshair. */
+  private localSpread(): number {
+    const actor = this.sim.actors.get(this.localId);
+    return actor ? this.sim.spreadMul(actor) : 1;
+  }
+
   private localActorPosition(x: number, z: number): number {
     const self = this.localDisplay();
     if (!self) return 0;
@@ -1143,14 +1165,15 @@ export class Game {
   private updateFootsteps(dt: number): void {
     const self = this.localDisplay();
     const moving = self && this.frameMove.x * this.frameMove.x + this.frameMove.z * this.frameMove.z > 0.01;
-    if (!self || !self.alive || !moving) {
+    if (!self || !self.alive || !moving || this.frameGait === 'crouch') {
       this.lastFootstep = 0;
       return;
     }
     this.lastFootstep -= dt;
     if (this.lastFootstep <= 0) {
-      this.audio.step();
-      this.lastFootstep = self.buffs.speed > 0 ? 0.32 : 0.42;
+      const walking = this.frameGait === 'walk';
+      this.audio.step(walking ? 0.4 : 1);
+      this.lastFootstep = (self.buffs.speed > 0 ? 0.32 : 0.42) * (walking ? 1.5 : 1);
     }
   }
 
@@ -1221,6 +1244,8 @@ export class Game {
       players,
       enemiesLeft,
       flashOn: self.flashOn,
+      gait: this.frameGait,
+      spread: this.localSpread(),
       buffs: self.buffs,
       shield: self.shield,
       respawnIn: this.isAuthority && Number.isFinite(respawnIn) ? respawnIn : 0,

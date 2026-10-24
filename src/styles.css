@@ -261,6 +261,21 @@ body {
   opacity: 0.5;
 }
 
+.gait-tag {
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-align: center;
+  color: var(--accent);
+}
+
+/* Quieter is stealthier: the tag dims as you go quiet, like the flashlight tag. */
+.gait-tag.walk,
+.gait-tag.crouch {
+  color: var(--ink-dim);
+  opacity: 0.5;
+}
+
 /* Health */
 .hp-track {
   height: 9px;

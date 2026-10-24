@@ -13,6 +13,22 @@ export const CONFIG = {
   /** Most a client's shot is fast-forwarded on the host (seconds). */
   lagCompMax: 0.15,
 
+  /** Run (default), walk (Shift) and crouch (C). */
+  gait: {
+    speed: { run: 1, walk: 0.55, crouch: 0.38 },
+    /** Footstep noise radius, metres; 0 = silent. */
+    stepNoise: { run: 11, walk: 4, crouch: 0 },
+    /** Distance covered between two footstep noises. */
+    stepLength: 2.4,
+    /** Spread multiplier for the stance, before movement and recoil. */
+    spreadStance: { run: 1, walk: 1, crouch: 0.6 },
+    /** Spread multiplier standing still, and extra at full running speed. */
+    spreadStill: 0.7,
+    spreadMove: 1.1,
+    /** Extra spread per unit of accumulated recoil (recoil caps at 0.5). */
+    spreadRecoil: 2,
+  },
+
   player: {
     radius: 0.55,
     maxHp: 100,

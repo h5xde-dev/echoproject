@@ -108,6 +108,26 @@ check(
   `error ${predictionError.toFixed(2)} units`,
 );
 
+// Gait travels with the input: holding Shift, the host walks the client's
+// soldier and the client's prediction agrees.
+await page.keyboard.down('ShiftLeft');
+await page.keyboard.down('KeyA');
+await page.waitForTimeout(1200);
+const walking = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const a = gameA.sim.actors.get(gameB.localId);
+  const mirror = gameB.sim.actors.get(gameB.localId);
+  return { gait: a.gait, speed: Math.hypot(a.vx, a.vz), error: Math.hypot(a.x - mirror.x, a.z - mirror.z) };
+});
+await page.keyboard.up('KeyA');
+await page.keyboard.up('ShiftLeft');
+check(
+  'client walk reaches the host',
+  walking.gait === 'walk' && walking.speed < 8.2 * 0.6,
+  `gait=${walking.gait} speed=${walking.speed.toFixed(2)}`,
+);
+check('prediction agrees while walking', walking.error < 1.5, `error ${walking.error.toFixed(2)} units`);
+
 // The client fires; the host must spawn bullets and the client must see them.
 // Bullets are short-lived, so track the peak count on both peers.
 // Bullets are short-lived, so sample the peak count on both peers while the

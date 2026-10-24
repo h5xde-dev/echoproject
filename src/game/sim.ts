@@ -10,6 +10,7 @@ import type {
   Actor,
   AiState,
   Bullet,
+  Gait,
   GameEvent,
   GameMode,
   Grenade,
@@ -54,6 +55,8 @@ export interface PlayerInput {
   buy?: ShopItem | '';
   /** Client's measured round trip to the host, for lag compensation. */
   rttMs?: number;
+  /** Run unless walking (Shift) or crouching (C). */
+  gait?: Gait;
 }
 
 export interface DoorState {
@@ -115,7 +118,8 @@ export class Sim {
   powerups: SimPowerup[] = [];
   grenades: Grenade[] = [];
   events: GameEvent[] = [];
-  noises: { x: number; z: number; radius: number; time: number; ownerId: number }[] = [];
+  /** `step` marks footsteps, which only the walker's enemies listen for. */
+  noises: { x: number; z: number; radius: number; time: number; ownerId: number; step?: boolean }[] = [];
   readonly scores = new Map<number, Score>();
 
   roomIndex = 0;
@@ -246,6 +250,8 @@ export class Sim {
       slot: 0,
       shotSeq: 0,
       lagComp: 0,
+      gait: 'run',
+      stepDist: 0,
     };
   }
 
@@ -385,6 +391,7 @@ export class Sim {
     if (!actor.alive) return;
 
     actor.ang = input.aim;
+    actor.gait = input.gait ?? 'run';
     if (input.buy) this.buy(actor, input.buy);
     // Competitive freeze time: look around and shop, but no moving or shooting.
     if (this.frozen) {
@@ -432,6 +439,8 @@ export class Sim {
     }
     actor.ammo--;
     actor.cooldown = weaponCooldown(def) * (actor.buffs.rapid > 0 ? CONFIG.powerups.rapidMul : 1);
+    // Taken before this shot's own kick: the first shot of a burst is clean.
+    const spreadMul = this.spreadMul(actor);
     actor.recoil = Math.min(0.5, actor.recoil + def.recoil);
     // Shooting ends spawn protection.
     actor.shield = 0;
@@ -447,7 +456,7 @@ export class Sim {
     const pelletDirs: { dx: number; dz: number; speed: number }[] = [];
     const fresh: Bullet[] = [];
     for (let i = 0; i < count; i++) {
-      const spread = (srng.next() - 0.5) * 2 * def.spread;
+      const spread = (srng.next() - 0.5) * 2 * def.spread * spreadMul;
       const ang = baseAng + spread;
       const dirX = Math.cos(ang);
       const dirZ = Math.sin(ang);
@@ -512,6 +521,7 @@ export class Sim {
       }
       if (actor.kind === 'enemy' && !this.frozen) this.updateAi(actor, dt);
       this.updateActorCommon(actor, dt);
+      this.updateFootsteps(actor, dt);
       this.collectItems(actor);
     }
 
@@ -545,6 +555,29 @@ export class Sim {
     }
   }
 
+  /** Every few metres a moving soldier makes noise: loud running, quiet walking, none crouched. */
+  private updateFootsteps(actor: Actor, dt: number): void {
+    const v = Math.hypot(actor.vx, actor.vz);
+    if (v < 0.4) return;
+    actor.stepDist += v * dt;
+    if (actor.stepDist < CONFIG.gait.stepLength) return;
+    actor.stepDist = 0;
+    const radius = CONFIG.gait.stepNoise[actor.gait];
+    if (radius <= 0) return;
+    this.noises.push({ x: actor.x, z: actor.z, radius, time: this.time, ownerId: actor.id, step: true });
+    this.events.push({ type: 'step', ownerId: actor.id, x: actor.x, z: actor.z });
+  }
+
+  /**
+   * Player accuracy: steadier standing still and crouched, worse on the run
+   * and as recoil builds up during a burst. Multiplies the weapon's spread.
+   */
+  spreadMul(actor: Actor): number {
+    const G = CONFIG.gait;
+    const speedFrac = clamp(Math.hypot(actor.vx, actor.vz) / CONFIG.player.maxSpeed, 0, 1);
+    return G.spreadStance[actor.gait] * (G.spreadStill + G.spreadMove * speedFrac) * (1 + G.spreadRecoil * actor.recoil);
+  }
+
   /** Max speed from the base value and the speed buff (also used by prediction). */
   applySpeed(actor: Actor): void {
     const base = actor.kind === 'player' ? CONFIG.player.maxSpeed : this.arena ? CONFIG.player.maxSpeed * 0.92 : CONFIG.enemy.maxSpeed;
@@ -558,8 +591,9 @@ export class Sim {
   moveActor(actor: Actor, moveX: number, moveZ: number, dt: number): void {
     const hasInput = Math.abs(moveX) + Math.abs(moveZ) > 0.01;
     if (hasInput) {
-      const tvx = moveX * actor.speed;
-      const tvz = moveZ * actor.speed;
+      const speed = actor.speed * CONFIG.gait.speed[actor.gait];
+      const tvx = moveX * speed;
+      const tvz = moveZ * speed;
       const maxDv = actor.accel * dt;
       actor.vx += clamp(tvx - actor.vx, -maxDv, maxDv);
       actor.vz += clamp(tvz - actor.vz, -maxDv, maxDv);
@@ -980,10 +1014,15 @@ export class Sim {
       ai.timer = 6;
     }
 
-    // React to noise (gunshots).
+    // React to noise: gunshots from anyone, footsteps only from enemies (guards
+    // do not chase each other's steps).
     for (const n of this.noises) {
       if (this.time - n.time > 0.12) continue;
       if (n.ownerId === actor.id) continue;
+      if (n.step) {
+        const owner = this.actors.get(n.ownerId);
+        if (!owner || !this.hostileTo(actor, owner)) continue;
+      }
       if (dist(actor.x, actor.z, n.x, n.z) > n.radius) continue;
       if (ai.mode === 'idle' || ai.mode === 'patrol' || ai.mode === 'alert') {
         ai.awareness = Math.max(ai.awareness, 0.6);

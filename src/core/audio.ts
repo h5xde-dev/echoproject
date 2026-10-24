@@ -178,8 +178,8 @@ export class GameAudio {
     window.setTimeout(() => this.tone(990, 1760, 0.2, 0.1, 'triangle'), 150);
   }
 
-  step(): void {
-    this.noise(0.045, 0.07, 900, 1.1, 'lowpass');
+  step(volume = 1): void {
+    this.noise(0.045, 0.07 * volume, 900, 1.1, 'lowpass');
   }
 
   door(): void {

@@ -678,6 +678,12 @@ export class Renderer {
     if (v && this.hostile(ownerId) && !this.isRevealed(ownerId)) this.pings.spawn(x, z);
   }
 
+  /** Footsteps of an unseen enemy: a small, faint marker. */
+  stepFrom(ownerId: number, x: number, z: number): void {
+    const v = this.actorVisuals.get(ownerId);
+    if (v && this.hostile(ownerId) && !this.isRevealed(ownerId)) this.pings.spawn(x, z, 0.45, 0.4);
+  }
+
   syncProps(props: { id: number; x: number; z: number; alive: boolean }[]): void {
     for (const pv of this.propVisuals) {
       const p = props.find((x) => x.id === pv.id);

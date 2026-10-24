@@ -1,8 +1,9 @@
-import type { Buffs, GameMode, MapData, RoomDef, ShopItem } from '../game/types';
+import type { Buffs, Gait, GameMode, MapData, RoomDef, ShopItem } from '../game/types';
 import { GUN_LADDER, isArena, SHOP } from '../game/modes';
 import type { RoundState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
 import { CONFIG } from '../game/config';
+import { clamp } from '../core/math';
 import type { WeaponId } from '../game/weapons';
 
 export interface HudPlayer {
@@ -28,6 +29,9 @@ export interface HudState {
   players: HudPlayer[];
   enemiesLeft: number;
   flashOn: boolean;
+  gait: Gait;
+  /** Spread multiplier of the local player's weapon (1 = nominal). */
+  spread: number;
   armor: number;
   weapons: WeaponId[];
   buffs: Buffs;
@@ -101,6 +105,9 @@ export class Hud {
   private overTitle: HTMLElement;
   private overText: HTMLElement;
   private flashEl: HTMLElement;
+  private gaitEl: HTMLElement;
+  /** Crosshair size from stance and movement, before shot bloom. */
+  private baseSpread = 1;
   private roomCodePanel: HTMLElement;
   private roomCodeEl: HTMLElement;
   private pauseEl: HTMLElement;
@@ -168,6 +175,7 @@ export class Hud {
     this.overTitle = must(root, '.gameover-title');
     this.overText = must(root, '.gameover-text');
     this.flashEl = must(root, '.flashlight-tag');
+    this.gaitEl = must(root, '.gait-tag');
     this.roomCodePanel = must(root, '.panel-room');
     this.roomCodeEl = must(root, '.room-code-inline');
     this.platesEl = must(root, '.plates');
@@ -439,6 +447,10 @@ export class Hud {
     this.updatePips(state.alive ? state.ammo : 0, state.mag, state.reloading);
     this.flashEl.classList.toggle('off', !state.flashOn);
     this.flashEl.textContent = state.flashOn ? 'ФОНАРЬ ВКЛ · ВАС ВИДНО' : 'ФОНАРЬ ВЫКЛ · СКРЫТНО';
+    this.gaitEl.className = `gait-tag ${state.gait}`;
+    this.gaitEl.textContent = GAIT_LABEL[state.gait];
+    // Eased so the crosshair breathes rather than jumps between stances.
+    this.baseSpread += (state.spread - this.baseSpread) * 0.2;
 
     // Under the ammo: grenades, flashlight, money.
     const money = this.mode === 'comp' ? `<span class="money">$${state.money}</span>` : '';
@@ -532,7 +544,7 @@ export class Hud {
     this.crosshair.classList.toggle('hit', this.hitT > 0);
     this.crosshair.classList.toggle('kill', this.killT > 0);
     this.spread = Math.max(0, this.spread - dt * 3.5);
-    const size = 30 + this.spread * 26;
+    const size = 30 * clamp(this.baseSpread, 0.5, 2.4) + this.spread * 26;
     this.crosshair.style.width = `${size}px`;
     this.crosshair.style.height = `${size}px`;
 
@@ -658,3 +670,9 @@ function must(root: HTMLElement, selector: string): HTMLElement {
   if (!el) throw new Error(`HUD element not found: ${selector}`);
   return el;
 }
+
+const GAIT_LABEL: Record<Gait, string> = {
+  run: 'БЕГ · СЛЫШНО',
+  walk: 'ШАГ · ТИХО',
+  crouch: 'ПРИСЕД · БЕСШУМНО',
+};
