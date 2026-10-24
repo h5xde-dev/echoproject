@@ -232,6 +232,20 @@ export const CONFIG = {
     scout: { base: 0.08, perLevel: 0.03, max: 0.22, hp: 0.9, armor: 0, speed: 1.1 },
   },
 
+  /** Co-op room tasks: from room `fromRoom` on, a room has one with this chance. */
+  objectives: {
+    chance: 0.45,
+    fromRoom: 2,
+    /** Hold E at the terminal; starting raises the alarm in the room. */
+    hackTime: 6,
+    /** A charge armed on entry: defuse (hold E) before it blows. */
+    chargeTimer: 45,
+    defuseTime: 4,
+    reach: 1.6,
+    blastRadius: 9,
+    blastDamage: 120,
+  },
+
   /** Co-op with two or more players: knocked down instead of killed. */
   down: {
     /** Health of a downed player: the next burst finishes them. */

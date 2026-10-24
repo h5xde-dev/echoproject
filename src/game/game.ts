@@ -539,6 +539,7 @@ export class Game {
       flags: this.sim.flags.length > 0 ? this.sim.flags : undefined,
       bases: this.sim.bases.length > 0 ? this.sim.bases : undefined,
       bomb: this.matchMode === 'bomb' ? this.sim.bomb : undefined,
+      objectives: this.sim.objectives.length > 0 ? this.sim.objectives : undefined,
       sites: this.sim.sites.length > 0 ? this.sim.sites : undefined,
       ack,
     };
@@ -619,6 +620,7 @@ export class Game {
     if (msg.flags) this.sim.syncFlags(msg.flags);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
+    if (msg.objectives) this.sim.syncObjectives(msg.objectives);
     if (msg.sites) this.sim.sites = msg.sites;
     this.renderer.syncLamps(this.sim.lampAlive);
     this.sim.syncItems(msg.pickups ?? [], msg.powerups ?? [], msg.grenades ?? []);
@@ -858,6 +860,18 @@ export class Game {
         this.renderer.markAt(event.x ?? 0, event.z ?? 0);
         this.markBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
         this.audio.tone(1300, 1700, 0.12, 0.05, 'triangle');
+        break;
+      }
+      case 'objective': {
+        const lines: Record<string, [string, 'good' | 'warn']> = {
+          alarm: ['Терминал поднял тревогу — охрана идёт сюда', 'warn'],
+          hacked: ['Терминал взломан', 'good'],
+          defused: ['Заряд обезврежен', 'good'],
+          blown: ['Заряд взорвался', 'warn'],
+        };
+        const [text, kind] = lines[event.text ?? ''] ?? ['', 'info'];
+        if (text) this.hud.message(text, kind as 'good' | 'warn');
+        if (event.text === 'hacked' || event.text === 'defused') this.audio.powerup();
         break;
       }
       case 'down': {
@@ -1322,6 +1336,8 @@ export class Game {
     const lasers: { x: number; z: number; ang: number }[] = [];
     for (const d of this.display.values()) if (d.alive && d.aiming && this.isHostile(d.id)) lasers.push({ x: d.x, z: d.z, ang: d.ang });
     this.renderer.syncLasers(lasers);
+    // Room tasks of the current room (and the next, once its door is open).
+    this.renderer.syncObjectives(this.sim.objectives.filter((o) => !o.done && o.room <= this.sim.roomIndex + 1));
   }
 
   /**
@@ -1490,6 +1506,13 @@ export class Game {
       if (d.id === this.localId || !d.alive || !d.downed || this.isHostile(d.id)) continue;
       if (Math.hypot(d.x - self.x, d.z - self.z) > D.reach + 1) continue;
       return d.reviveT > 0 ? `ПОДНИМАЕТЕ · ${Math.round((d.reviveT / D.reviveTime) * 100)}%` : `ЗАЖМИТЕ E — ПОДНЯТЬ ${d.name.toUpperCase()}`;
+    }
+    const O = CONFIG.objectives;
+    for (const o of this.sim.objectives) {
+      if (o.done || o.room !== this.sim.roomIndex || Math.hypot(o.x - self.x, o.z - self.z) > O.reach + 0.5) continue;
+      const need = o.kind === 'hack' ? O.hackTime : O.defuseTime;
+      const what = o.kind === 'hack' ? 'ВЗЛОМ' : 'РАЗМИНИРОВАНИЕ';
+      return o.progress > 0 ? `${what} · ${Math.round((o.progress / need) * 100)}%` : `ЗАЖМИТЕ E — ${what}`;
     }
     return '';
   }
@@ -1681,6 +1704,7 @@ export class Game {
       team: this.localTeam(),
       teamScore: this.isAuthority ? this.sim.teamScore : this.teamScore,
       wave: this.waveState(),
+      task: this.sim.objectives.find((o) => o.room === this.sim.roomIndex && !o.done) ?? null,
       flags: this.sim.flags,
       carrying: self.carrying,
       bomb: this.sim.bomb,

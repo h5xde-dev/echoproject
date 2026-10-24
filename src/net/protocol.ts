@@ -1,4 +1,4 @@
-import type { BombState, Buffs, EnemyRole, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, EnemyRole, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PowerupKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -125,6 +125,8 @@ export interface SnapshotMsg {
   /** Capture the flag: both flags and their bases. */
   flags?: FlagState[];
   bases?: { x: number; z: number }[];
+  /** Co-op room tasks. */
+  objectives?: RoomObjective[];
   /** Bomb planting: the bomb (null between rounds) and sites A, B. */
   bomb?: BombState | null;
   sites?: { x: number; z: number }[];

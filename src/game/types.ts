@@ -296,6 +296,19 @@ export interface Actor {
   role: EnemyRole;
 }
 
+/** Co-op: a task a room sets on top of clearing it. */
+export interface RoomObjective {
+  room: number;
+  kind: 'hack' | 'charge';
+  x: number;
+  z: number;
+  /** Seconds of use put in (hack: toward hackTime; charge: toward defuseTime). */
+  progress: number;
+  done: boolean;
+  /** Charge: seconds to the blast once the room is entered (-1 = not armed). */
+  timer: number;
+}
+
 /** Bomb planting: the one bomb of a round. */
 export interface BombState {
   x: number;
@@ -384,6 +397,7 @@ export interface GameEvent {
     | 'mark'
     | 'down'
     | 'revive'
+    | 'objective'
     | 'smoke'
     | 'flash'
     | 'impact'

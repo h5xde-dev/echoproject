@@ -15,6 +15,7 @@ import type {
   Bullet,
   FlagState,
   Gait,
+  RoomObjective,
   GameEvent,
   GameMode,
   Grenade,
@@ -159,6 +160,8 @@ export class Sim {
   bomb: BombState | null = null;
   sites: { x: number; z: number }[] = [];
   private bombGoal = 0;
+  /** Co-op: room tasks (one per room at most). */
+  objectives: RoomObjective[] = [];
   /** Capture the flag: the flags and the bases they belong on. */
   flags: FlagState[] = [];
   bases: { x: number; z: number }[] = [];
@@ -239,6 +242,7 @@ export class Sim {
       this.roundPhase = 'freeze';
       this.roundT = CONFIG.comp.freezeTime;
     }
+    if (this.mode === 'coop') this.placeObjectives();
     if (this.mode === 'bomb') {
       // Sites A and B: upper and lower quarter of the defenders' half.
       const w = map.maxX - map.minX;
@@ -2012,6 +2016,9 @@ export class Sim {
     if (deepest > this.roomIndex) {
       this.roomIndex = deepest;
       this.roomPhase = 'fighting';
+      // A charge arms the moment the squad walks in.
+      const charge = this.objectives.find((o) => o.room === deepest && o.kind === 'charge');
+      if (charge && charge.timer < 0) charge.timer = CONFIG.objectives.chargeTimer;
       // Normally already done when the door opened; covers skipping a room.
       this.populateRoom(deepest);
       this.events.push({ type: 'roomEnter', text: String(this.roomIndex + 1) });
@@ -2020,9 +2027,13 @@ export class Sim {
     // The start room has no guards; give the squad a moment before the door opens.
     if (this.roomIndex === 0 && this.time < 1.5) return;
 
+    this.updateObjective(CONFIG.tickDt);
+
     let enemies = 0;
     for (const a of this.actors.values()) if (a.kind === 'enemy' && a.alive) enemies++;
-    if (this.roomPhase === 'fighting' && enemies === 0) {
+    // A room with a task opens only once the task is done as well.
+    const task = this.objectives.find((o) => o.room === this.roomIndex);
+    if (this.roomPhase === 'fighting' && enemies === 0 && (!task || task.done)) {
       // The door that leaves room N is the one stored on room N+1.
       const nextRoom = this.map.rooms[this.roomIndex + 1];
       const door = this.doors.find((d) => d.room === this.roomIndex + 1);
@@ -2045,6 +2056,64 @@ export class Sim {
     for (const d of this.doors) {
       if (d.open && d.openT < 1) d.openT = Math.min(1, d.openT + CONFIG.tickDt * 2.2);
     }
+  }
+
+  /**
+   * Co-op room tasks, placed once per level from the map seed (so a joining
+   * client gets the same ones in the snapshot): a terminal to hack or a
+   * charge to defuse, in about half the rooms past the first two.
+   */
+  private placeObjectives(): void {
+    const O = CONFIG.objectives;
+    const rng = new Rng(this.map.seed ^ 0x0b1ec7);
+    for (const room of this.map.rooms) {
+      if (room.index < O.fromRoom || rng.next() > O.chance) continue;
+      const kind = rng.next() < 0.5 ? 'hack' : 'charge';
+      // Off-centre, on the far side from the door the squad comes through.
+      const fx = room.wx + (room.wx - room.doorX) * 0.35;
+      const fz = room.wz + (room.wz - room.doorZ) * 0.35;
+      const at = this.nearestWalkable(fx, fz);
+      this.objectives.push({ room: room.index, kind, x: at.x, z: at.z, progress: 0, done: false, timer: -1 });
+    }
+  }
+
+  /** The current room's task: progress from players holding E, the charge clock. */
+  private updateObjective(dt: number): void {
+    const O = CONFIG.objectives;
+    const task = this.objectives.find((o) => o.room === this.roomIndex && !o.done);
+    if (!task) return;
+    const worker = [...this.actors.values()].find(
+      (a) => a.kind === 'player' && a.alive && !a.downed && a.using && dist(a.x, a.z, task.x, task.z) < O.reach,
+    );
+    if (worker) {
+      if (task.progress === 0 && task.kind === 'hack') {
+        // The terminal beeps: everyone in the room hears where you are.
+        this.noises.push({ x: task.x, z: task.z, radius: 40, time: this.time, ownerId: worker.id });
+        this.events.push({ type: 'objective', text: 'alarm', x: task.x, z: task.z });
+      }
+      task.progress += dt;
+      worker.useT = task.progress;
+      const need = task.kind === 'hack' ? O.hackTime : O.defuseTime;
+      if (task.progress >= need) {
+        task.done = true;
+        worker.useT = 0;
+        this.events.push({ type: 'objective', text: task.kind === 'hack' ? 'hacked' : 'defused', ownerId: worker.id, x: task.x, z: task.z });
+      }
+    }
+    if (task.kind === 'charge' && task.timer >= 0 && !task.done) {
+      task.timer -= dt;
+      if (task.timer <= 0) {
+        // Too late: it goes off; the room can be finished, at a price.
+        task.done = true;
+        this.explode(task.x, task.z, O.blastRadius, O.blastDamage, -1);
+        this.events.push({ type: 'objective', text: 'blown', x: task.x, z: task.z });
+      }
+    }
+  }
+
+  /** Client: room tasks from a snapshot. */
+  syncObjectives(objectives: RoomObjective[]): void {
+    this.objectives = objectives;
   }
 
   /** Deathmatch / gun game: clock, frag limit, winner. */

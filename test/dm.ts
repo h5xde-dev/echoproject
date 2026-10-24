@@ -725,6 +725,66 @@ for (const info of ARENAS) {
   check(!scout.flashOn && scout.gait === 'walk' && !scout.ai!.hasLight, 'scout: no light, quiet feet');
 }
 
+// Co-op room tasks.
+{
+  const dt = CONFIG.tickDt;
+  const withTask = (kind: 'hack' | 'charge') => {
+    for (let seed = 1; seed < 400; seed++) {
+      const s = new Sim(generateMap(seed * 31337));
+      const task = s.objectives.find((o) => o.kind === kind && o.room < s.map.rooms.length - 1);
+      if (task) return { s, task };
+    }
+    throw new Error(`no ${kind} task found`);
+  };
+  {
+    const a = new Sim(generateMap(4242)).objectives.map((o) => `${o.room}${o.kind}${o.x.toFixed(2)}`).join();
+    const b = new Sim(generateMap(4242)).objectives.map((o) => `${o.room}${o.kind}${o.x.toFixed(2)}`).join();
+    check(a === b, 'room tasks are the same for the same level');
+  }
+  {
+    const { s, task } = withTask('hack');
+    const p = s.addPlayer('local', 'тест', 1);
+    s.roomIndex = task.room;
+    s.roomPhase = 'fighting';
+    for (const g of s.actors.values()) if (g.kind === 'enemy') g.alive = false;
+    p.x = p.z = -500;
+    for (let i = 0; i < 30; i++) s.step(dt);
+    check(s.roomPhase === 'fighting', 'a cleared room with a terminal stays shut until it is hacked');
+    s.drainEvents();
+    const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+    let alarm = false;
+    for (let t = 0; t < CONFIG.objectives.hackTime + 0.2; t += dt) {
+      p.x = task.x + 0.5;
+      p.z = task.z;
+      s.applyInput(p, { ...input, use: true });
+      p.x = task.x + 0.5;
+      p.z = task.z;
+      s.step(dt);
+      for (const e of s.drainEvents()) if (e.type === 'objective' && e.text === 'alarm') alarm = true;
+    }
+    check(alarm, 'starting the hack raises the alarm');
+    check(task.done && s.roomPhase !== 'fighting', 'hacking the terminal opens the way on');
+  }
+  {
+    const { s, task } = withTask('charge');
+    const p = s.addPlayer('local', 'тест', 1);
+    const room = s.map.rooms[task.room];
+    p.x = room.wx;
+    p.z = room.wz;
+    s.roomIndex = task.room - 1;
+    s.step(dt);
+    check(task.timer > 0 && task.timer <= CONFIG.objectives.chargeTimer, `walking in arms the charge (${task.timer.toFixed(1)} s)`);
+    p.x = p.z = -500;
+    s.drainEvents();
+    let blown = false;
+    for (let t = 0; t < CONFIG.objectives.chargeTimer + 0.5; t += dt) {
+      s.step(dt);
+      for (const e of s.drainEvents()) if (e.type === 'objective' && e.text === 'blown') blown = true;
+    }
+    check(blown && task.done, 'an undefused charge goes off');
+  }
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

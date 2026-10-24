@@ -1039,6 +1039,39 @@ export class Renderer {
     this.shakeAmount = Math.min(1.6, this.shakeAmount + amount * this.shakeScale);
   }
 
+  /** Co-op room tasks: a terminal (cyan) or a charge (red, blinking faster as it runs down). */
+  syncObjectives(tasks: { kind: 'hack' | 'charge'; x: number; z: number; timer: number }[]): void {
+    while (this.taskMeshes.length < tasks.length) {
+      const group = new THREE.Group();
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.9, 0.5),
+        new THREE.MeshBasicMaterial({ color: 0x3fd6c8, depthTest: false, toneMapped: false }),
+      );
+      box.position.y = 0.45;
+      const ringGeo = new THREE.RingGeometry(1.2, 1.4, 40);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x3fd6c8, transparent: true, opacity: 0.5, depthTest: false, toneMapped: false }));
+      ring.position.y = 0.05;
+      group.add(box, ring);
+      this.overlay.add(group);
+      this.taskMeshes.push({ group, box, ring });
+    }
+    this.taskMeshes.forEach((m, i) => {
+      const t = tasks[i];
+      m.group.visible = !!t;
+      if (!t) return;
+      m.group.position.set(t.x, 0, t.z);
+      const charge = t.kind === 'charge';
+      const urgency = charge && t.timer >= 0 ? 1 - t.timer / CONFIG.objectives.chargeTimer : 0;
+      const blink = charge ? Math.sin(this.time * (3 + urgency * 14) * Math.PI) > 0 : true;
+      const color = charge ? (blink ? 0xff4a3a : 0x6a1a14) : 0x3fd6c8;
+      (m.box.material as THREE.MeshBasicMaterial).color.setHex(color);
+      (m.ring.material as THREE.MeshBasicMaterial).color.setHex(charge ? 0xff4a3a : 0x3fd6c8);
+    });
+  }
+
+  private taskMeshes: { group: THREE.Group; box: THREE.Mesh; ring: THREE.Mesh }[] = [];
+
   /** Sniper lasers: thin red lines from the muzzle to the first wall. */
   syncLasers(lasers: { x: number; z: number; ang: number }[]): void {
     while (this.laserMeshes.length < lasers.length) {

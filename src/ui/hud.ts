@@ -1,4 +1,4 @@
-import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, RoomDef, ShopItem } from '../game/types';
+import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, RoomDef, RoomObjective, ShopItem } from '../game/types';
 import { GUN_LADDER, isArena, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from '../game/modes';
 import type { RoundState, WaveState } from '../net/protocol';
 import { WEAPON_ORDER } from '../game/weapons';
@@ -52,6 +52,8 @@ export interface HudState {
   teamScore: [number, number];
   /** Waves mode progress. */
   wave: WaveState | null;
+  /** Co-op: the current room's unfinished task. */
+  task: RoomObjective | null;
   /** Capture the flag: both flags (team = index). */
   flags: FlagState[];
   /** Capture the flag: team of the flag the local player carries, or -1. */
@@ -422,6 +424,13 @@ export class Hud {
       : 'Матч начнёт хост. Пока — разминка.';
   }
 
+  /** Co-op: the room task, appended to the objective line. */
+  private taskText(task: RoomObjective | null): string {
+    if (!task) return '';
+    if (task.kind === 'hack') return ' · ВЗЛОМАЙТЕ ТЕРМИНАЛ (E)';
+    return task.timer >= 0 ? ` · ЗАРЯД: ${Math.ceil(task.timer)} С — ОБЕЗВРЕДЬТЕ (E)` : ' · ОБЕЗВРЕДЬТЕ ЗАРЯД (E)';
+  }
+
   /** "Watching: …" line while dead; empty hides it. */
   setSpectating(text: string): void {
     if (this.spectateEl.textContent === text) return;
@@ -526,7 +535,7 @@ export class Hud {
           ? 'ОБЪЕКТ ЗАЧИЩЕН'
           : state.phase === 'cleared'
             ? 'ДВЕРЬ ОТКРЫТА — ИДИТЕ ДАЛЬШЕ'
-            : `ЗАЧИСТИТЕ КОМНАТУ · ОСТАЛОСЬ ${state.enemiesLeft}`;
+            : `ЗАЧИСТИТЕ КОМНАТУ · ОСТАЛОСЬ ${state.enemiesLeft}` + this.taskText(state.task);
     }
 
     // Armor, buffs, carried weapons, respawn banner.
