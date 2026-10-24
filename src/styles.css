@@ -124,6 +124,8 @@ body {
   top: 128px;
   left: 18px;
   cursor: pointer;
+  /* The HUD ignores the pointer; this panel is the one thing in it to click. */
+  pointer-events: auto;
   transition: border-color 150ms, background 150ms;
 }
 

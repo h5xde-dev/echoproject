@@ -142,11 +142,18 @@ check('client replicates bullets locally', fired.peakClient > 0, `peakClient=${f
 
 const health = await page.evaluate(() => {
   const { gameA } = window.__net;
+  const start = gameA.map.rooms[0];
+  const inStart = (a) => a.x >= start.minX && a.x <= start.maxX && a.z >= start.minZ && a.z <= start.maxZ;
   const enemies = [...gameA.sim.actors.values()].filter((a) => a.kind === 'enemy');
-  return { enemies: enemies.length, alive: enemies.filter((e) => e.alive).length };
+  return {
+    alive: enemies.filter((e) => e.alive).length,
+    inStart: enemies.filter((e) => e.alive && inStart(e)).length,
+  };
 });
-// The first room is a safe start: no guards until the squad moves on.
-check('start room is safe', health.alive === 0, `alive guards=${health.alive}`);
+// The first room is a safe start; the next room's guards are already posted
+// behind the door it opens.
+check('start room is safe', health.inStart === 0, `guards in start room=${health.inStart}`);
+check('next room is manned when its door opens', health.alive > 0, `alive guards=${health.alive}`);
 
 check('no page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
 

@@ -216,12 +216,43 @@ nameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') btnSolo.click();
 });
 
+// Input listens for mousedown on the window: without this a click on the
+// panel would also fire the weapon.
+roomPanel.addEventListener('mousedown', (e) => e.stopPropagation());
 roomPanel.addEventListener('click', () => {
   const code = roomPanel.querySelector('.room-code-inline')?.textContent ?? '';
   if (!code || code === '-----') return;
-  void navigator.clipboard?.writeText(code);
-  hud.message('Код скопирован в буфер обмена', 'good');
+  void copyText(code).then((ok) =>
+    ok
+      ? hud.message('Код скопирован в буфер обмена', 'good')
+      : hud.message(`Не удалось скопировать, код: ${code}`, 'warn'),
+  );
 });
+
+/** Clipboard API where available (secure contexts), else the legacy copy command. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+  }
+}
 
 function must<T extends HTMLElement>(selector: string): T {
   const el = document.querySelector<T>(selector);

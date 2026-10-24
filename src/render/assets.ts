@@ -220,8 +220,12 @@ function normaliseWeapon(scene: THREE.Object3D, spec: WeaponSpec): THREE.Object3
 }
 
 function prepareProp(scene: THREE.Object3D, spec: PropSpec): THREE.Object3D {
-  const { root, inner } = wrap(scene);
-  inner.rotation.y = spec.rotY;
+  // The turn sits below `inner` so the scale below acts on world X/Z; on a
+  // turned `inner` it would act on the model's own axes and swap them.
+  const turn = new THREE.Group();
+  turn.rotation.y = spec.rotY;
+  turn.add(scene);
+  const { root, inner } = wrap(turn);
   root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(inner, true);
   const size = box.getSize(new THREE.Vector3());

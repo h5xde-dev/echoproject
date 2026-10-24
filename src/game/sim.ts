@@ -314,6 +314,13 @@ export class Sim {
     }
   }
 
+  /** Spawns a room's guards once. */
+  private populateRoom(index: number): void {
+    if (this.spawnedRooms.has(index)) return;
+    this.spawnedRooms.add(index);
+    this.spawnEnemies(this.map.rooms[index]);
+  }
+
   private spawnEnemies(room: RoomDef): void {
     // The first room is a safe start.
     if (room.index === 0) return;
@@ -1401,10 +1408,8 @@ export class Sim {
     if (deepest > this.roomIndex) {
       this.roomIndex = deepest;
       this.roomPhase = 'fighting';
-      if (!this.spawnedRooms.has(deepest)) {
-        this.spawnedRooms.add(deepest);
-        this.spawnEnemies(this.map.rooms[deepest]);
-      }
+      // Normally already done when the door opened; covers skipping a room.
+      this.populateRoom(deepest);
       this.events.push({ type: 'roomEnter', text: String(this.roomIndex + 1) });
     }
 
@@ -1423,6 +1428,9 @@ export class Sim {
         // Collision reads the body flag; without it the door stays solid.
         door.body.open = true;
       }
+      // Guards are in place as the door opens, so the squad sees an
+      // occupied room instead of soldiers popping in on the threshold.
+      if (nextRoom) this.populateRoom(nextRoom.index);
       this.roomPhase = nextRoom ? 'cleared' : 'done';
       this.events.push({ type: 'roomClear', text: String(this.roomIndex + 1) });
       if (!nextRoom) {
