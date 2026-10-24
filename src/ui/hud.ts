@@ -62,6 +62,8 @@ export interface HudState {
   bomb: BombState | null;
   useT: number;
   bombCarrier: boolean;
+  /** Bomb: the attacking team (swaps at halftime). */
+  attackTeam: number;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -488,12 +490,12 @@ export class Hud {
         else if (bomb?.planted) {
           const site = bomb.site === 1 ? 'B' : 'A';
           const progress = state.useT > 0 ? ` · РАЗМИНИРОВАНИЕ ${Math.round((state.useT / B.defuseTime) * 100)}%` : '';
-          task = `БОМБА НА ${site} · ${Math.ceil(bomb.timer)} · ${state.team === 1 ? 'ОБЕЗВРЕДЬТЕ: E' : 'ЗАЩИЩАЙТЕ'}${progress}`;
+          task = `БОМБА НА ${site} · ${Math.ceil(bomb.timer)} · ${state.team !== state.attackTeam ? 'ОБЕЗВРЕДЬТЕ: E' : 'ЗАЩИЩАЙТЕ'}${progress}`;
         } else if (state.bombCarrier) {
           const progress = state.useT > 0 ? ` · ЗАКЛАДКА ${Math.round((state.useT / B.plantTime) * 100)}%` : '';
           task = `${clock(r.t)} · БОМБА У ВАС · E НА A/B${progress}`;
         } else {
-          task = `${clock(r.t)} · ${state.team === 0 ? 'АТАКА: БОМБУ НА A/B' : 'ЗАЩИТА: НЕ ДАЙТЕ ЗАЛОЖИТЬ'}`;
+          task = `${clock(r.t)} · ${state.team === state.attackTeam ? 'АТАКА: БОМБУ НА A/B' : 'ЗАЩИТА: НЕ ДАЙТЕ ЗАЛОЖИТЬ'}`;
         }
         this.objectiveEl.textContent = `${head} · ${task}`;
       } else if (this.mode === 'comp') {

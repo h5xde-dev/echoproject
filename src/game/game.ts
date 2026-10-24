@@ -539,6 +539,7 @@ export class Game {
       flags: this.sim.flags.length > 0 ? this.sim.flags : undefined,
       bases: this.sim.bases.length > 0 ? this.sim.bases : undefined,
       bomb: this.matchMode === 'bomb' ? this.sim.bomb : undefined,
+      attackTeam: this.matchMode === 'bomb' ? this.sim.attackTeam : undefined,
       objectives: this.sim.objectives.length > 0 ? this.sim.objectives : undefined,
       sites: this.sim.sites.length > 0 ? this.sim.sites : undefined,
       ack,
@@ -620,6 +621,7 @@ export class Game {
     if (msg.flags) this.sim.syncFlags(msg.flags);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
+    if (msg.attackTeam !== undefined) this.sim.sidesSwapped = msg.attackTeam === 1;
     if (msg.objectives) this.sim.syncObjectives(msg.objectives);
     if (msg.sites) this.sim.sites = msg.sites;
     this.renderer.syncLamps(this.sim.lampAlive);
@@ -810,6 +812,9 @@ export class Game {
         } else if (event.text === 'live') {
           this.buyOpen = false;
           this.hud.banner('В БОЙ', '');
+        } else if (event.text === 'swap') {
+          const attack = this.localTeam() === this.sim.attackTeam;
+          this.hud.banner('СМЕНА СТОРОН', attack ? 'Теперь вы в атаке' : 'Теперь вы в защите');
         } else if (event.text === 'end' && event.team !== undefined) {
           // Team rounds (bomb): which side took it, and why.
           const ours = event.team === this.localTeam();
@@ -890,9 +895,9 @@ export class Game {
           this.hud.banner(`БОМБА НА ${site}`, `${CONFIG.bomb.timer} секунд`);
           this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.flashBang(d + 20));
         } else if (event.text === 'defused') {
-          this.hud.message(`${who}: бомба обезврежена`, this.localTeam() === 1 ? 'good' : 'warn');
+          this.hud.message(`${who}: бомба обезврежена`, this.localTeam() === this.sim.defendTeam ? 'good' : 'warn');
         } else if (event.text === 'dropped') {
-          this.hud.message('Бомба упала', this.localTeam() === 0 ? 'warn' : 'good');
+          this.hud.message('Бомба упала', this.localTeam() === this.sim.attackTeam ? 'warn' : 'good');
         } else if (event.text === 'picked') {
           this.hud.message(`${who}: бомба подобрана`, 'info');
         }
@@ -1713,6 +1718,7 @@ export class Game {
       bomb: this.sim.bomb,
       useT: self.useT,
       bombCarrier: this.sim.bomb?.carrier === this.localId,
+      attackTeam: this.sim.attackTeam,
       blind: self.blind,
       money: self.money,
       tier: self.tier,

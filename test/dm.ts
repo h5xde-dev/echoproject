@@ -807,6 +807,36 @@ for (const info of ARENAS) {
   check(!!boss && boss.maxHp > CONFIG.enemy.maxHp * 5 && boss.name === 'Комендант', `wave ${s.wave} brings the boss (${boss?.maxHp ?? 0} hp)`);
 }
 
+// Bomb: the teams change roles at halftime.
+{
+  const s = new Sim(buildArena('sklad', 1919, 'bomb'));
+  s.fighters = 6;
+  s.fillBots();
+  const dt = CONFIG.tickDt;
+  const priv = s as unknown as { endTeamRound(w: number, r: string): void; roundT: number };
+  const half = Math.floor(CONFIG.comp.maxRounds / 2);
+  // Play out rounds by fiat, alternating winners, up to halftime.
+  for (let r = 1; r <= half; r++) {
+    priv.roundT = 0;
+    s.step(dt); // freeze -> live
+    for (const a of s.actors.values()) {
+      a.money = 5000;
+      if (a.team === 0) s.buy(a, 'rifle');
+    }
+    priv.endTeamRound(r % 2, 'тест');
+    for (let t = 0; t < CONFIG.comp.endDelay + 0.1; t += dt) s.step(dt);
+  }
+  check(s.sidesSwapped && s.attackTeam === 1, `after round ${half} the teams swap roles`);
+  const mid = (s.map.minX + s.map.maxX) / 2;
+  const attackers = [...s.actors.values()].filter((a) => a.team === s.attackTeam);
+  check(attackers.every((a) => a.x < mid), 'the new attackers start on the left half (sites stay on the right)');
+  check([...s.actors.values()].every((a) => a.money <= CONFIG.comp.startMoney + 1000 && !a.weapons.includes('rifle')), 'halftime resets kit and money');
+  priv.roundT = 0;
+  s.step(dt);
+  const carrier = s.actors.get(s.bomb?.carrier ?? -1);
+  check(carrier?.team === 1, 'the bomb now goes to the red team');
+}
+
 out.push(`${failures} failures`);
 document.getElementById('out')!.textContent = out.join('\n');
 (window as unknown as { __result: string }).__result = out.join('\n');

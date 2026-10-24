@@ -156,6 +156,27 @@ export class Sim {
   teamScore: [number, number] = [0, 0];
   /** Bot and guard sharpness (host setting). */
   difficulty: Difficulty = 'normal';
+  /**
+   * Bomb: after half the rounds the teams change roles. Attackers always
+   * start on the left half (sites are on the right), so spawn sides swap too.
+   */
+  sidesSwapped = false;
+  /** Set at halftime: the next round starts everyone with a pistol and fresh money. */
+  private halftimeReset = false;
+
+  get attackTeam(): number {
+    return this.sidesSwapped ? 1 : 0;
+  }
+
+  get defendTeam(): number {
+    return 1 - this.attackTeam;
+  }
+
+  /** Arena half a team starts on. */
+  private homeSide(team: number): number {
+    return this.sidesSwapped ? 1 - team : team;
+  }
+
   /** Bomb planting: this round's bomb, the two sites, the site attackers aim for. */
   bomb: BombState | null = null;
   sites: { x: number; z: number }[] = [];
@@ -788,7 +809,7 @@ export class Sim {
     const bomb = this.bomb;
     if (this.mode === 'bomb' && bomb && this.roundPhase === 'live') {
       if (!bomb.planted && bomb.carrier === actor.id) return { ...this.sites[this.bombGoal], reach: CONFIG.bomb.siteRadius * 0.6 };
-      if (bomb.planted && actor.team === 1) return { x: bomb.x, z: bomb.z, reach: CONFIG.bomb.defuseReach * 0.7 };
+      if (bomb.planted && actor.team === this.defendTeam) return { x: bomb.x, z: bomb.z, reach: CONFIG.bomb.defuseReach * 0.7 };
     }
     if (this.mode === 'ctf' && actor.carrying >= 0) return { ...this.bases[actor.team], reach: CONFIG.ctf.touch };
     return null;
@@ -1811,7 +1832,7 @@ export class Sim {
     if (this.mode === 'bomb' && actor.team >= 0) {
       const bomb = this.bomb;
       const jitter = () => ({ x: this.rng.range(-4, 4), z: this.rng.range(-4, 4) });
-      if (actor.team === 0) {
+      if (actor.team === this.attackTeam) {
         if (!bomb) return this.sites[this.bombGoal];
         if (bomb.carrier === actor.id) return this.sites[this.bombGoal];
         const carrier = this.actors.get(bomb.carrier);
@@ -1925,7 +1946,7 @@ export class Sim {
   private pickSpawn(self: Actor | null, team = self?.team ?? -1): { x: number; z: number } {
     let spawns = this.map.spawns.length > 0 ? this.map.spawns : [{ x: this.map.spawnX, z: this.map.spawnZ }];
     if (team >= 0) {
-      const own = spawns.filter((s) => this.sideOf(s.x) === team);
+      const own = spawns.filter((s) => this.sideOf(s.x) === this.homeSide(team));
       if (own.length > 0) spawns = own;
     }
     let best = spawns[0];
@@ -2379,7 +2400,7 @@ export class Sim {
 
   /** Bomb: one attacker (a human if any) starts the round with it. */
   private handOutBomb(): void {
-    const attackers = [...this.actors.values()].filter((a) => a.alive && a.team === 0);
+    const attackers = [...this.actors.values()].filter((a) => a.alive && a.team === this.attackTeam);
     const humans = attackers.filter((a) => a.kind === 'player');
     const pool = humans.length > 0 ? humans : attackers;
     const carrier = pool[this.rng.int(0, Math.max(0, pool.length - 1))];
@@ -2397,8 +2418,8 @@ export class Sim {
   private updateBomb(dt: number): void {
     const B = CONFIG.bomb;
     const alive = [...this.actors.values()].filter((a) => a.alive);
-    const attackers = alive.filter((a) => a.team === 0);
-    const defenders = alive.filter((a) => a.team === 1);
+    const attackers = alive.filter((a) => a.team === this.attackTeam);
+    const defenders = alive.filter((a) => a.team === this.defendTeam);
     const bomb = this.bomb;
     for (const a of this.actors.values()) if (!a.using || !a.alive) a.useT = 0;
 
@@ -2441,7 +2462,7 @@ export class Sim {
         if (d.useT >= B.defuseTime) {
           this.events.push({ type: 'bomb', text: 'defused', ownerId: d.id, x: bomb.x, z: bomb.z });
           this.bomb = null;
-          this.endTeamRound(1, 'Бомба обезврежена');
+          this.endTeamRound(this.defendTeam, 'Бомба обезврежена');
           return;
         }
       }
@@ -2455,14 +2476,14 @@ export class Sim {
           this.damageActor(a, 9999, a.id);
         }
         this.bomb = null;
-        this.endTeamRound(0, 'Бомба взорвалась');
+        this.endTeamRound(this.attackTeam, 'Бомба взорвалась');
         return;
       }
     }
 
-    if (defenders.length === 0) this.endTeamRound(0, 'Защита уничтожена');
-    else if (!bomb?.planted && attackers.length === 0) this.endTeamRound(1, 'Атака уничтожена');
-    else if (!bomb?.planted && this.roundT <= 0) this.endTeamRound(1, 'Время вышло — бомба не заложена');
+    if (defenders.length === 0) this.endTeamRound(this.attackTeam, 'Защита уничтожена');
+    else if (!bomb?.planted && attackers.length === 0) this.endTeamRound(this.defendTeam, 'Атака уничтожена');
+    else if (!bomb?.planted && this.roundT <= 0) this.endTeamRound(this.defendTeam, 'Время вышло — бомба не заложена');
   }
 
   /** Team round over: score, team money, then the next round or the match. */
@@ -2482,6 +2503,13 @@ export class Sim {
     if (Math.max(blue, red) >= C.roundsToWin || this.round >= C.maxRounds) {
       const best = blue === red ? undefined : blue > red ? 0 : 1;
       this.finishTeamMatch(best, best === undefined ? `Ничья ${blue}:${red}` : `${TEAM_NAMES[best]} победили ${Math.max(blue, red)}:${Math.min(blue, red)}`);
+      return;
+    }
+    // Halftime: the teams swap attack and defence, kit and money start over.
+    if (!this.sidesSwapped && this.round >= Math.floor(C.maxRounds / 2)) {
+      this.sidesSwapped = true;
+      this.halftimeReset = true;
+      this.events.push({ type: 'round', text: 'swap', team: this.attackTeam });
     }
   }
 
@@ -2529,11 +2557,14 @@ export class Sim {
     const sides = [0, 1].map((t) => spawns.filter((s) => this.sideOf(s.x) === t));
     this.bomb = null;
     for (const a of this.actors.values()) {
-      const own = a.team >= 0 && sides[a.team].length > 0 ? sides[a.team] : null;
-      const n = own ? sideK[a.team]++ : k++;
+      const side = a.team >= 0 ? this.homeSide(a.team) : -1;
+      const own = side >= 0 && sides[side].length > 0 ? sides[side] : null;
+      const n = own ? sideK[side]++ : k++;
       const pool = own ?? spawns;
       const s = pool[n % pool.length];
-      const survived = a.alive;
+      // At halftime everyone starts over, as if they had fallen.
+      const survived = a.alive && !this.halftimeReset;
+      if (this.halftimeReset) a.money = CONFIG.comp.startMoney;
       a.alive = true;
       a.x = s.x + (n >= pool.length ? 1.2 : 0);
       a.z = s.z;
@@ -2554,6 +2585,7 @@ export class Sim {
       }
       if (a.ai) Object.assign(a.ai, makeAi(), { hasLight: true });
     }
+    this.halftimeReset = false;
     for (const a of this.actors.values()) if (a.ai) this.botShopping(a);
     this.events.push({ type: 'round', text: 'start' });
   }

@@ -131,6 +131,8 @@ export interface SnapshotMsg {
   objectives?: RoomObjective[];
   /** Bomb planting: the bomb (null between rounds) and sites A, B. */
   bomb?: BombState | null;
+  /** Bomb: which team attacks (swaps at halftime). */
+  attackTeam?: number;
   sites?: { x: number; z: number }[];
   /** playerId -> last processed input sequence. */
   ack: Record<string, number>;
