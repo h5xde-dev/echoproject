@@ -1016,6 +1016,7 @@ kbd {
 .weapon-extra .nades i { width: 8px; height: 10px; border-radius: 3px 3px 2px 2px; background: #8fa76a; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.3); }
 .weapon-extra .nade.smoke i { background: #9aa3ab; }
 .weapon-extra .nade.flash i { background: #f2f4f7; }
+.weapon-extra .nade.molotov i { background: #ff8a2a; }
 .weapon-extra .nades s { text-decoration: none; opacity: 0.5; }
 
 /* Flash grenade: the whole view whites out. */

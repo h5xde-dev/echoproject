@@ -11,7 +11,7 @@ import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
-import { WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
+import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
 
@@ -51,6 +51,8 @@ export interface DisplayActor {
   slot: number;
   smokes: number;
   flashes: number;
+  molotovs: number;
+  burning: boolean;
   blind: number;
   concealed: boolean;
   team: number;
@@ -515,6 +517,8 @@ export class Game {
         slot: a.slot,
         smokes: a.smokes,
         flashes: a.flashes,
+        molotovs: a.molotovs,
+        burning: a.burnT > 0,
         blind: a.blind,
         concealed: a.concealed,
         team: a.team,
@@ -559,6 +563,7 @@ export class Game {
       grenades: this.sim.grenades,
       lampsOut: this.sim.lampAlive.flatMap((alive, i) => (alive ? [] : [i])),
       smokes: this.sim.smokes,
+      fires: this.sim.fires,
       mode: this.matchMode,
       scores: this.scoreRows(),
       round: this.localRoundState(),
@@ -647,6 +652,7 @@ export class Game {
     this.sim.syncDoors(msg.doors);
     this.sim.syncLamps(msg.lampsOut ?? []);
     this.sim.syncSmokes(msg.smokes ?? []);
+    this.sim.syncFires(msg.fires ?? []);
     if (msg.flags) this.sim.syncFlags(msg.flags);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
@@ -735,7 +741,7 @@ export class Game {
           this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
           this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
         }
-        this.soundAt(event.x ?? 0, event.z ?? 0, (dist) => this.audio.shot(size, dist));
+        this.soundAt(event.x ?? 0, event.z ?? 0, (dist) => (def.flame ? this.audio.flame(dist) : this.audio.shot(size, dist)));
         if (isLocalPlayer) {
           this.renderer.shake(def.shake);
           this.hud.kick(0.25 + def.shake * 0.5);
@@ -747,6 +753,10 @@ export class Game {
       case 'smoke':
         this.renderer.smokePop(event.x ?? 0, event.z ?? 0);
         this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.smokePop(d));
+        break;
+      case 'fire':
+        this.renderer.fireBurst(event.x ?? 0, event.z ?? 0);
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.fireBurst(d));
         break;
       case 'flash':
         this.renderer.flashBang(event.x ?? 0, event.z ?? 0);
@@ -1027,7 +1037,7 @@ export class Game {
         speed: p.speed,
         damage: def.damage,
         damageMul: 1,
-        life: 3,
+        life: projectileLife(def, p.speed),
         weapon,
         color: owner >= 1000 ? 0xff7a5c : def.color,
         range: 0,
@@ -1350,6 +1360,8 @@ export class Game {
           slot: a.slot,
           smokes: a.smokes,
           flashes: a.flashes,
+          molotovs: a.molotovs,
+          burning: a.burnT > 0,
           blind: a.blind,
           concealed: a.concealed,
           team: a.team,
@@ -1378,6 +1390,7 @@ export class Game {
       const visual = this.renderer.ensureActor(d.id, this.colorFor(d.id), d.kind === 'player');
       visual.concealed = d.concealed;
       visual.update(d, dt);
+      if (d.burning && d.alive) this.renderer.burnOn(d.id, d.x, d.z, dt);
     }
     // Actors gone from the simulation (left, cleared bodies) leave the scene.
     this.renderer.pruneActors(this.display);
@@ -1386,13 +1399,14 @@ export class Game {
     const ahead = this.accumulator;
     const src = this.isAuthority ? this.sim.bullets : this.clientBullets;
     this.renderer.syncTracers(
-      src.map((b) => ({ x: b.x + b.vx * ahead, z: b.z + b.vz * ahead, vx: b.vx, vz: b.vz, color: b.color })),
+      src.map((b) => ({ x: b.x + b.vx * ahead, z: b.z + b.vz * ahead, vx: b.vx, vz: b.vz, color: b.color, flame: WEAPONS[b.weapon].flame })),
     );
     this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: p.hp, kind: p.kind, hw: p.hw, hh: p.hh })));
     this.renderer.syncDoors(this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT })));
     this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
     this.renderer.setSmokes(this.sim.smokes);
+    this.renderer.setFires(this.sim.fires, dt);
     // A carried flag follows its carrier as drawn (smooth), not the last snapshot.
     const flags = this.sim.flags.map((f) => {
       const d = f.carrier >= 0 ? this.display.get(f.carrier) : undefined;
@@ -1484,6 +1498,8 @@ export class Game {
         slot: b.slot,
         smokes: b.smokes ?? 0,
         flashes: b.flashes ?? 0,
+        molotovs: b.molotovs ?? 0,
+        burning: b.burning ?? false,
         blind: b.blind ?? 0,
         concealed: b.concealed ?? false,
         team: b.team ?? -1,
@@ -1604,8 +1620,11 @@ export class Game {
   /** Next grenade kind the player carries, after the selected one (Q). */
   private nextNadeKind(): GrenadeKind {
     const self = this.localDisplay();
-    const order: GrenadeKind[] = ['frag', 'smoke', 'flash'];
-    const count = (k: GrenadeKind) => (!self ? 0 : k === 'frag' ? self.grenades : k === 'smoke' ? self.smokes : self.flashes);
+    const order: GrenadeKind[] = ['frag', 'smoke', 'flash', 'molotov'];
+    const carried: Record<GrenadeKind, number> = self
+      ? { frag: self.grenades, smoke: self.smokes, flash: self.flashes, molotov: self.molotovs }
+      : { frag: 0, smoke: 0, flash: 0, molotov: 0 };
+    const count = (k: GrenadeKind) => carried[k];
     const start = order.indexOf(this.nadeKind);
     for (let step = 1; step <= order.length; step++) {
       const k = order[(start + step) % order.length];
@@ -1777,6 +1796,7 @@ export class Game {
       grenades: self.grenades,
       smokes: self.smokes,
       flashes: self.flashes,
+      molotovs: self.molotovs,
       nadeKind: this.nadeKind,
       team: this.localTeam(),
       teamScore: this.isAuthority ? this.sim.teamScore : this.teamScore,

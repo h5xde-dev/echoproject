@@ -93,8 +93,8 @@ function drawPreview(): void {
       ctx.fillStyle =
         ch === '#' ? '#3a4352'
           : ch === 'S' ? '#3fd6c8'
-            : '1234'.includes(ch) ? '#ffb066'
-              : 'hrxsf'.includes(ch) ? '#5dff8a'
+            : '123456'.includes(ch) ? '#ffb066'
+              : 'hrxsfn'.includes(ch) ? '#5dff8a'
                 : 'CBKVTPDMAtc'.includes(ch) ? '#26303c'
                   : '#121820';
       ctx.fillRect(ox + x * cell, oy + z * cell, Math.ceil(cell), Math.ceil(cell));

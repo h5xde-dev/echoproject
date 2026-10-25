@@ -22,7 +22,7 @@ import type { WeaponId } from './weapons';
 //   #  wall          S  spawn point       L  lamp
 //   C crate  B barrel  K concrete block  V car  T tires  P pallet
 //   D drum  M electrical cabinet  A ammo box  t table  c chair
-//   1 SMG  2 shotgun  3 rifle  4 sniper (weapon pickups)
+//   1 SMG  2 shotgun  3 rifle  4 sniper  5 LMG  6 flamethrower (weapon pickups)
 //   h medkit  r armor  x damage  s speed  f rapid fire  n night vision (powerups)
 //   Y bush (no collision; hides whoever keeps quiet in it)
 
@@ -178,13 +178,102 @@ export const ARENAS: ArenaInfo[] = [
     '#####################',
     ],
   },
+  {
+    // Container port: steel boxes stacked into lanes, cars, an open quay.
+    id: 'port',
+    name: 'Порт',
+    theme: 'yard',
+    rows: [
+    '#####################',
+    '#S.....L.......#.....',
+    '#..............#..h..',
+    '#..#####...TT..#.....',
+    '#..#####.............',
+    '#.........V....####..',
+    '#.L............####..',
+    '#....PP..............',
+    '#S...PP...#####...L..',
+    '#.........#####...1..',
+    '###..........K.......',
+    '#....B.......K.......',
+    '#..r....###......Y...',
+    '#.......###.....YY...',
+    '#..####......V....L..',
+    '#..####...........###',
+    '#.L.......TT.....#...',
+    '#S...............#.6.',
+    '#.....#######.......x',
+    '#........L...........',
+    '#####################',
+    ],
+  },
+  {
+    // Factory floor: rows of fuel barrels — a molotov or a stray shot sets
+    // off a chain. Machine halls with doors on two sides.
+    id: 'zavod',
+    name: 'Завод',
+    theme: 'warehouse',
+    rows: [
+    '#####################',
+    '#S...#......L.......#',
+    '#....#..BB......M...#',
+    '#....D..BB..........h',
+    '#.L..........####...#',
+    '####...####..#..#....',
+    '#......#..#..#..2....',
+    '#..CC..#..#..........',
+    '#..CC..............L.',
+    '#S...........BB......',
+    '#####..###...BB..####',
+    '#.L....#.............',
+    '#......#..PP....M..x.',
+    '#.f....#..PP.........',
+    '#S..........#####....',
+    '#...BB......#...#..6.',
+    '#...BB...L..#.......#',
+    '####........#..L....#',
+    '#.....M.............#',
+    '#S........CC....#...#',
+    '#####################',
+    ],
+  },
+  {
+    // Catacombs: tight tunnels and blind corners — close quarters for the
+    // knife and the flamethrower.
+    id: 'katakomby',
+    name: 'Катакомбы',
+    theme: 'bunker',
+    rows: [
+    '#####################',
+    '#S.....#......#.....#',
+    '#..L...#..h...D..L...',
+    '#......#......#......',
+    '###..###..##..###..##',
+    '#.........K..........',
+    '#..AA.....K..........',
+    '#.....##.....L..#....',
+    '#.....##........#..6.',
+    '#S..........######...',
+    '#.L.....#............',
+    '#.......#.....r..L...',
+    '####..###............',
+    '#.........######..###',
+    '#..D...L.............',
+    '#S...........n....M..',
+    '#......####..........',
+    '###..###..#..###..###',
+    '#.....x...#.......2..',
+    '#S..............L....',
+    '#####################',
+    ],
+  },
 ];
 
 const PROP_CHARS: Record<string, PropKind> = {
   C: 'crate', B: 'barrel', K: 'cover', V: 'car', T: 'tires', P: 'pallet',
   D: 'drum', M: 'cabinet', A: 'ammo', t: 'table', c: 'chair',
 };
-const WEAPON_CHARS: Record<string, WeaponId> = { '1': 'smg', '2': 'shotgun', '3': 'rifle', '4': 'sniper' };
+const WEAPON_CHARS: Record<string, WeaponId> = { '1': 'smg', '2': 'shotgun', '3': 'rifle', '4': 'sniper', '5': 'lmg', '6': 'flamer' };
 const POWERUP_CHARS: Record<string, PowerupKind> = { h: 'medkit', r: 'armor', x: 'damage', s: 'speed', f: 'rapid', n: 'nv' };
 
 /** Expands the mirrored rows into the full grid. */

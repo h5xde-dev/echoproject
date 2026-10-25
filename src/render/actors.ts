@@ -46,6 +46,7 @@ const HOLD: Record<WeaponId, HoldSpec> = {
   lmg: { grip: [0.2, 1.22, 0.15], fore: 0.44 },
   silenced: { grip: [0.5, 1.3, 0.06], fore: 0.02 },
   knife: { grip: [0.45, 1.15, 0.12], fore: 0.02 },
+  flamer: { grip: [0.18, 1.2, 0.15], fore: 0.4 },
 };
 
 const DEATH_TIME = 0.45;
@@ -426,6 +427,32 @@ export class ActorVisual {
       this.weaponModel = g;
       length = 0.26;
       grip = 0.05;
+    } else if (id === 'flamer') {
+      // Flamethrower: a long tube over a fuel tank, a pilot flame at the nozzle.
+      const g = new THREE.Group();
+      const metal = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.5, metalness: 0.7 });
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.8, 10), metal);
+      tube.rotation.z = Math.PI / 2;
+      tube.position.set(0.2, 0.04, 0);
+      const tank = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.06, 0.32, 12),
+        new THREE.MeshStandardMaterial({ color: 0x8a2a1a, roughness: 0.55, metalness: 0.4 }),
+      );
+      tank.rotation.z = Math.PI / 2;
+      tank.position.set(0.12, -0.06, 0);
+      const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.035, 0.08, 10), metal);
+      nozzle.rotation.z = Math.PI / 2;
+      nozzle.position.set(0.62, 0.04, 0);
+      const pilot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.025, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0xff7a20, emissive: 0xff6a10, emissiveIntensity: 2 }),
+      );
+      pilot.position.set(0.67, 0.0, 0);
+      g.add(tube, tank, nozzle, pilot);
+      g.traverse((o) => ((o as THREE.Mesh).castShadow = true));
+      this.weaponModel = g;
+      length = 0.9;
+      grip = 0.25;
     } else {
       // Pistol (no source model) and fallback; a silencer on the silenced one.
       const g = new THREE.Group();

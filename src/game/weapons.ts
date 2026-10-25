@@ -1,4 +1,4 @@
-export type WeaponId = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'knife';
+export type WeaponId = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'knife' | 'flamer';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -37,6 +37,10 @@ export interface WeaponDef {
   melee?: boolean;
   /** Movement speed factor while it is in hand (heavy guns slow you). */
   moveMul?: number;
+  /** Flamethrower: short-lived flames that set whoever they touch alight. */
+  flame?: boolean;
+  /** Projectiles burn out after this many metres (default: they fly until they hit). */
+  reach?: number;
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
@@ -193,8 +197,8 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     id: 'knife',
     name: 'Нож',
     short: 'Нож',
-    damage: 55,
-    rpm: 90,
+    damage: 80,
+    rpm: 115,
     mag: 1,
     reloadTime: 0,
     spread: 0,
@@ -210,16 +214,47 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     flashSize: 0,
     color: 0xffffff,
     melee: true,
+    // Light in the hand: you close the distance faster.
+    moveMul: 1.1,
+  },
+  flamer: {
+    id: 'flamer',
+    name: 'Огнемёт «Пал»',
+    short: 'Огнем.',
+    damage: 3.2,
+    rpm: 600,
+    mag: 100,
+    reloadTime: 3.2,
+    spread: 0.16,
+    pellets: 3,
+    bulletSpeed: 22,
+    falloffStart: 4,
+    falloffEnd: 8.5,
+    falloffEndMul: 0.5,
+    auto: true,
+    recoil: 0.004,
+    shake: 0.04,
+    noise: 18,
+    flashSize: 0.55,
+    color: 0xff8a2a,
+    moveMul: 0.9,
+    flame: true,
+    reach: 8.5,
   },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'silenced', 'knife'];
+export const WEAPON_ORDER: WeaponId[] = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'silenced', 'knife', 'flamer'];
 
 /** Guns that can lie on the floor as pickups. */
-export const PICKUP_WEAPONS: WeaponId[] = ['smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'silenced'];
+export const PICKUP_WEAPONS: WeaponId[] = ['smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'silenced', 'flamer'];
 
 export function weaponCooldown(def: WeaponDef): number {
   return 60 / def.rpm;
+}
+
+/** How long a projectile of this weapon lives before it burns out. */
+export function projectileLife(def: WeaponDef, speed: number): number {
+  return def.reach ? def.reach / speed : 3.0;
 }
 
 export function damageAtRange(def: WeaponDef, distance: number): number {

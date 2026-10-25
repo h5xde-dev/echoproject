@@ -14,6 +14,7 @@ import type {
   EnemyRole,
   PlayerClass,
   Bullet,
+  FireZone,
   FlagState,
   Gait,
   RoomObjective,
@@ -30,7 +31,7 @@ import type {
   SmokeCloud,
   StaticBody,
 } from './types';
-import { WEAPON_ORDER, WEAPONS, damageAtRange, weaponCooldown, type WeaponId } from './weapons';
+import { WEAPON_ORDER, WEAPONS, damageAtRange, projectileLife, weaponCooldown, type WeaponId } from './weapons';
 import { shotSeed } from '../net/protocol';
 
 // Host-authoritative simulation for every mode:
@@ -156,6 +157,10 @@ export class Sim {
   grenades: Grenade[] = [];
   events: GameEvent[] = [];
   smokes: SmokeCloud[] = [];
+  /** Burning ground (molotovs). */
+  fires: FireZone[] = [];
+  /** Counts down to the next pulse of fire damage. */
+  private burnClock = 0;
   /** Ceiling lamps still burning, by index into `map.lamps`. */
   lampAlive: boolean[];
   /** `step` marks footsteps, which only the walker's enemies listen for. */
@@ -400,6 +405,9 @@ export class Sim {
       // Utility grenades are a player tool; in competitive they are bought.
       smokes: isPlayer && !this.rounds ? CONFIG.grenade.startUtility : 0,
       flashes: isPlayer && !this.rounds ? CONFIG.grenade.startUtility : 0,
+      molotovs: isPlayer && !this.rounds ? CONFIG.grenade.startMolotov : 0,
+      burnT: 0,
+      burnBy: -1,
       blind: 0,
       concealed: false,
       revealT: 0,
@@ -739,7 +747,7 @@ export class Sim {
       speed,
       damage: def.damage,
       damageMul: actor.buffs.damage > 0 ? CONFIG.powerups.damageMul : 1,
-      life: 3.0,
+      life: projectileLife(def, speed),
       weapon: actor.weapon,
       color: actor.kind === 'player' ? def.color : 0xff7a5c,
       range: 0,
@@ -769,6 +777,7 @@ export class Sim {
     this.updateBullets(dt);
     this.updateGrenades(dt);
     this.updateSmokes(dt);
+    this.updateFires(dt);
     this.updateDowned(dt);
     this.updateMedics(dt);
     this.updateProps(dt);
@@ -1186,7 +1195,10 @@ export class Sim {
         const friendly =
           (isCoopMode(this.mode) && hit.bullet.ownerKind === hit.actor.kind) ||
           (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team);
-        if (!friendly) this.damageActor(hit.actor, dmg, hit.bullet.ownerId);
+        if (!friendly) {
+          this.damageActor(hit.actor, dmg, hit.bullet.ownerId);
+          if (WEAPONS[hit.bullet.weapon].flame) this.ignite(hit.actor, hit.bullet.ownerId);
+        }
         this.events.push({
           type: 'impact',
           x: hit.x,
@@ -1239,6 +1251,7 @@ export class Sim {
     actor.hp = 0;
     actor.alive = false;
     actor.downed = false;
+    actor.burnT = 0;
     actor.vx = 0;
     actor.vz = 0;
     actor.reloading = false;
@@ -1621,8 +1634,9 @@ export class Sim {
     }
 
     // A hidden target near its last known spot: smoke it out with a grenade.
+    // A molotov does it too, and keeps them from coming back.
     if (
-      actor.grenades > 0 &&
+      (actor.grenades > 0 || actor.molotovs > 0) &&
       ai.grenadeT <= 0 &&
       (ai.mode === 'chase' || ai.mode === 'alert') &&
       !canSee
@@ -1630,7 +1644,7 @@ export class Sim {
       const d = dist(actor.x, actor.z, ai.lastKnownX, ai.lastKnownZ);
       if (d > 5 && d < CONFIG.grenade.maxDist) {
         const ang = Math.atan2(ai.lastKnownZ - actor.z, ai.lastKnownX - actor.x);
-        this.throwGrenade(actor, ang, d, 'frag');
+        this.throwGrenade(actor, ang, d, actor.molotovs > 0 && (actor.grenades === 0 || this.rng.next() < 0.5) ? 'molotov' : 'frag');
         ai.grenadeT = CONFIG.grenade.aiCooldown + this.rng.next() * 4;
       }
     }
@@ -1655,8 +1669,16 @@ export class Sim {
     // Get out of a live grenade's blast.
     for (const g of this.grenades) {
       const d = dist(actor.x, actor.z, g.x, g.z);
-      if (d < CONFIG.grenade.radius + 0.5 && g.fuse < 1.6) {
+      if (g.kind === 'frag' && d < CONFIG.grenade.radius + 0.5 && g.fuse < 1.6) {
         move = { x: (actor.x - g.x) / (d || 1), z: (actor.z - g.z) / (d || 1) };
+        break;
+      }
+    }
+    // ...and out of the flames.
+    for (const f of this.fires) {
+      const d = dist(actor.x, actor.z, f.x, f.z);
+      if (d < CONFIG.fire.radius + 0.6 && !this.fireSpares(f.ownerId, actor)) {
+        move = { x: (actor.x - f.x) / (d || 1), z: (actor.z - f.z) / (d || 1) };
         break;
       }
     }
@@ -1701,6 +1723,9 @@ export class Sim {
     } else if (kind === 'smoke') {
       if (actor.smokes <= 0) return;
       actor.smokes--;
+    } else if (kind === 'molotov') {
+      if (actor.molotovs <= 0) return;
+      actor.molotovs--;
     } else {
       if (actor.flashes <= 0) return;
       actor.flashes--;
@@ -1722,7 +1747,7 @@ export class Sim {
       vx: Math.cos(aim) * v + actor.vx * 0.3,
       vy: G.lift,
       vz: Math.sin(aim) * v + actor.vz * 0.3,
-      fuse: kind === 'smoke' ? CONFIG.smoke.fuse : kind === 'flash' ? CONFIG.flash.fuse : G.fuse,
+      fuse: kind === 'smoke' ? CONFIG.smoke.fuse : kind === 'flash' ? CONFIG.flash.fuse : kind === 'molotov' ? CONFIG.molotov.fuse : G.fuse,
     };
     this.grenades.push(g);
     this.noises.push({ x: actor.x, z: actor.z, radius: 8, time: this.time, ownerId: actor.id });
@@ -1738,6 +1763,7 @@ export class Sim {
         this.grenades.splice(i, 1);
         if (g.kind === 'smoke') this.popSmoke(g);
         else if (g.kind === 'flash') this.flashBang(g);
+        else if (g.kind === 'molotov') this.shatterMolotov(g);
         else this.explode(g.x, g.z, G.radius, G.damage, g.ownerId);
         continue;
       }
@@ -1745,6 +1771,12 @@ export class Sim {
       g.x += g.vx * dt;
       g.y += g.vy * dt;
       g.z += g.vz * dt;
+      // A molotov breaks where it comes down.
+      if (g.kind === 'molotov' && g.y < 0.12) {
+        this.grenades.splice(i, 1);
+        this.shatterMolotov(g);
+        continue;
+      }
       if (g.y < 0.12) {
         g.y = 0.12;
         g.vy = Math.abs(g.vy) * 0.35;
@@ -1758,10 +1790,12 @@ export class Sim {
       const bodies: StaticBody[] = [...near];
       for (const d of this.world.doors) if (!d.open) bodies.push(d);
       for (const p of this.props) if (p.alive && p.fixed && g.y < 1.4) bodies.push({ cx: p.x, cz: p.z, hw: p.hw, hh: p.hh });
+      let hitWall = false;
       for (const b of bodies) {
         const ox = b.hw + r - Math.abs(g.x - b.cx);
         const oz = b.hh + r - Math.abs(g.z - b.cz);
         if (ox <= 0 || oz <= 0) continue;
+        hitWall = true;
         if (ox < oz) {
           g.x += ox * Math.sign(g.x - b.cx || 1);
           g.vx = -g.vx * G.bounce;
@@ -1770,7 +1804,80 @@ export class Sim {
           g.vz = -g.vz * G.bounce;
         }
       }
+      // ...or against a wall: the fire spills out on the near side.
+      if (g.kind === 'molotov' && hitWall) {
+        this.grenades.splice(i, 1);
+        this.shatterMolotov(g);
+      }
     }
+  }
+
+  private shatterMolotov(g: Grenade): void {
+    this.fires.push({ id: this.nextGrenadeId++, x: g.x, z: g.z, age: 0, ownerId: g.ownerId });
+    this.noises.push({ x: g.x, z: g.z, radius: 12, time: this.time, ownerId: g.ownerId });
+    this.events.push({ type: 'fire', x: g.x, z: g.z, ownerId: g.ownerId });
+  }
+
+  /** Sets someone alight (or keeps them burning). */
+  private ignite(actor: Actor, sourceId: number): void {
+    if (!actor.alive || actor.shield > 0) return;
+    actor.burnT = CONFIG.fire.burnTime;
+    actor.burnBy = sourceId;
+  }
+
+  /** Whether `actor` stands in a fire's flames (walls keep it out). */
+  inFire(actor: { x: number; z: number }, f: FireZone): boolean {
+    return dist(actor.x, actor.z, f.x, f.z) < CONFIG.fire.radius && this.world.lineOfSight(f.x, f.z, actor.x, actor.z, this.scratch);
+  }
+
+  /** Fire spares the thrower's side: teammates in team modes, fellow players in co-op. */
+  private fireSpares(sourceId: number, victim: Actor): boolean {
+    const src = this.actors.get(sourceId);
+    if (!src || src === victim) return false;
+    if (this.teams) return src.team === victim.team;
+    if (isCoopMode(this.mode)) return src.kind === victim.kind;
+    return false;
+  }
+
+  /**
+   * Burning ground sets alight whoever stands in it; burning soldiers take
+   * damage in pulses until the afterburn runs out. Explosive props in the
+   * flames go up.
+   */
+  private updateFires(dt: number): void {
+    const F = CONFIG.fire;
+    for (const f of this.fires) f.age += dt;
+    this.fires = this.fires.filter((f) => f.age < F.life);
+    this.burnClock -= dt;
+    const pulse = this.burnClock <= 0;
+    if (pulse) this.burnClock += F.pulse;
+    for (const a of this.actors.values()) {
+      // The downed are left alone (the fire went out as they fell).
+      if (!a.alive || a.downed) {
+        a.burnT = 0;
+        continue;
+      }
+      const flames = this.fires.find((f) => this.inFire(a, f) && !this.fireSpares(f.ownerId, a));
+      if (flames) this.ignite(a, flames.ownerId);
+      if (a.burnT <= 0) continue;
+      a.burnT = Math.max(0, a.burnT - dt);
+      if (pulse) this.damageActor(a, (flames ? F.dps : F.burnDps) * F.pulse, a.burnBy);
+    }
+    for (const p of this.props) {
+      if (!p.alive || !p.explosive) continue;
+      const f = this.fires.find((f) => dist(p.x, p.z, f.x, f.z) < F.radius + Math.max(p.hw, p.hh));
+      if (!f) continue;
+      p.hp -= F.propDps * dt;
+      if (p.hp <= 0) {
+        p.alive = false;
+        this.explode(p.x, p.z, 7.5, 70, f.ownerId);
+      }
+    }
+  }
+
+  /** Client: fires from a snapshot. */
+  syncFires(fires: FireZone[]): void {
+    this.fires = fires;
   }
 
   private popSmoke(g: Grenade): void {
@@ -1848,6 +1955,9 @@ export class Sim {
     } else if (item === 'flash') {
       if (actor.flashes >= CONFIG.grenade.maxUtility) return false;
       actor.flashes++;
+    } else if (item === 'molotov') {
+      if (actor.molotovs >= CONFIG.grenade.maxMolotov) return false;
+      actor.molotovs++;
     } else {
       if (actor.weapons.includes(item)) return false;
       this.equip(actor, item);
@@ -1860,7 +1970,8 @@ export class Sim {
   /** Bots shop at round start: the best gun they can afford, then extras. */
   private botShopping(bot: Actor): void {
     const rnd = this.rng.next();
-    const guns: ShopItem[] = rnd < 0.2 ? ['sniper', 'rifle', 'smg'] : rnd < 0.5 ? ['rifle', 'shotgun', 'smg'] : ['rifle', 'smg', 'shotgun'];
+    const guns: ShopItem[] =
+      rnd < 0.2 ? ['sniper', 'rifle', 'smg'] : rnd < 0.5 ? ['rifle', 'shotgun', 'smg'] : rnd < 0.6 ? ['flamer', 'smg', 'shotgun'] : ['rifle', 'smg', 'shotgun'];
     if (!bot.weapons.some((w) => w !== 'pistol')) {
       for (const g of guns) if (this.buy(bot, g)) break;
     }
@@ -1868,6 +1979,8 @@ export class Sim {
     // Bomb attackers want a smoke for the push onto the site.
     if (this.mode === 'bomb' && bot.team === this.attackTeam && bot.money >= 300) this.buy(bot, 'smoke');
     if (bot.money >= 300 && this.rng.next() < 0.6) this.buy(bot, 'grenade');
+    // Defenders like a molotov to stall a push.
+    if (bot.money >= 400 && this.rng.next() < (this.mode === 'bomb' && bot.team !== this.attackTeam ? 0.6 : 0.25)) this.buy(bot, 'molotov');
   }
 
   /**
@@ -2135,6 +2248,7 @@ export class Sim {
   private respawn(actor: Actor): void {
     const at = this.arena ? this.pickSpawn(actor) : this.findSafeSpawn(actor);
     actor.alive = true;
+    actor.burnT = 0;
     actor.x = at.x;
     actor.z = at.z;
     actor.vx = 0;
@@ -2152,6 +2266,7 @@ export class Sim {
       if (actor.kind === 'player' && !this.rounds) {
         actor.smokes = Math.max(actor.smokes, CONFIG.grenade.startUtility);
         actor.flashes = Math.max(actor.flashes, CONFIG.grenade.startUtility);
+        actor.molotovs = Math.max(actor.molotovs, CONFIG.grenade.startMolotov);
       }
       actor.blind = 0;
       actor.shield = this.rounds ? 0 : CONFIG.dm.spawnShield;
@@ -2730,6 +2845,7 @@ export class Sim {
     this.bullets = [];
     this.grenades = [];
     this.smokes = [];
+    this.fires = [];
     // Spread everyone over the spawn points; survivors keep their kit.
     const spawns = [...this.map.spawns];
     for (let i = spawns.length - 1; i > 0; i--) {
@@ -2756,6 +2872,7 @@ export class Sim {
       a.vx = a.vz = 0;
       a.hp = a.maxHp;
       a.respawnT = 0;
+      a.burnT = 0;
       a.buffs.damage = a.buffs.speed = a.buffs.rapid = a.buffs.nv = 0;
       this.classKit(a);
       if (!survived) {
@@ -2764,6 +2881,7 @@ export class Sim {
         a.grenades = 0;
         a.smokes = 0;
         a.flashes = 0;
+        a.molotovs = 0;
         this.equip(a, 'pistol');
       } else {
         a.ammo = WEAPONS[a.weapon].mag;
@@ -2799,6 +2917,8 @@ export class Sim {
   }
 
   isLit(x: number, z: number): boolean {
+    // Burning ground lights its surroundings too.
+    if (this.fires.some((f) => dist(x, z, f.x, f.z) < CONFIG.fire.lightRadius)) return true;
     return this.map.lamps.some((l, i) => this.lampAlive[i] && dist(x, z, l.x, l.z) < 9.5);
   }
 

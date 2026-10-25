@@ -169,6 +169,34 @@ export const CONFIG = {
     startUtility: 1,
     /** Most smoke / flash grenades carried, each. */
     maxUtility: 2,
+    /** Molotovs each player starts with (co-op and arenas, not round modes). */
+    startMolotov: 1,
+    maxMolotov: 2,
+  },
+
+  /** A molotov shatters where it lands (or against a wall) and the floor burns. */
+  molotov: {
+    /** Longest it can fly before it breaks anyway. */
+    fuse: 3,
+  },
+
+  /** Burning ground and burning soldiers (molotov, flamethrower). */
+  fire: {
+    radius: 3.2,
+    /** How long a molotov's patch burns; it dies down over the last `fade` seconds. */
+    life: 7,
+    fade: 1.2,
+    /** Damage per second standing in the flames. */
+    dps: 30,
+    /** Burning keeps on after leaving the flames (or a flamethrower hit). */
+    burnTime: 2.5,
+    burnDps: 10,
+    /** Damage is dealt in pulses this far apart (not a hurt flash every tick). */
+    pulse: 0.25,
+    /** Explosive props in the flames take this per second and go up. */
+    propDps: 45,
+    /** Fire lights its surroundings for the bots (like a lamp). */
+    lightRadius: 6,
   },
 
   smoke: {
@@ -202,7 +230,7 @@ export const CONFIG = {
     startMoney: 800,
     killReward: 300,
     /** Kill money by weapon: close-range guns pay for the risk, the sniper rifle hardly. */
-    killRewardBy: { pistol: 300, smg: 600, shotgun: 900, rifle: 300, sniper: 100, lmg: 300, silenced: 400, knife: 1500 },
+    killRewardBy: { pistol: 300, smg: 600, shotgun: 900, rifle: 300, sniper: 100, lmg: 300, silenced: 400, knife: 1500, flamer: 900 },
     roundWinBonus: 1500,
     roundLossBonus: 900,
     /** Each round lost in a row adds this to the loss money, up to lossStreakMax times. */
@@ -266,7 +294,7 @@ export const CONFIG = {
 
   /** Melee with the knife. */
   knife: {
-    reach: 1.7,
+    reach: 2.0,
     /** Half-angle of the swing, radians. */
     arc: 0.8,
     /** From behind (the victim faces away) it kills outright. */

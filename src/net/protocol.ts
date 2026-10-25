@@ -1,4 +1,4 @@
-import type { BombState, Buffs, EnemyRole, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, EnemyRole, FireZone, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -27,6 +27,9 @@ export interface ActorState {
   slot: number;
   smokes?: number;
   flashes?: number;
+  molotovs?: number;
+  /** On fire: drawn in flames. */
+  burning?: boolean;
   blind?: number;
   concealed?: boolean;
   team?: number;
@@ -122,6 +125,7 @@ export interface SnapshotMsg {
   /** Indices of shot-out lamps. */
   lampsOut?: number[];
   smokes?: SmokeCloud[];
+  fires?: FireZone[];
   mode: GameMode;
   /** Arena scoreboard: [actor id, kills, deaths, rounds won]. */
   scores: [number, number, number, number][];

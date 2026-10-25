@@ -11,6 +11,8 @@ export type ActionName =
   | 'slot6'
   | 'slot7'
   | 'slot8'
+  | 'slot9'
+  | 'slot10'
   | 'nade'
   | 'mark'
   | 'deploy'
@@ -29,6 +31,8 @@ const ACTION_KEYS: Record<string, ActionName> = {
   Digit6: 'slot6',
   Digit7: 'slot7',
   Digit8: 'slot8',
+  Digit9: 'slot9',
+  Digit0: 'slot10',
   KeyQ: 'nade',
   // Team marker; the middle mouse button does the same.
   KeyZ: 'mark',

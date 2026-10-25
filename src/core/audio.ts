@@ -227,6 +227,21 @@ export class GameAudio {
     if (dist < 16) this.tone(3900, 3700, 2.2, 0.035 * (1 - dist / 16), 'sine');
   }
 
+  /** Flamethrower: a short roaring hiss per burst, no crack. */
+  flame(dist: number): void {
+    const v = Math.max(0.08, 1 - dist / 26);
+    this.noise(0.14, 0.16 * v, 420, 0.5, 'lowpass');
+    this.noise(0.1, 0.05 * v, 2200, 0.7, 'bandpass');
+  }
+
+  /** A molotov: the bottle breaks, the fuel goes up with a whoomp. */
+  fireBurst(dist: number): void {
+    const v = Math.max(0.12, 1 - dist / 34);
+    this.noise(0.16, 0.2 * v, 5000, 2.2, 'highpass');
+    this.noise(0.9, 0.4 * v, 260, 0.6, 'lowpass');
+    this.tone(70, 40, 0.5, 0.22 * v, 'sine');
+  }
+
   /** Breaking glass, quieter with distance. */
   glass(dist: number): void {
     const v = Math.max(0.15, 1 - dist / 30);

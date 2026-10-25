@@ -112,8 +112,10 @@ export const SHOP: ShopEntry[] = [
   { item: 'sniper', name: 'Снайперка «Стриж»', price: 4200 },
   { item: 'lmg', name: 'Пулемёт «Рой»', price: 3000 },
   { item: 'silenced', name: 'Пистолет с глушителем', price: 500 },
+  { item: 'flamer', name: 'Огнемёт «Пал»', price: 2200 },
   { item: 'armor', name: 'Бронежилет', price: 650 },
   { item: 'grenade', name: 'Осколочная граната', price: 300 },
   { item: 'smoke', name: 'Дымовая граната', price: 300 },
   { item: 'flash', name: 'Светошумовая граната', price: 200 },
+  { item: 'molotov', name: 'Коктейль Молотова', price: 400 },
 ];

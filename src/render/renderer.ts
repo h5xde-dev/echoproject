@@ -6,7 +6,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '../game/config';
-import type { FlagState, FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody } from '../game/types';
+import type { FireZone, FlagState, FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody } from '../game/types';
 import { smokeRadius } from '../game/sim';
 import type { WeaponId } from '../game/weapons';
 import { ActorVisual } from './actors';
@@ -87,7 +87,14 @@ export class Renderer {
     frag: this.grenadeMat,
     smoke: new THREE.MeshStandardMaterial({ color: 0x6d7378, roughness: 0.7, metalness: 0.2 }),
     flash: new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.4, metalness: 0.5, emissive: 0x202020 }),
+    // A glass bottle with a lit rag: it glows in the dark.
+    molotov: new THREE.MeshStandardMaterial({ color: 0x4f6b3a, roughness: 0.15, metalness: 0.1, emissive: 0xff5a10, emissiveIntensity: 0.6 }),
   };
+  /** Lights on the burning patches nearest the camera (a fixed pool, see the constructor). */
+  private fireLights: THREE.PointLight[] = [];
+  /** A glowing pool on the ground under each burning patch, keyed by fire id. */
+  private fireGlows = new Map<number, THREE.Mesh>();
+  private fireGlowTex = makeGlowTexture();
   /** Smoke clouds: a cluster of soft sprites each, keyed by cloud id. */
   private smokeClouds = new Map<number, { group: THREE.Group; seen: boolean }>();
   /** The same clouds as circles, for line of sight. */
@@ -187,6 +194,11 @@ export class Renderer {
       const light = new THREE.PointLight(COLORS.lamp, 0, 22, 2);
       this.scene.add(light);
       this.lampPool.push(light);
+    }
+    for (let i = 0; i < 2; i++) {
+      const light = new THREE.PointLight(0xff7a2a, 0, 13, 1.8);
+      this.scene.add(light);
+      this.fireLights.push(light);
     }
     for (let i = 0; i < 2; i++) {
       const light = new THREE.SpotLight(0xfff0d6, 0, 34, 0.62, 0.6, 1.2);
@@ -757,6 +769,95 @@ export class Renderer {
     }
   }
 
+  /**
+   * Burning ground: flames lick up all over each patch, dark smoke rises,
+   * and the patches nearest the camera cast a flickering light.
+   */
+  setFires(fires: FireZone[], dt: number): void {
+    const F = CONFIG.fire;
+    const strength = (f: FireZone) => Math.max(0, Math.min(1, f.age / 0.25, (F.life - f.age) / F.fade));
+    const cx = this.camTarget.x;
+    const cz = this.camTarget.z;
+    const near = [...fires].sort((a, b) => Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz));
+    this.fireLights.forEach((light, i) => {
+      const f = near[i];
+      light.intensity = f ? (55 + Math.sin(this.time * 23 + i * 7) * 10 + Math.random() * 12) * strength(f) : 0;
+      if (f) light.position.set(f.x, 1.3, f.z);
+    });
+    const live = new Set<number>();
+    for (const f of fires) {
+      const k = strength(f);
+      const r = F.radius * Math.min(1, 0.45 + f.age * 2.5);
+      live.add(f.id);
+      let glow = this.fireGlows.get(f.id);
+      if (!glow) {
+        glow = new THREE.Mesh(
+          new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({ map: this.fireGlowTex, color: 0xff5a14, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
+        );
+        glow.position.set(f.x, 0.05, f.z);
+        this.scene.add(glow);
+        this.fireGlows.set(f.id, glow);
+      }
+      glow.scale.setScalar(r * 1.25);
+      (glow.material as THREE.MeshBasicMaterial).opacity = k * (0.75 + Math.sin(this.time * 17 + f.id) * 0.1 + Math.random() * 0.1);
+      const want = 90 * k * dt;
+      const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const rr = Math.sqrt(Math.random()) * r * 0.92;
+        this.tmpColor.setHex(0xff4a10).lerp(FIRE_TIP, Math.random() * 0.8);
+        this.particles.spawn(
+          f.x + Math.cos(a) * rr, 0.12, f.z + Math.sin(a) * rr,
+          (Math.random() - 0.5) * 0.5, 1.2 + Math.random() * 1.4, (Math.random() - 0.5) * 0.5,
+          0.4 + Math.random() * 0.4, 3 + Math.random() * 2.4, this.tmpColor, 1.4, 1.2,
+        );
+      }
+      if (Math.random() < 5 * k * dt) {
+        this.tmpColor.setRGB(0.09, 0.08, 0.08);
+        const a = Math.random() * Math.PI * 2;
+        this.smoke.spawn(f.x + Math.cos(a) * r * 0.5, 1.2, f.z + Math.sin(a) * r * 0.5, 0, 1.1, 0, 1.8, 6, this.tmpColor, 0.8, 0.4);
+      }
+    }
+    for (const [id, glow] of this.fireGlows) {
+      if (live.has(id)) continue;
+      this.scene.remove(glow);
+      glow.geometry.dispose();
+      (glow.material as THREE.Material).dispose();
+      this.fireGlows.delete(id);
+    }
+  }
+
+  /** A molotov breaks: glass, a whoomp of flame, a scorch mark. */
+  fireBurst(x: number, z: number): void {
+    const slot = this.boomLights.find((b) => b.life <= 0) ?? this.boomLights[0];
+    slot.life = slot.max;
+    slot.peak = 180;
+    slot.light.color.setHex(0xff7a2a);
+    slot.light.position.set(x, 1.4, z);
+    slot.light.intensity = slot.peak;
+    this.tmpColor.setHex(0xff8a2a);
+    this.particles.burst(x, 0.5, z, 40, 7, this.tmpColor, 3, 0.55, 3);
+    this.tmpColor.setHex(0xd8f0e0);
+    this.particles.burst(x, 0.3, z, 10, 5, this.tmpColor, 0.06, 0.3, -9);
+    this.decals.add('scorch', x, z, CONFIG.fire.radius * 1.6);
+  }
+
+  /** A soldier on fire. Hidden enemies stay hidden: their flames are not drawn. */
+  burnOn(id: number, x: number, z: number, dt: number): void {
+    if (!this.isRevealed(id)) return;
+    const want = 30 * dt;
+    const n = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+    for (let i = 0; i < n; i++) {
+      this.tmpColor.setHex(0xff5a14).lerp(FIRE_TIP, Math.random() * 0.7);
+      this.particles.spawn(
+        x + (Math.random() - 0.5) * 0.6, 0.4 + Math.random() * 1.1, z + (Math.random() - 0.5) * 0.6,
+        (Math.random() - 0.5) * 0.4, 1.4 + Math.random(), (Math.random() - 0.5) * 0.4,
+        0.3 + Math.random() * 0.25, 2.2 + Math.random() * 1.2, this.tmpColor, 1.5, 1.5,
+      );
+    }
+  }
+
   smokePop(x: number, z: number): void {
     this.tmpColor.setRGB(0.5, 0.52, 0.55);
     this.smoke.burst(x, 0.4, z, 14, 3, this.tmpColor, 0.6, 0.9, 1);
@@ -976,8 +1077,19 @@ export class Renderer {
     });
   }
 
-  syncTracers(bullets: { x: number; z: number; vx: number; vz: number; color: number }[]): void {
+  syncTracers(bullets: { x: number; z: number; vx: number; vz: number; color: number; flame?: boolean }[]): void {
     const mesh = this.tracerMesh;
+    // Flamethrower flames are fire, not tracers: a puff of flame where each one is.
+    for (const b of bullets) {
+      if (!b.flame) continue;
+      this.tmpColor.setHex(0xff5a14).lerp(FIRE_TIP, Math.random() * 0.6);
+      this.particles.spawn(
+        b.x + (Math.random() - 0.5) * 0.3, GUN_HEIGHT + (Math.random() - 0.5) * 0.2, b.z + (Math.random() - 0.5) * 0.3,
+        b.vx * 0.15, 0.6 + Math.random() * 0.8, b.vz * 0.15,
+        0.22 + Math.random() * 0.15, 2.4 + Math.random() * 1.6, this.tmpColor, 2.5, 1,
+      );
+    }
+    bullets = bullets.filter((b) => !b.flame);
     const n = Math.min(bullets.length, 256);
     for (let i = 0; i < n; i++) {
       const b = bullets[i];
@@ -1428,6 +1540,9 @@ export class Renderer {
   }
 }
 
+/** The yellow tip fire particles blend toward from their orange base. */
+const FIRE_TIP = new THREE.Color(0xffd060);
+
 function decayLight(f: { light: THREE.PointLight; life: number; max: number; peak: number }, dt: number): void {
   if (f.life <= 0) return;
   f.life -= dt;
@@ -1661,6 +1776,14 @@ function weaponPickupVisual(weapon: WeaponId): THREE.Group {
   if (gun) {
     gun.model.position.x = -gun.length * (0.5 - gun.grip);
     holder.add(gun.model);
+  } else if (weapon === 'flamer') {
+    // A tube over a red fuel tank, like the one in hand.
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.8, 10), new THREE.MeshStandardMaterial({ color: 0x2a2d31, metalness: 0.7, roughness: 0.5 }));
+    tube.rotation.z = Math.PI / 2;
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.32, 12), new THREE.MeshStandardMaterial({ color: 0x8a2a1a, metalness: 0.4, roughness: 0.55 }));
+    tank.rotation.z = Math.PI / 2;
+    tank.position.set(-0.08, -0.1, 0);
+    holder.add(tube, tank);
   } else {
     holder.add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), new THREE.MeshStandardMaterial({ color: 0x2a2d33 })));
   }

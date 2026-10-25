@@ -45,6 +45,7 @@ export interface HudState {
   grenades: number;
   smokes: number;
   flashes: number;
+  molotovs: number;
   /** Grenade kind G throws. */
   nadeKind: GrenadeKind;
   /** Team modes: the local player's team and the kills per team. */
@@ -113,6 +114,7 @@ const WEAPON_LABEL: Record<WeaponId, string> = {
   lmg: 'ПУЛЕМ.',
   silenced: 'ГЛУШ.',
   knife: 'НОЖ',
+  flamer: 'ОГНЕМ.',
 };
 
 export class Hud {
@@ -286,9 +288,10 @@ export class Hud {
     this.shopKey = key;
     const items = SHOP.map((e, i) => {
       const locked = money < e.price;
-      return `<button class="shop-item${locked ? ' locked' : ''}" data-item="${e.item}"><kbd>${i + 1}</kbd><span>${escapeHtml(e.name)}</span><em>$${e.price}</em></button>`;
+      const key = i < 9 ? String(i + 1) : i === 9 ? '0' : '';
+      return `<button class="shop-item${locked ? ' locked' : ''}" data-item="${e.item}"><kbd>${key}</kbd><span>${escapeHtml(e.name)}</span><em>$${e.price}</em></button>`;
     }).join('');
-    this.shopEl.innerHTML = `<div class="shop-head"><span>МАГАЗИН</span><b>$${money}</b></div><div class="shop-grid">${items}</div><div class="shop-foot">B — закрыть · клавиши 1–${SHOP.length} или клик</div>`;
+    this.shopEl.innerHTML = `<div class="shop-head"><span>МАГАЗИН</span><b>$${money}</b></div><div class="shop-grid">${items}</div><div class="shop-foot">B — закрыть · клавиши 1–9, 0 или клик</div>`;
   }
 
   private hudRoot(): HTMLElement {
@@ -598,6 +601,7 @@ export class Hud {
       ['frag', state.grenades, 'осколочная'],
       ['smoke', state.smokes, 'дымовая'],
       ['flash', state.flashes, 'светошумовая'],
+      ['molotov', state.molotovs, 'коктейль Молотова'],
     ];
     const groups = kinds
       .map(([k, n, title]) => {

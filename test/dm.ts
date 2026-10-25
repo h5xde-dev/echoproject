@@ -1046,6 +1046,111 @@ for (const info of ARENAS) {
   check(lmgSpeed < a.speed, 'the LMG slows you down');
 }
 
+// Fire: molotov, flamethrower, burning; the knife.
+{
+  const dt = CONFIG.tickDt;
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  const open = { ...buildArena('sklad', 5656, 'dm'), walls: [], props: [], lamps: [], bushes: [], pickups: [], powerups: [] };
+  {
+    const s = new Sim(open);
+    const a = s.addPlayer('a', 'a', 1);
+    const b = s.addPlayer('b', 'b', 2);
+    check(a.molotovs === CONFIG.grenade.startMolotov, `players start with ${a.molotovs} molotov`);
+    a.x = 20; a.z = 20; a.shield = 0; a.grenadeCd = 0;
+    b.x = 28; b.z = 20; b.shield = 0; b.armor = 0;
+    s.applyInput(a, { ...input, grenade: true, grenadeKind: 'molotov', throwDist: 8 });
+    check(a.molotovs === CONFIG.grenade.startMolotov - 1 && s.grenades[0]?.kind === 'molotov', 'a molotov is thrown');
+    let t = 0;
+    while (s.fires.length === 0 && t < 3) {
+      b.x = 28; b.z = 20;
+      s.step(dt);
+      t += dt;
+    }
+    const fire = s.fires[0];
+    check(!!fire && Math.abs(fire.x - 28) < 1 && t < 1.5, `it bursts into flames where it lands (${fire ? fire.x.toFixed(1) : '-'} m after ${t.toFixed(2)} s)`);
+    const hp0 = b.hp;
+    for (let k = 0; k < 1 / dt; k++) {
+      b.x = 28; b.z = 20; b.shield = 0;
+      s.step(dt);
+    }
+    const inFlames = hp0 - b.hp;
+    check(inFlames > CONFIG.fire.dps * 0.7 && b.burnT > 0, `a second in the flames: ${inFlames.toFixed(0)} damage, set alight`);
+    // Out of the fire: the afterburn keeps on, then dies out.
+    b.x = 60;
+    const hp1 = b.hp;
+    for (let k = 0; k < (CONFIG.fire.burnTime + 0.5) / dt; k++) s.step(dt);
+    check(hp1 - b.hp > 0 && hp1 - b.hp <= CONFIG.fire.burnDps * CONFIG.fire.burnTime + 1 && b.burnT === 0, `afterburn: ${(hp1 - b.hp).toFixed(0)} more, then it goes out`);
+    for (let k = 0; k < CONFIG.fire.life / dt; k++) s.step(dt);
+    check(s.fires.length === 0, 'the fire burns out');
+  }
+  {
+    // Walls keep the flames out; explosive props in them go up.
+    const s = new Sim({ ...open, walls: [{ cx: 21, cz: 20, hw: 0.3, hh: 4 }] });
+    const b = s.addPlayer('b', 'b', 2);
+    b.x = 22; b.z = 20; b.shield = 0;
+    s.fires.push({ id: 1, x: 20, z: 20, age: 0, ownerId: 99 });
+    s.props.push({ id: 900, kind: 'barrel', x: 20, z: 22, vx: 0, vz: 0, hw: 0.6, hh: 0.6, hp: 28, explosive: true, fixed: false, alive: true, room: 0, mass: 1 });
+    for (let k = 0; k < 1 / dt; k++) {
+      b.x = 22; b.z = 20;
+      s.step(dt);
+    }
+    check(b.burnT === 0, 'a wall keeps the fire off');
+    check(!s.props.find((p) => p.id === 900)?.alive, 'a fuel barrel in the flames explodes');
+  }
+  {
+    // Teams: your fire spares your side.
+    const s = new Sim({ ...buildArena('sklad', 5757, 'tdm'), walls: [], props: [], lamps: [] });
+    const a = s.addPlayer('a', 'a', 1);
+    const mate = s.addPlayer('m', 'm', 2);
+    mate.team = a.team;
+    mate.x = 30; mate.z = 30; mate.shield = 0;
+    s.fires.push({ id: 1, x: 30, z: 30, age: 0, ownerId: a.id });
+    for (let k = 0; k < 1 / dt; k++) s.step(dt);
+    check(mate.hp === mate.maxHp && mate.burnT === 0, "teams: your fire spares a teammate");
+  }
+  {
+    // Flamethrower: sets alight up close, nothing past its reach.
+    const s = new Sim(open);
+    const a = s.addPlayer('a', 'a', 1);
+    const b = s.addPlayer('b', 'b', 2);
+    const equip = (s as unknown as { equip(x: unknown, w: string): void }).equip.bind(s);
+    a.weapons = ['flamer'];
+    equip(a, 'flamer');
+    const burn = (range: number) => {
+      a.x = 20; a.z = 20; a.shield = 0; a.cooldown = 0; a.ammo = WEAPONS.flamer.mag;
+      b.x = 20 + range; b.z = 20; b.hp = b.maxHp; b.burnT = 0; b.shield = 0; b.alive = true;
+      for (let k = 0; k < 0.6 / dt; k++) {
+        s.applyInput(a, { ...input, fire: true });
+        b.x = 20 + range; b.z = 20;
+        s.step(dt);
+      }
+      return b.burnT > 0;
+    };
+    check(burn(4), 'the flamethrower sets a target 4 m away alight');
+    check(!burn(12) && b.hp === b.maxHp, 'and does not reach 12 m');
+    s.bullets = [];
+    // Knife: lighter in the hand than a pistol.
+    a.weapons = ['pistol', 'knife'];
+    equip(a, 'pistol');
+    s.applySpeed(a);
+    const pistolSpeed = a.speed;
+    equip(a, 'knife');
+    s.applySpeed(a);
+    check(a.speed > pistolSpeed, `knife in hand: faster on your feet (${a.speed.toFixed(1)} vs ${pistolSpeed.toFixed(1)})`);
+    check(WEAPONS.knife.damage >= 80 && CONFIG.knife.reach >= 2, `knife: ${WEAPONS.knife.damage} damage from the front, ${CONFIG.knife.reach} m reach`);
+  }
+  {
+    // Competitive: molotov and flamethrower are for sale.
+    const s = new Sim(buildArena('sklad', 5858, 'comp'));
+    const p = s.addPlayer('a', 'a', 1);
+    p.money = 5000;
+    const free = p.molotovs;
+    const bought = s.buy(p, 'molotov');
+    check(free === 0 && bought && p.molotovs === 1, 'competitive: no free molotov, one can be bought');
+    check(s.buy(p, 'flamer') && p.weapon === 'flamer', 'competitive: the flamethrower can be bought');
+  }
+}
+
 // Progress between matches.
 {
   check(levelOf(0).level === 1 && levelOf(399).level === 1 && levelOf(400).level === 2 && levelOf(1000).level === 3, 'levels: 400 xp for the first, 200 more each after');

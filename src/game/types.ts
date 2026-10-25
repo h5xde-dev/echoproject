@@ -272,9 +272,13 @@ export interface Actor {
   gait: Gait;
   /** Distance walked since the last footstep noise. */
   stepDist: number;
-  /** Smoke and flash grenades carried (`grenades` counts frags). */
+  /** Smoke, flash and fire grenades carried (`grenades` counts frags). */
   smokes: number;
   flashes: number;
+  molotovs: number;
+  /** Seconds left on fire (afterburn), and who set them alight. */
+  burnT: number;
+  burnBy: number;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   /** In a bush and quiet: unseen beyond `bush.spotDist`. */
@@ -368,7 +372,7 @@ export interface Bullet {
   range: number;
 }
 
-export type GrenadeKind = 'frag' | 'smoke' | 'flash';
+export type GrenadeKind = 'frag' | 'smoke' | 'flash' | 'molotov';
 
 export interface Grenade {
   id: number;
@@ -391,8 +395,17 @@ export interface SmokeCloud {
   age: number;
 }
 
+/** A patch of burning ground left by a molotov. */
+export interface FireZone {
+  id: number;
+  x: number;
+  z: number;
+  age: number;
+  ownerId: number;
+}
+
 /** Things for sale in competitive mode. */
-export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'armor' | 'grenade' | 'smoke' | 'flash';
+export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov';
 
 export interface NoiseEvent {
   x: number;
@@ -417,6 +430,7 @@ export interface GameEvent {
     | 'stab'
     | 'smoke'
     | 'flash'
+    | 'fire'
     | 'impact'
     | 'explosion'
     | 'death'
