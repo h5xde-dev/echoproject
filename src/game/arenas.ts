@@ -12,6 +12,7 @@ import type {
   PropKind,
   RoomDef,
   RoomTheme,
+  TrenchDef,
 } from './types';
 import type { WeaponId } from './weapons';
 
@@ -25,6 +26,7 @@ import type { WeaponId } from './weapons';
 //   1 SMG  2 shotgun  3 rifle  4 sniper  5 LMG  6 flamethrower (weapon pickups)
 //   h medkit  r armor  x damage  s speed  f rapid fire  n night vision (powerups)
 //   Y bush (no collision; hides whoever keeps quiet in it)
+//   = trench (slows you; crouched in it you are hidden, long shots from the open hit less)
 
 export const CELL = 1.5;
 
@@ -267,6 +269,35 @@ export const ARENAS: ArenaInfo[] = [
     '#####################',
     ],
   },
+  {
+    // Open field: a home trench, a zigzag forward line and one contested trench across the middle.
+    id: 'okopy',
+    name: 'Окопы',
+    theme: 'field',
+    rows: [
+    '#####################',
+    '#S..=..........KK....',
+    '#...=..h.............',
+    '#...=......==......3.',
+    '#...==.....=.........',
+    '#....=======...KK....',
+    '#S...=.....=.........',
+    '#...==.....==...L....',
+    '#...=.......=....B...',
+    '#.L.=..KK...=..T...5.',
+    '#...=.......=========',
+    '#S..=.......=........',
+    '#...=..KK...=...L....',
+    '#...==.....==........',
+    '#....=.....=.....B...',
+    '#....=======...KK....',
+    '#...==.....=.........',
+    '#...=......==.....4..',
+    '#...=..r.............',
+    '#S..=..........KK....',
+    '#####################',
+    ],
+  },
 ];
 
 const PROP_CHARS: Record<string, PropKind> = {
@@ -295,6 +326,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
 
   const wallCells = new Set<number>();
   const floorCells = new Set<number>();
+  const trenchCells = new Set<number>();
   const cells = new Uint8Array(gw * gh);
   for (let z = 0; z < gh; z++) {
     for (let x = 0; x < gw; x++) {
@@ -303,6 +335,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
         cells[z * gw + x] = 2;
       } else {
         floorCells.add(z * gw + x);
+        if (at(x, z) === '=') trenchCells.add(z * gw + x);
         cells[z * gw + x] = 1;
       }
     }
@@ -383,6 +416,13 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
     theme: info.theme,
   }));
 
+  const trenches: TrenchDef[] = mergeWallCells(trenchCells, gw, gh, CELL).map((b) => ({
+    x0: b.cx - b.hw,
+    z0: b.cz - b.hh,
+    x1: b.cx + b.hw,
+    z1: b.cz + b.hh,
+  }));
+
   const maxX = gw * CELL;
   const maxZ = gh * CELL;
   // One room spanning the arena keeps room-based helpers working.
@@ -422,6 +462,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
     floors,
     lamps,
     bushes,
+    trenches,
     spawns,
     spawnX: spawns[0]?.x ?? maxX / 2,
     spawnZ: spawns[0]?.z ?? maxZ / 2,
