@@ -11,8 +11,8 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { NO_ONCE, mergeOnce, type OnceInput } from './once';
-import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
+import { ARENA_DOOR_BASE, Sim, type PlayerInput } from './sim';
+import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem } from './types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
@@ -71,6 +71,11 @@ export interface DisplayActor {
   color: number;
   drones: number;
   piloting: number;
+  streak: number;
+  strikes: number;
+  mines: number;
+  flares: number;
+  hold: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -171,6 +176,8 @@ export class Game {
     mark: null as { x: number; z: number } | null,
     deploy: false,
     drone: false,
+    strike: false,
+    mine: false,
   };
   /** Minimap: recent noises of unseen enemies and team markers (ms timestamps). */
   private noiseBlips: { x: number; z: number; at: number }[] = [];
@@ -607,6 +614,7 @@ export class Game {
     this.sim.syncSmokes(msg.smokes ?? []);
     this.sim.syncFires(msg.fires ?? []);
     this.sim.syncDrones(msg.drones ?? []);
+    this.sim.syncWorldExtras(msg.inter ?? [], msg.supply ?? [], msg.shells ?? [], msg.flares ?? []);
     this.droneSyncAt = performance.now();
     if (msg.flags) this.sim.syncFlags(msg.flags);
     if (msg.bases) this.sim.bases = msg.bases;
@@ -875,6 +883,42 @@ export class Game {
           if (event.ownerId === this.localId) this.hud.message('Связь с дроном потеряна', 'warn');
         }
         break;
+      case 'interact':
+        this.onInteractEvent(event);
+        break;
+      case 'drop':
+        this.onDropEvent(event);
+        break;
+      case 'streak':
+        this.onStreakEvent(event);
+        break;
+      case 'strike':
+        if (event.id === 'call') {
+          this.renderer.markAt(event.x ?? 0, event.z ?? 0);
+          this.markBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.whistle(d));
+          this.hud.message(event.ownerId === this.localId ? 'Миномёт: залп пошёл' : 'ВОЗДУХ! Миномётный обстрел', event.ownerId === this.localId ? 'good' : 'warn');
+        }
+        break;
+      case 'mine':
+        if (event.id === 'place') {
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.click(d));
+          if (event.ownerId === this.localId) this.hud.message('Мина установлена', 'good');
+        } else if (event.id === 'click') {
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.click(d * 0.5));
+        }
+        break;
+      case 'wire':
+        if (event.id === 'cut') {
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.click(d));
+          if (event.ownerId === this.localId) this.hud.message('Проволока перерезана', 'good');
+        } else if (event.ownerId === this.localId) {
+          this.renderer.shake(0.25);
+        }
+        break;
+      case 'flare':
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.hiss(d));
+        break;
       case 'deploy':
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.door());
         if (event.ownerId === this.localId) this.hud.message('Щит установлен', 'good');
@@ -1129,6 +1173,8 @@ export class Game {
     if (this.input.consume('nade')) this.nadeKind = this.nextNadeKind();
     if (this.input.consume('deploy')) this.pending.deploy = true;
     if (this.input.consume('drone')) this.pending.drone = true;
+    if (this.input.consume('strike')) this.pending.strike = true;
+    if (this.input.consume('mine')) this.pending.mine = true;
     if (this.input.consume('mark')) {
       const g = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
       this.pending.mark = { x: g.x, z: g.z };
@@ -1196,7 +1242,11 @@ export class Game {
       mark: this.pending.mark ?? undefined,
       deploy: this.pending.deploy,
       drone: this.pending.drone,
+      strike: this.pending.strike,
+      mine: this.pending.mine,
     };
+    this.pending.strike = false;
+    this.pending.mine = false;
     this.pending.mark = null;
     this.pending.deploy = false;
     this.pending.drone = false;
@@ -1365,6 +1415,11 @@ export class Game {
           shieldUsed: a.shieldUsed,
           color: a.color,
           drones: a.drones,
+          streak: a.streak,
+          strikes: a.strikes,
+          mines: a.mines,
+          flares: a.flares,
+          hold: a.holdT,
           piloting: a.piloting,
           isLocal,
           moving: a.moving,
@@ -1396,6 +1451,9 @@ export class Game {
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
     this.renderer.setSmokes(this.sim.smokes);
     this.renderer.setFires(this.sim.fires, dt);
+    this.renderer.syncInteractables(this.sim.interactables);
+    this.renderer.syncWorldExtras(this.sim.drops, this.sim.shells, this.sim.flares, dt);
+    this.renderer.setHiddenProps(this.hiddenMines());
     const drones = this.droneViews();
     this.renderer.syncDrones(drones, dt);
     // The buzz: a short whine from every drone in the air, panned to where it is.
@@ -1512,6 +1570,11 @@ export class Game {
         shieldUsed: b.shieldUsed ?? false,
         color: b.color ?? -1,
         drones: b.drones ?? 0,
+        streak: b.streak ?? 0,
+        strikes: b.strikes ?? 0,
+        mines: b.mines ?? 0,
+        flares: b.flares ?? 0,
+        hold: b.hold ?? 0,
         piloting: b.piloting ?? -1,
         isLocal: id === this.localId,
         moving: false,
@@ -1621,6 +1684,8 @@ export class Game {
       if (Math.hypot(d.x - self.x, d.z - self.z) > D.reach + 1) continue;
       return d.reviveT > 0 ? `ПОДНИМАЕТЕ · ${Math.round((d.reviveT / D.reviveTime) * 100)}%` : `ЗАЖМИТЕ E — ПОДНЯТЬ ${d.name.toUpperCase()}`;
     }
+    const near = this.nearUsePrompt(self);
+    if (near) return near;
     const O = CONFIG.objectives;
     for (const o of this.sim.objectives) {
       if (o.done || o.room !== this.sim.roomIndex || Math.hypot(o.x - self.x, o.z - self.z) > O.reach + 0.5) continue;
@@ -1638,13 +1703,107 @@ export class Game {
     if (this.noiseBlips.length > 40) this.noiseBlips.shift();
   }
 
+  /** Enemy mines are invisible unless you are almost on them. */
+  private hiddenMines(): Set<number> {
+    const out = new Set<number>();
+    const self = this.localDisplay();
+    for (const p of this.sim.props) {
+      if (p.kind !== 'mine' || !p.alive) continue;
+      const owner = p.ownerId ?? -1;
+      if (owner === this.localId || !this.isHostile(owner)) continue;
+      if (self && Math.hypot(p.x - self.x, p.z - self.z) < CONFIG.mine.seenAt) continue;
+      out.add(p.id);
+    }
+    return out;
+  }
+
+  /** What E does here: an object, a supply crate, a door, barbed wire. */
+  private nearUsePrompt(self: DisplayActor): string {
+    const I = CONFIG.interact;
+    const hold = self.hold;
+    for (const d of this.sim.drops) {
+      if (d.landT > 0 || Math.hypot(d.x - self.x, d.z - self.z) > CONFIG.drop.reach + 0.3) continue;
+      return hold > 0 ? `ВСКРЫТИЕ ЯЩИКА · ${Math.min(100, Math.round((hold / CONFIG.drop.openTime) * 100))}%` : 'ЗАЖМИТЕ E — ВСКРЫТЬ СБРОС';
+    }
+    let best: Interactable | null = null;
+    let bestD: number = I.reach;
+    for (const o of this.sim.interactables) {
+      const d = Math.hypot(o.x - self.x, o.z - self.z);
+      if (d < bestD) {
+        best = o;
+        bestD = d;
+      }
+    }
+    const door = this.sim.doors.find((d) => d.room >= ARENA_DOOR_BASE && Math.hypot(d.body.cx - self.x, d.body.cz - self.z) < I.doorReach);
+    if (door && (!best || Math.hypot(door.body.cx - self.x, door.body.cz - self.z) < bestD)) return door.open ? 'E — ЗАКРЫТЬ ДВЕРЬ' : 'E — ОТКРЫТЬ ДВЕРЬ';
+    if (best) {
+      if (best.kind === 'switch') return best.cd > 0 ? 'РУБИЛЬНИК…' : best.on ? 'E — ВЫКЛЮЧИТЬ СВЕТ' : 'E — ВКЛЮЧИТЬ СВЕТ';
+      if (best.kind === 'ammo') return best.cd > 0 ? `ЯЩИК ПАТРОНОВ · ${Math.ceil(best.cd)} С` : 'E — ПОПОЛНИТЬ ПАТРОНЫ';
+      return best.charge < 1 ? 'МЕДПУНКТ ПУСТ' : `ЗАЖМИТЕ E — ЛЕЧЕНИЕ · ЗАПАС ${Math.round(best.charge)}`;
+    }
+    if (hold > 0) return `РЕЖЕМ ПРОВОЛОКУ · ${Math.min(100, Math.round((hold / CONFIG.wire.cutTime) * 100))}%`;
+    const wire = this.sim.props.find((p) => p.alive && p.kind === 'wire' && Math.abs(self.x - p.x) < p.hw + 0.7 && Math.abs(self.z - p.z) < p.hh + 0.7);
+    if (wire) return 'ЗАЖМИТЕ E — РЕЗАТЬ ПРОВОЛОКУ';
+    return '';
+  }
+
+  private onInteractEvent(event: GameEvent): void {
+    const x = event.x ?? 0;
+    const z = event.z ?? 0;
+    const mine = event.ownerId === this.localId;
+    if (event.id === 'switch') {
+      this.soundAt(x, z, (d) => this.audio.click(d));
+      if (mine) this.hud.message(event.text === 'on' ? 'Свет включён' : 'Свет выключен — зона во тьме', 'info');
+    } else if (event.id === 'ammo') {
+      this.soundAt(x, z, () => this.audio.reload());
+      if (mine) this.hud.message('Боезапас пополнен', 'good');
+    } else if (event.id === 'med') {
+      if (mine) this.audio.tone(660, 880, 0.12, 0.04, 'triangle');
+    } else if (event.id === 'door') {
+      this.soundAt(x, z, (d) => d < 25 && this.audio.door());
+    }
+  }
+
+  private onDropEvent(event: GameEvent): void {
+    const x = event.x ?? 0;
+    const z = event.z ?? 0;
+    if (event.id === 'incoming') {
+      this.audio.plane();
+      this.hud.banner('СБРОС СНАРЯЖЕНИЯ', 'ящик отмечен на карте');
+      this.markBlips.push({ x, z, at: performance.now() });
+    } else if (event.id === 'landed') {
+      this.soundAt(x, z, () => this.audio.impact());
+      this.renderer.impact(x, z);
+    } else if (event.id === 'opened') {
+      if (event.ownerId === this.localId) {
+        this.audio.powerup();
+        this.hud.message(`Сброс вскрыт${event.weapon ? `: ${WEAPONS[event.weapon].name}` : ''} и бонусы`, 'good');
+      } else {
+        const who = this.display.get(event.ownerId ?? -1)?.name ?? 'кто-то';
+        this.hud.message(`${who} забрал сброс`, 'info');
+      }
+    }
+  }
+
+  private onStreakEvent(event: GameEvent): void {
+    const n = Number(event.id ?? 0);
+    if (event.ownerId === this.localId) {
+      this.audio.powerup();
+      if (n === CONFIG.streak.radarAt) this.hud.banner(`СЕРИЯ ${n}`, 'радар: враги на карте');
+      else this.hud.banner(`СЕРИЯ ${n}`, 'миномётный удар готов — T по курсору');
+    } else {
+      const who = this.display.get(event.ownerId ?? -1)?.name;
+      if (who && n >= CONFIG.streak.strikeAt) this.hud.message(`${who}: серия ${n}`, 'warn');
+    }
+  }
+
   /** Next grenade kind the player carries, after the selected one (Q). */
   private nextNadeKind(): GrenadeKind {
     const self = this.localDisplay();
-    const order: GrenadeKind[] = ['frag', 'smoke', 'flash', 'molotov'];
+    const order: GrenadeKind[] = ['frag', 'smoke', 'flash', 'molotov', 'flare'];
     const carried: Record<GrenadeKind, number> = self
-      ? { frag: self.grenades, smoke: self.smokes, flash: self.flashes, molotov: self.molotovs }
-      : { frag: 0, smoke: 0, flash: 0, molotov: 0 };
+      ? { frag: self.grenades, smoke: self.smokes, flash: self.flashes, molotov: self.molotovs, flare: self.flares }
+      : { frag: 0, smoke: 0, flash: 0, molotov: 0, flare: 0 };
     const count = (k: GrenadeKind) => carried[k];
     const start = order.indexOf(this.nadeKind);
     for (let step = 1; step <= order.length; step++) {
@@ -1839,6 +1998,10 @@ export class Game {
       cls: self.cls,
       shieldReady: self.cls === 'engineer' && !self.shieldUsed,
       drones: self.drones,
+      flares: self.flares,
+      mines: self.mines,
+      strikes: self.strikes,
+      streak: self.streak,
       blind: self.blind,
       money: self.money,
       tier: self.tier,

@@ -43,7 +43,7 @@ interface PropSpec {
   height: number;
 }
 
-const PROP_SPECS: Record<PropKind, PropSpec> = {
+const PROP_SPECS: Partial<Record<PropKind, PropSpec>> = {
   crate: { file: 'p_crate', rotY: 0, height: 1.4 },
   barrel: { file: 'p_barrel', rotY: 0, height: 1.3 },
   cover: { file: 'p_cover', rotY: 0, height: 1.15 },

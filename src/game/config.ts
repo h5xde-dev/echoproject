@@ -57,6 +57,61 @@ export const CONFIG = {
     coverDist: 5,
     coverMul: 0.35,
   },
+  /** Things to use with E. */
+  interact: {
+    reach: 1.7,
+    switchRadius: 13,
+    switchCd: 2,
+    ammoCd: 20,
+    medRate: 15,
+    medCharge: 150,
+    /** Charge a med station gets back per second. */
+    medRecharge: 2,
+    doorReach: 2,
+  },
+  /** Supply drops on arenas (not round modes) and in co-op. */
+  drop: {
+    firstAfter: 35,
+    every: 60,
+    fallTime: 6,
+    openTime: 2,
+    reach: 1.8,
+    life: 60,
+    weapons: ['sniper', 'lmg', 'flamer', 'rifle', 'shotgun'] as const,
+  },
+  streak: {
+    radarAt: 3,
+    strikeAt: 5,
+    /** Mortar: how far it can be called, the whistle, shells. */
+    strikeRange: 32,
+    strikeDelay: 2,
+    shells: 3,
+    shellGap: 0.3,
+    shellSpread: 2.2,
+    shellRadius: 3.6,
+    shellDamage: 70,
+  },
+  wire: {
+    speedMul: 0.45,
+    dps: 6,
+    cutTime: 1.5,
+  },
+  flare: {
+    life: 12,
+    radius: 9,
+    fuse: 1.4,
+  },
+  mine: {
+    perEngineer: 2,
+    max: 3,
+    trigger: 1.2,
+    armTime: 1.2,
+    delay: 0.3,
+    radius: 3.2,
+    damage: 95,
+    /** Enemies only see a mine this close. */
+    seenAt: 3,
+  },
   bush: {
     radius: { min: 1.2, max: 1.7 },
     /** Bushes per yard room in co-op levels. */
@@ -171,15 +226,17 @@ export const CONFIG = {
     nvTime: 10,
     /** Night vision amplifies a flash grenade too. */
     nvBlindMul: 1.5,
-    regenRate: 6,
-    regenTime: 10,
+    regenRate: 4,
+    regenTime: 12,
+    /** Regeneration pauses this long after a hit: it heals between fights, not in them. */
+    regenPause: 1.5,
     stealthTime: 12,
     radarTime: 8,
-    overshield: 50,
+    overshield: 35,
     /** Overshield points lost per second. */
-    overshieldDecay: 50 / 15,
+    overshieldDecay: 35 / 15,
     /** Chance that anyone killed on an arena drops a powerup (lies 20 s). */
-    arenaDropChance: 0.18,
+    arenaDropChance: 0.12,
     dropLife: 20,
     /** Chance that a killed guard drops a powerup (co-op). */
     dropChance: 0.35,

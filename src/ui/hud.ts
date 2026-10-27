@@ -70,6 +70,10 @@ export interface HudState {
   shieldReady: boolean;
   /** FPV drones carried (X launches one). */
   drones: number;
+  flares: number;
+  mines: number;
+  strikes: number;
+  streak: number;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -608,6 +612,7 @@ export class Hud {
       ['smoke', state.smokes, 'дымовая'],
       ['flash', state.flashes, 'светошумовая'],
       ['molotov', state.molotovs, 'коктейль Молотова'],
+      ['flare', state.flares, 'осветительная ракета'],
     ];
     const groups = kinds
       .map(([k, n, title]) => {
@@ -620,7 +625,10 @@ export class Hud {
     const clsName = state.cls ? CLASS_LABEL[state.cls] : '';
     const shield = state.cls === 'engineer' ? `<span class="light${state.shieldReady ? ' on' : ''}"><kbd>V</kbd>${state.shieldReady ? 'щит' : 'щит стоит'}</span>` : '';
     const drone = state.drones > 0 ? `<span class="light on"><kbd>X</kbd>дрон</span>` : '';
-    const extra = `${clsName ? `<span class="cls-tag">${clsName}</span>` : ''}${money}${nades}${shield}${drone}${light}`;
+    const mines = state.mines > 0 ? `<span class="light on"><kbd>N</kbd>мины ${state.mines}</span>` : '';
+    const strike = state.strikes > 0 ? `<span class="light on strike"><kbd>T</kbd>миномёт${state.strikes > 1 ? ` ×${state.strikes}` : ''}</span>` : '';
+    const streak = state.streak >= 2 ? `<span class="streak">серия ${state.streak}</span>` : '';
+    const extra = `${clsName ? `<span class="cls-tag">${clsName}</span>` : ''}${money}${nades}${shield}${drone}${mines}${strike}${streak}${light}`;
     if (this.extraEl.innerHTML !== extra) this.extraEl.innerHTML = extra;
 
     // Gun game ladder.

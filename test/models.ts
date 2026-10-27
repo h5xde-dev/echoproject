@@ -46,7 +46,7 @@ for (const id of ['smg', 'shotgun', 'rifle', 'sniper'] as WeaponId[]) {
   if (w) w.model.position.y = 1;
   place(w?.model ?? null, 1.5);
 }
-const sizes: Record<PropKind, [number, number]> = { crate: [1.5, 1.5], barrel: [1.2, 1.2], cover: [2.7, 0.8], table: [3, 1.7], chair: [1, 1], car: [4.2, 1.9], pallet: [2, 1.6], drum: [0.9, 0.9], cabinet: [1.1, 0.8], tires: [1.8, 1.8], ammo: [1.2, 0.7] };
+const sizes: Record<PropKind, [number, number]> = { crate: [1.5, 1.5], barrel: [1.2, 1.2], cover: [2.7, 0.8], table: [3, 1.7], chair: [1, 1], car: [4.2, 1.9], pallet: [2, 1.6], drum: [0.9, 0.9], cabinet: [1.1, 0.8], tires: [1.8, 1.8], ammo: [1.2, 0.7], wire: [1.5, 0.9], mine: [0.6, 0.6] };
 for (const k of Object.keys(sizes) as PropKind[]) place(assets.prop(k, ...sizes[k]), sizes[k][0] + 0.6);
 renderer.render(scene, cam);
 (window as unknown as { __ready: boolean }).__ready = true;

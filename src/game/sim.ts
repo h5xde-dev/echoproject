@@ -17,7 +17,11 @@ import type {
   PlayerClass,
   Bullet,
   FireZone,
+  Flare,
   FlagState,
+  Interactable,
+  StrikeShell,
+  SupplyDrop,
   Gait,
   RoomObjective,
   GameEvent,
@@ -79,6 +83,10 @@ export interface PlayerInput {
   drone?: boolean;
   /** Team marker placed this tick (middle mouse / Z), at a ground point. */
   mark?: { x: number; z: number };
+  /** Call in the mortar strike earned by a kill streak (T), at aim + throwDist. */
+  strike?: boolean;
+  /** Engineer: lay a mine underfoot (N). */
+  mine?: boolean;
 }
 
 /** A prop as snapshots carry it; shape only for props placed mid-match. */
@@ -91,6 +99,7 @@ export interface PropSync {
   kind?: PropKind;
   hw?: number;
   hh?: number;
+  owner?: number;
 }
 
 /** Radius of a smoke cloud of this age: it billows out, then thins away. */
@@ -164,6 +173,17 @@ export class Sim {
   /** Burning ground (molotovs). */
   fires: FireZone[] = [];
   drones: Drone[] = [];
+  /** Switches, ammo crates, med stations. */
+  interactables: Interactable[] = [];
+  drops: SupplyDrop[] = [];
+  shells: StrikeShell[] = [];
+  flares: Flare[] = [];
+  private nextDropId = 1;
+  private nextShellId = 1;
+  private nextFlareId = 1;
+  private dropTimer: number = CONFIG.drop.firstAfter;
+  /** Lamps shot out (for good) — a switch only turns on the ones still whole. */
+  private lampBroken: boolean[] = [];
   private nextDroneId = 1;
   /** Counts down to the next pulse of fire damage. */
   private burnClock = 0;
@@ -241,6 +261,8 @@ export class Sim {
   constructor(map: MapData) {
     this.map = map;
     this.lampAlive = map.lamps.map(() => true);
+    this.lampBroken = map.lamps.map(() => false);
+    this.interactables = (map.interactables ?? []).map((d) => ({ ...d, on: true, charge: CONFIG.interact.medCharge, cd: 0 }));
     this.mode = map.mode;
     this.world = new PhysicsWorld(map.walls);
     this.rng = new Rng(map.seed ^ 0x5f3759df);
@@ -269,7 +291,7 @@ export class Sim {
     for (const p of map.powerups) this.powerups.push({ ...p, active: true, respawnT: 0, dropped: false });
 
     const navSolids: StaticBody[] = [...map.walls];
-    for (const p of this.props) if (p.fixed) navSolids.push({ cx: p.x, cz: p.z, hw: p.hw, hh: p.hh });
+    for (const p of this.props) if (p.fixed && !isGhostProp(p.kind)) navSolids.push({ cx: p.x, cz: p.z, hw: p.hw, hh: p.hh });
 
     if (this.mode === 'coop') {
       for (const room of map.rooms) {
@@ -284,6 +306,13 @@ export class Sim {
         navSolids.push(body);
       }
     }
+    // Arena doors: opened and shut with E (bots open the ones they bump into).
+    (map.arenaDoors ?? []).forEach((d, i) => {
+      const half = TILE_ARENA / 2;
+      const body: DoorBody = d.vertical ? { cx: d.x, cz: d.z, hw: 0.22, hh: half, open: false } : { cx: d.x, cz: d.z, hw: half, hh: 0.22, open: false };
+      this.doors.push({ room: ARENA_DOOR_BASE + i, body, open: false, openT: 0 });
+      this.world.addDoor(body);
+    });
     this.nav = new NavGrid(map.minX, map.minZ, map.maxX, map.maxZ, navSolids, CONFIG.enemy.radius + 0.1);
     if (this.rounds) {
       this.round = 1;
@@ -434,6 +463,11 @@ export class Sim {
       color: -1,
       drones: 0,
       piloting: -1,
+      streak: 0,
+      strikes: 0,
+      mines: 0,
+      flares: 0,
+      holdT: 0,
     };
   }
 
@@ -659,6 +693,9 @@ export class Sim {
 
     if (input.flashlight) actor.flashOn = !actor.flashOn;
     if (input.drone) this.launchDrone(actor);
+    if (input.interact) this.interact(actor);
+    if (input.strike) this.callStrike(actor, input.aim, input.throwDist ?? 15);
+    if (input.mine) this.placeMine(actor);
 
     // Number keys pick among the weapons the actor carries.
     if (input.slot >= 0 && input.slot < WEAPON_ORDER.length) {
@@ -807,6 +844,12 @@ export class Sim {
     else if (this.mode === 'waves') this.updateWaves(dt);
     else this.updateMatch(dt);
     if (this.mode === 'ctf') this.updateFlags(dt);
+    this.updateInteractables(dt);
+    this.updateArenaDoors(dt);
+    this.updateDrops(dt);
+    this.updateShells(dt);
+    this.updateFlares(dt);
+    this.updateHazards(dt);
     this.noises = this.noises.filter((n) => this.time - n.time < 0.5);
   }
 
@@ -829,7 +872,8 @@ export class Sim {
     b.overshield = Math.max(0, b.overshield - CONFIG.powerups.overshieldDecay * dt);
     if (b.regen > 0) {
       b.regen = Math.max(0, b.regen - dt);
-      if (actor.alive && !actor.downed) actor.hp = Math.min(actor.maxHp, actor.hp + CONFIG.powerups.regenRate * dt);
+      const calm = this.time - (this.lastHurt.get(actor.id) ?? -99) > CONFIG.powerups.regenPause;
+      if (actor.alive && !actor.downed && calm) actor.hp = Math.min(actor.maxHp, actor.hp + CONFIG.powerups.regenRate * dt);
     }
     this.applySpeed(actor);
 
@@ -860,6 +904,7 @@ export class Sim {
         if (!this.lampAlive[i]) return;
         if (segCircleHit(b.x, b.z, ex, ez, l.x, l.z, CONFIG.lamp.hitRadius) === null) return;
         this.lampAlive[i] = false;
+        this.lampBroken[i] = true;
         this.noises.push({ x: l.x, z: l.z, radius: CONFIG.lamp.noise, time: this.time, ownerId: b.ownerId });
         this.events.push({ type: 'lampBreak', id: String(i), x: l.x, z: l.z, ownerId: b.ownerId });
       });
@@ -952,7 +997,11 @@ export class Sim {
   classKit(actor: Actor): void {
     actor.shieldUsed = false;
     actor.piloting = -1;
-    if (actor.cls === 'engineer') actor.drones = Math.max(actor.drones, 1);
+    if (actor.cls === 'engineer') {
+      actor.drones = Math.max(actor.drones, 1);
+      actor.mines = Math.max(actor.mines, CONFIG.mine.perEngineer);
+    }
+    if (actor.cls === 'scout') actor.flares = Math.max(actor.flares, 1);
     if (actor.cls === 'assault') actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + CONFIG.classes.assault.extraFrags);
     if (actor.cls === 'scout' && CONFIG.classes.scout.nvOnSpawn) actor.buffs.nv = CONFIG.powerups.nvTime;
   }
@@ -1180,6 +1229,11 @@ export class Sim {
     }
     this.noises.push({ x: actor.x, z: actor.z, radius: WEAPONS.knife.noise, time: this.time, ownerId: actor.id });
     this.events.push({ type: 'stab', ownerId: actor.id, x: actor.x, z: actor.z });
+    // The blade cuts barbed wire in front of you.
+    const fx = actor.x + Math.cos(actor.ang) * 0.9;
+    const fz = actor.z + Math.sin(actor.ang) * 0.9;
+    const wire = this.props.find((p) => p.alive && p.kind === 'wire' && Math.abs(fx - p.x) < p.hw + 0.4 && Math.abs(fz - p.z) < p.hh + 0.4);
+    if (wire) this.cutWire(wire, actor);
     if (!victim) return;
     // Facing away from the attacker: a backstab.
     const fromVictim = Math.atan2(actor.z - victim.z, actor.x - victim.x);
@@ -1193,9 +1247,9 @@ export class Sim {
     const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
     const quiet = actor.gait !== 'run' || Math.hypot(actor.vx, actor.vz) < 0.4;
     // Ducked down in a trench is as good as a bush.
-    const dugIn = actor.gait === 'crouch' && this.inTrench(actor.x, actor.z);
+    const dugIn = actor.gait === 'crouch' && (this.inTrench(actor.x, actor.z) || this.inCrater(actor.x, actor.z));
     const cloaked = actor.buffs.stealth > 0 && quiet;
-    actor.concealed = ((inBush && quiet) || dugIn || cloaked) && actor.revealT <= 0;
+    actor.concealed = ((inBush && quiet) || dugIn || cloaked) && actor.revealT <= 0 && !this.inFlareLight(actor.x, actor.z);
   }
 
   /** Inside one of the map's trenches. */
@@ -1253,7 +1307,8 @@ export class Sim {
         gaitSpeed *
         (actor.carrying >= 0 ? CONFIG.ctf.carrySpeed : 1) *
         (actor.downed ? CONFIG.down.crawl : 1) *
-        (this.inTrench(actor.x, actor.z) ? CONFIG.trench.speedMul : 1);
+        (this.inTrench(actor.x, actor.z) ? CONFIG.trench.speedMul : 1) *
+        (this.inWire(actor.x, actor.z) ? CONFIG.wire.speedMul : 1);
       const tvx = moveX * speed;
       const tvz = moveZ * speed;
       const maxDv = actor.accel * dt;
@@ -1292,7 +1347,7 @@ export class Sim {
         if (!d.open && resolveCircleBox(actor, r, d.cx, d.cz, d.hw, d.hh)) hit = true;
       }
       for (const p of this.props) {
-        if (!p.alive) continue;
+        if (!p.alive || isGhostProp(p.kind)) continue;
         if (Math.abs(p.x - actor.x) > p.hw + r + 0.2 || Math.abs(p.z - actor.z) > p.hh + r + 0.2) continue;
         if (resolveCircleBox(actor, r, p.x, p.z, p.hw, p.hh)) {
           hit = true;
@@ -1360,17 +1415,8 @@ export class Sim {
       case 'nv':
         actor.buffs.nv = P.nvTime;
         return true;
-      case 'ammo': {
-        const def = WEAPONS[actor.weapon];
-        const full = actor.ammo >= def.mag && actor.grenades >= CONFIG.grenade.max && actor.smokes >= 1 && actor.flashes >= 1;
-        if (full) return false;
-        actor.ammo = def.mag;
-        actor.reloading = false;
-        actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + 1);
-        actor.smokes = Math.max(actor.smokes, 1);
-        actor.flashes = Math.max(actor.flashes, 1);
-        return true;
-      }
+      case 'ammo':
+        return this.resupply(actor);
       case 'regen':
         if (actor.hp >= actor.maxHp && actor.buffs.regen > 0) return false;
         actor.buffs.regen = P.regenTime;
@@ -1475,9 +1521,7 @@ export class Sim {
         if (!hit.prop.fixed) hit.prop.hp -= hit.bullet.damage;
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
         if (hit.prop.hp <= 0) {
-          if (hit.prop.explosive) {
-            this.explode(hit.prop.x, hit.prop.z, 7.5, 70, hit.bullet.ownerId);
-          }
+          if (hit.prop.explosive) this.blowProp(hit.prop, hit.bullet.ownerId);
           hit.prop.alive = false;
         }
       }
@@ -1486,6 +1530,10 @@ export class Sim {
 
   damageActor(actor: Actor, amount: number, sourceId: number): void {
     if (!actor.alive || actor.shield > 0) return;
+    this.lastHurt.set(actor.id, this.time);
+    // A hit makes you let go of a crate or the wire cutters.
+    for (const d of this.drops) if (d.openerId === actor.id) d.progress = 0;
+    this.wireCut.delete(actor.id);
     // Overshield takes the whole hit first.
     if (actor.buffs.overshield > 0) {
       const soak = Math.min(actor.buffs.overshield, amount);
@@ -1536,6 +1584,10 @@ export class Sim {
     actor.vz = 0;
     actor.reloading = false;
     this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id) });
+    actor.streak = 0;
+    actor.holdT = 0;
+    const scorer = this.actors.get(sourceId);
+    if (scorer && scorer.alive && this.opposed(scorer, actor)) this.addStreak(scorer);
 
     this.dropWeapon(actor);
     this.dropFlag(actor);
@@ -1551,6 +1603,8 @@ export class Sim {
       const k = this.actors.get(sourceId);
       if (this.mode === 'tdm' && k && !suicide && k.team >= 0 && k.team !== actor.team) this.teamScore[k.team]++;
       if (k && !suicide) this.rewardKill(k);
+      // Sometimes a powerup falls where they fell (it lies there for a while).
+      if (!this.rounds && this.mode !== 'waves' && this.rng.next() < CONFIG.powerups.arenaDropChance) this.dropPowerup(actor.x, actor.z, CONFIG.powerups.dropLife);
       // Waves: fallen guards are bodies, cleared like co-op corpses.
       if (this.mode === 'waves' && actor.kind === 'enemy') {
         this.corpses.push(actor.id);
@@ -1565,7 +1619,6 @@ export class Sim {
 
     if (actor.kind === 'player') {
       actor.respawnT = CONFIG.respawnDelay;
-      if (this.arena && this.rng.next() < CONFIG.powerups.arenaDropChance) this.dropPowerup(actor.x, actor.z, CONFIG.powerups.dropLife);
       return;
     }
     // Co-op guard: the body stays (ragdoll, drops); old bodies are cleared.
@@ -1693,6 +1746,14 @@ export class Sim {
   // ------------------------------------------------------------------- AI
 
   /** Who this actor fights: co-op guards hunt players, arena bots everyone. */
+  /** On opposite sides, alive or not (credit for a kill, a mine's trigger). */
+  private opposed(actor: Actor, other: Actor): boolean {
+    if (other === actor) return false;
+    if (this.teams) return other.team !== actor.team;
+    if (this.arena && this.mode !== 'waves') return true;
+    return actor.kind !== other.kind;
+  }
+
   private hostileTo(actor: Actor, other: Actor): boolean {
     // Downed players are left alone: the bots turn to whoever still fights.
     if (other === actor || !other.alive || other.downed) return false;
@@ -1740,6 +1801,32 @@ export class Sim {
     }
     if (nearest) nearestD = dist(actor.x, actor.z, nearest.x, nearest.z);
     ai.targetId = nearest ? nearest.id : -1;
+
+    // A mortar strike earned: on the target being fought, if not too close.
+    if (actor.strikes > 0 && nearest && ai.mode === 'attack' && nearestD > 8 && nearestD < CONFIG.streak.strikeRange) {
+      this.callStrike(actor, Math.atan2(nearest.z - actor.z, nearest.x - actor.x), nearestD);
+    }
+    // A supply crate down nearby: the bot closest to it goes and opens it,
+    // unless fighting (and in objective modes the objective comes first).
+    // Only when not on someone's trail, and not for ever: one it cannot reach is given up.
+    if ((this.mode === 'dm' || this.mode === 'tdm' || this.mode === 'gun') && (ai.mode === 'idle' || ai.mode === 'patrol')) {
+      const drop = this.drops.find(
+        (d) => d.landT <= 0 && dist(actor.x, actor.z, d.x, d.z) < 20 && this.closestTo(d.x, d.z) === actor && (this.dropTries.get(actor.id)?.id !== d.id || this.dropTries.get(actor.id)!.t < 8),
+      );
+      if (drop) {
+        const tries = this.dropTries.get(actor.id);
+        this.dropTries.set(actor.id, { id: drop.id, t: tries?.id === drop.id ? tries.t + dt : 0 });
+        if (dist(actor.x, actor.z, drop.x, drop.z) < CONFIG.drop.reach - 0.4) {
+          actor.using = true;
+          this.moveActor(actor, 0, 0, dt);
+        } else {
+          const m = this.steer(actor, drop.x, drop.z, 0.8);
+          if (m.x || m.z) actor.ang = Math.atan2(m.z, m.x);
+          this.moveActor(actor, m.x, m.z, dt);
+        }
+        return;
+      }
+    }
 
     const def = WEAPONS[actor.weapon];
     const P = CONFIG.ai;
@@ -1830,10 +1917,12 @@ export class Sim {
       if (dist(actor.x, actor.z, n.x, n.z) > n.radius) continue;
       if (ai.mode === 'idle' || ai.mode === 'patrol' || ai.mode === 'alert') {
         ai.awareness = Math.max(ai.awareness, 0.6);
+        // Already alert: a new noise moves the point, not the clock — or a
+        // sneaking enemy's every step would keep the guard rooted for good.
+        if (ai.mode !== 'alert') ai.timer = 4.5;
         ai.mode = 'alert';
         ai.lastKnownX = n.x;
         ai.lastKnownZ = n.z;
-        ai.timer = 4.5;
       }
     }
 
@@ -1997,7 +2086,8 @@ export class Sim {
     const fromZ = actor.z;
     this.moveActor(actor, move.x, move.z, dt);
     const progress = Math.hypot(actor.x - fromX, actor.z - fromZ) / dt;
-    ai.stuckT = wantsToMove && progress < 0.5 ? ai.stuckT + dt : 0;
+    // Grinding along a wall corner at a crawl counts as stuck too.
+    ai.stuckT = wantsToMove && progress < Math.max(0.5, actor.speed * 0.3) ? ai.stuckT + dt : 0;
     if (ai.stuckT > 1.2) {
       ai.stuckT = 0;
       ai.unstuckT = 0.6;
@@ -2022,6 +2112,9 @@ export class Sim {
     } else if (kind === 'molotov') {
       if (actor.molotovs <= 0) return;
       actor.molotovs--;
+    } else if (kind === 'flare') {
+      if (actor.flares <= 0) return;
+      actor.flares--;
     } else {
       if (actor.flashes <= 0) return;
       actor.flashes--;
@@ -2043,7 +2136,7 @@ export class Sim {
       vx: Math.cos(aim) * v + actor.vx * 0.3,
       vy: G.lift,
       vz: Math.sin(aim) * v + actor.vz * 0.3,
-      fuse: kind === 'smoke' ? CONFIG.smoke.fuse : kind === 'flash' ? CONFIG.flash.fuse : kind === 'molotov' ? CONFIG.molotov.fuse : G.fuse,
+      fuse: kind === 'smoke' ? CONFIG.smoke.fuse : kind === 'flash' ? CONFIG.flash.fuse : kind === 'molotov' ? CONFIG.molotov.fuse : kind === 'flare' ? CONFIG.flare.fuse : G.fuse,
     };
     this.grenades.push(g);
     this.noises.push({ x: actor.x, z: actor.z, radius: 8, time: this.time, ownerId: actor.id });
@@ -2060,6 +2153,7 @@ export class Sim {
         if (g.kind === 'smoke') this.popSmoke(g);
         else if (g.kind === 'flash') this.flashBang(g);
         else if (g.kind === 'molotov') this.shatterMolotov(g);
+        else if (g.kind === 'flare') this.lightFlare(g.x, g.z);
         else this.explode(g.x, g.z, G.radius, G.damage, g.ownerId);
         continue;
       }
@@ -2085,7 +2179,7 @@ export class Sim {
       const near = this.world.query(g.x - r, g.z - r, g.x + r, g.z + r, this.scratch);
       const bodies: StaticBody[] = [...near];
       for (const d of this.world.doors) if (!d.open) bodies.push(d);
-      for (const p of this.props) if (p.alive && p.fixed && g.y < 1.4) bodies.push({ cx: p.x, cz: p.z, hw: p.hw, hh: p.hh });
+      for (const p of this.props) if (p.alive && p.fixed && !isGhostProp(p.kind) && g.y < 1.4) bodies.push({ cx: p.x, cz: p.z, hw: p.hw, hh: p.hh });
       let hitWall = false;
       for (const b of bodies) {
         const ox = b.hw + r - Math.abs(g.x - b.cx);
@@ -2164,10 +2258,7 @@ export class Sim {
       const f = this.fires.find((f) => dist(p.x, p.z, f.x, f.z) < F.radius + Math.max(p.hw, p.hh));
       if (!f) continue;
       p.hp -= F.propDps * dt;
-      if (p.hp <= 0) {
-        p.alive = false;
-        this.explode(p.x, p.z, 7.5, 70, f.ownerId);
-      }
+      if (p.hp <= 0) this.blowProp(p, f.ownerId);
     }
   }
 
@@ -2257,6 +2348,12 @@ export class Sim {
     } else if (item === 'drone') {
       if (actor.drones >= 1) return false;
       actor.drones++;
+    } else if (item === 'flare') {
+      if (actor.flares >= CONFIG.grenade.maxUtility) return false;
+      actor.flares++;
+    } else if (item === 'mine') {
+      if (actor.mines >= CONFIG.mine.max) return false;
+      actor.mines++;
     } else {
       if (actor.weapons.includes(item)) return false;
       this.equip(actor, item);
@@ -3146,6 +3243,10 @@ export class Sim {
     this.smokes = [];
     this.fires = [];
     this.drones = [];
+    this.drops = [];
+    this.shells = [];
+    this.flares = [];
+    this.props = this.props.filter((p) => p.kind !== 'mine');
     // Spread everyone over the spawn points; survivors keep their kit.
     const spawns = [...this.map.spawns];
     for (let i = spawns.length - 1; i > 0; i--) {
@@ -3216,9 +3317,383 @@ export class Sim {
     return best;
   }
 
+  // ------------------------------------------- objects, drops, streaks, hazards
+
+  /** E: the nearest switch, ammo crate or arena door within reach. */
+  private interact(actor: Actor): void {
+    const I = CONFIG.interact;
+    let best: Interactable | null = null;
+    let bestD: number = I.reach;
+    for (const o of this.interactables) {
+      const d = dist(actor.x, actor.z, o.x, o.z);
+      if (d < bestD) {
+        best = o;
+        bestD = d;
+      }
+    }
+    const door = this.nearestArenaDoor(actor.x, actor.z, I.doorReach);
+    if (door && (!best || door.d < bestD)) {
+      this.toggleArenaDoor(door.door, actor);
+      return;
+    }
+    if (!best || best.cd > 0) return;
+    const o = best;
+    if (o.kind === 'switch') {
+      o.on = !o.on;
+      o.cd = I.switchCd;
+      this.map.lamps.forEach((l, i) => {
+        if (dist(l.x, l.z, o.x, o.z) < I.switchRadius) this.lampAlive[i] = o.on && !this.lampBroken[i];
+      });
+      this.noises.push({ x: o.x, z: o.z, radius: 6, time: this.time, ownerId: actor.id });
+      this.events.push({ type: 'interact', id: 'switch', text: o.on ? 'on' : 'off', ownerId: actor.id, x: o.x, z: o.z });
+    } else if (o.kind === 'ammo') {
+      if (!this.resupply(actor)) return;
+      o.cd = I.ammoCd;
+      this.events.push({ type: 'interact', id: 'ammo', ownerId: actor.id, x: o.x, z: o.z });
+    }
+  }
+
+  /** A full magazine and a grenade of each kind. False when there is nothing to top up. */
+  private resupply(actor: Actor): boolean {
+    const def = WEAPONS[actor.weapon];
+    const full = actor.ammo >= def.mag && actor.grenades >= CONFIG.grenade.max && actor.smokes >= 1 && actor.flashes >= 1;
+    if (full) return false;
+    actor.ammo = def.mag;
+    actor.reloading = false;
+    actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + 1);
+    actor.smokes = Math.max(actor.smokes, 1);
+    actor.flashes = Math.max(actor.flashes, 1);
+    return true;
+  }
+
+  /** Cooldowns, and med stations healing whoever holds E at them. */
+  private updateInteractables(dt: number): void {
+    const I = CONFIG.interact;
+    for (const o of this.interactables) {
+      o.cd = Math.max(0, o.cd - dt);
+      if (o.kind !== 'med') continue;
+      o.charge = Math.min(I.medCharge, o.charge + I.medRecharge * dt);
+      for (const a of this.actors.values()) {
+        if (!a.alive || a.downed || !a.using || a.hp >= a.maxHp || o.charge <= 0) continue;
+        if (dist(a.x, a.z, o.x, o.z) > I.reach) continue;
+        const heal = Math.min(I.medRate * dt, o.charge, a.maxHp - a.hp);
+        a.hp += heal;
+        o.charge -= heal;
+        if (Math.floor(this.time) !== Math.floor(this.time - dt)) this.events.push({ type: 'interact', id: 'med', ownerId: a.id, x: o.x, z: o.z });
+      }
+    }
+  }
+
+  private nearestArenaDoor(x: number, z: number, reach: number): { door: DoorState; d: number } | null {
+    let best: { door: DoorState; d: number } | null = null;
+    for (const door of this.doors) {
+      if (door.room < ARENA_DOOR_BASE) continue;
+      const d = dist(x, z, door.body.cx, door.body.cz);
+      if (d < reach && (!best || d < best.d)) best = { door, d };
+    }
+    return best;
+  }
+
+  private toggleArenaDoor(door: DoorState, actor: Actor): void {
+    const b = door.body;
+    // Nobody gets shut inside a door frame.
+    if (door.open) {
+      for (const a of this.actors.values()) {
+        if (a.alive && Math.abs(a.x - b.cx) < b.hw + a.radius && Math.abs(a.z - b.cz) < b.hh + a.radius) return;
+      }
+    }
+    door.open = !door.open;
+    b.open = door.open;
+    this.noises.push({ x: b.cx, z: b.cz, radius: 7, time: this.time, ownerId: actor.id });
+    this.events.push({ type: 'interact', id: 'door', text: door.open ? 'open' : 'shut', ownerId: actor.id, x: b.cx, z: b.cz });
+  }
+
+  /** Arena doors swing to their state; bots open the shut ones they walk into. */
+  private updateArenaDoors(dt: number): void {
+    for (const door of this.doors) {
+      if (door.room < ARENA_DOOR_BASE) continue;
+      door.openT = clamp(door.openT + (door.open ? dt : -dt) * 4, 0, 1);
+    }
+    for (const a of this.actors.values()) {
+      if (a.kind !== 'enemy' || !a.alive) continue;
+      const near = this.nearestArenaDoor(a.x, a.z, 1.3);
+      if (near && !near.door.open) this.toggleArenaDoor(near.door, a);
+    }
+  }
+
+  private get dropEvery(): number {
+    return this.mode === 'coop' ? 90 : this.mode === 'waves' ? 75 : CONFIG.drop.every;
+  }
+
+  /** A free spot for a supply crate: the current room in co-op, anywhere on an arena. */
+  private dropSpot(): { x: number; z: number } | null {
+    const room = this.mode === 'coop' ? this.map.rooms[this.roomIndex] : null;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      let x: number;
+      let z: number;
+      if (room) {
+        x = room.minX + 2 + this.rng.next() * (room.maxX - room.minX - 4);
+        z = room.minZ + 2 + this.rng.next() * (room.maxZ - room.minZ - 4);
+      } else {
+        const f = this.map.floors[Math.floor(this.rng.next() * this.map.floors.length)];
+        if (!f || f.x1 - f.x0 < 3 || f.z1 - f.z0 < 3) continue;
+        x = f.x0 + 1.5 + this.rng.next() * (f.x1 - f.x0 - 3);
+        z = f.z0 + 1.5 + this.rng.next() * (f.z1 - f.z0 - 3);
+      }
+      // The query hands back candidates from the grid cell: test each for overlap.
+      const near = this.world.query(x - 1.2, z - 1.2, x + 1.2, z + 1.2, this.scratch);
+      if (near.some((b) => Math.abs(b.cx - x) < b.hw + 1.2 && Math.abs(b.cz - z) < b.hh + 1.2)) continue;
+      if (this.props.some((p) => p.alive && !isGhostProp(p.kind) && Math.abs(p.x - x) < p.hw + 1.2 && Math.abs(p.z - z) < p.hh + 1.2)) continue;
+      if (!this.nav.walkable(x, z)) continue;
+      return { x, z };
+    }
+    return null;
+  }
+
+  /** Every minute or so a crate comes down; holding E for 2 s opens it. */
+  private updateDrops(dt: number): void {
+    const D = CONFIG.drop;
+    for (const a of this.actors.values()) a.holdT = 0;
+    if (this.rounds || this.matchOver) return;
+    this.dropTimer -= dt;
+    if (this.dropTimer <= 0) {
+      this.dropTimer = this.dropEvery;
+      const spot = this.drops.length === 0 ? this.dropSpot() : null;
+      if (spot) {
+        this.drops.push({ id: this.nextDropId++, ...spot, landT: D.fallTime, progress: 0, openerId: -1 });
+        this.events.push({ type: 'drop', id: 'incoming', x: spot.x, z: spot.z });
+      }
+    }
+    for (const d of [...this.drops]) {
+      if (d.landT > 0) {
+        d.landT -= dt;
+        if (d.landT <= 0) {
+          this.noises.push({ x: d.x, z: d.z, radius: 18, time: this.time, ownerId: -1 });
+          this.events.push({ type: 'drop', id: 'landed', x: d.x, z: d.z });
+        }
+        continue;
+      }
+      // The one holding E closest to it opens it; letting go starts over.
+      let opener: Actor | null = null;
+      let best: number = D.reach;
+      for (const a of this.actors.values()) {
+        if (!a.alive || a.downed || !a.using) continue;
+        const r = dist(a.x, a.z, d.x, d.z);
+        if (r < best) {
+          best = r;
+          opener = a;
+        }
+      }
+      if (!opener) {
+        d.progress = 0;
+        d.openerId = -1;
+        continue;
+      }
+      if (opener.id !== d.openerId) d.progress = 0;
+      d.openerId = opener.id;
+      d.progress += dt;
+      opener.holdT = d.progress;
+      if (d.progress >= D.openTime) this.openDrop(d, opener);
+    }
+  }
+
+  /** The living fighter nearest a point. */
+  private closestTo(x: number, z: number): Actor | null {
+    let best: Actor | null = null;
+    let bestD = Infinity;
+    for (const a of this.actors.values()) {
+      if (!a.alive || a.downed) continue;
+      const d = dist(a.x, a.z, x, z);
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+    return best;
+  }
+
+  private openDrop(d: SupplyDrop, actor: Actor): void {
+    this.drops = this.drops.filter((x) => x !== d);
+    let weapon: WeaponId | undefined;
+    // Gun game hands out guns by the ladder only.
+    if (this.mode !== 'gun') {
+      weapon = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)];
+      this.equip(actor, weapon);
+      actor.ammo = WEAPONS[weapon].mag;
+    }
+    let given = 0;
+    for (let tries = 0; tries < 12 && given < 2; tries++) if (this.applyPowerup(actor, pickPowerup(this.rng.next()))) given++;
+    actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + 1);
+    this.events.push({ type: 'drop', id: 'opened', ownerId: actor.id, x: d.x, z: d.z, weapon });
+  }
+
+  /** Kills in a row: a radar sweep at 3, a mortar strike at 5 (and every 5 after). */
+  private addStreak(a: Actor): void {
+    const S = CONFIG.streak;
+    a.streak++;
+    if (a.streak === S.radarAt) {
+      a.buffs.radar = CONFIG.powerups.radarTime;
+      this.events.push({ type: 'streak', id: String(a.streak), ownerId: a.id, x: a.x, z: a.z });
+    }
+    if (a.streak >= S.strikeAt && (a.streak - S.strikeAt) % 5 === 0) {
+      a.strikes++;
+      this.events.push({ type: 'streak', id: String(a.streak), ownerId: a.id, x: a.x, z: a.z });
+    }
+  }
+
+  /** T: shells come down where the cursor is, after a whistle everyone hears. */
+  private callStrike(actor: Actor, aim: number, distance: number): void {
+    if (actor.strikes <= 0) return;
+    const S = CONFIG.streak;
+    const r = clamp(distance, 3, S.strikeRange);
+    const x = clamp(actor.x + Math.cos(aim) * r, this.map.minX + 1, this.map.maxX - 1);
+    const z = clamp(actor.z + Math.sin(aim) * r, this.map.minZ + 1, this.map.maxZ - 1);
+    actor.strikes--;
+    for (let i = 0; i < S.shells; i++) {
+      const a = this.rng.next() * Math.PI * 2;
+      const s = i === 0 ? 0 : S.shellSpread * (0.4 + this.rng.next() * 0.6);
+      this.shells.push({ id: this.nextShellId++, x: x + Math.cos(a) * s, z: z + Math.sin(a) * s, t: S.strikeDelay + i * S.shellGap, ownerId: actor.id });
+    }
+    this.events.push({ type: 'strike', id: 'call', ownerId: actor.id, x, z });
+  }
+
+  private updateShells(dt: number): void {
+    const S = CONFIG.streak;
+    for (const s of [...this.shells]) {
+      s.t -= dt;
+      if (s.t > 0) continue;
+      this.shells = this.shells.filter((x) => x !== s);
+      this.events.push({ type: 'strike', id: 'shell', ownerId: s.ownerId, x: s.x, z: s.z });
+      this.explode(s.x, s.z, S.shellRadius, S.shellDamage, s.ownerId);
+    }
+  }
+
+  private lightFlare(x: number, z: number): void {
+    this.flares.push({ id: this.nextFlareId++, x, z, life: CONFIG.flare.life });
+    this.events.push({ type: 'flare', x, z });
+  }
+
+  private updateFlares(dt: number): void {
+    for (const f of this.flares) f.life -= dt;
+    this.flares = this.flares.filter((f) => f.life > 0);
+  }
+
+  /** Under a burning flare nobody hides: not in a bush, a trench or a cloak. */
+  inFlareLight(x: number, z: number): boolean {
+    return this.flares.some((f) => dist(x, z, f.x, f.z) < CONFIG.flare.radius);
+  }
+
+  inWire(x: number, z: number): boolean {
+    for (const p of this.props) {
+      if (p.alive && p.kind === 'wire' && Math.abs(x - p.x) < p.hw && Math.abs(z - p.z) < p.hh) return true;
+    }
+    return false;
+  }
+
+  inCrater(x: number, z: number): boolean {
+    return (this.map.craters ?? []).some((c) => dist(x, z, c.x, c.z) < c.r * 0.8);
+  }
+
+  /** Barbed wire cuts and is cut (hold E by it); mines go off under enemies. */
+  private updateHazards(dt: number): void {
+    const W = CONFIG.wire;
+    const pulse = Math.floor(this.time * 2) !== Math.floor((this.time - dt) * 2);
+    for (const a of this.actors.values()) {
+      if (!a.alive) continue;
+      const wire = this.props.find((p) => p.alive && p.kind === 'wire' && Math.abs(a.x - p.x) < p.hw + 0.7 && Math.abs(a.z - p.z) < p.hh + 0.7);
+      if (!wire) {
+        this.wireCut.delete(a.id);
+        continue;
+      }
+      if (pulse && this.inWire(a.x, a.z) && Math.hypot(a.vx, a.vz) > 0.3) {
+        this.damageActor(a, W.dps * 0.5, -1);
+        this.events.push({ type: 'wire', id: 'hurt', ownerId: a.id, x: a.x, z: a.z });
+      }
+      // Holding E by the wire (and not at a crate) cuts a way through.
+      if (!a.using || a.holdT > 0) {
+        this.wireCut.delete(a.id);
+        continue;
+      }
+      const t = (this.wireCut.get(a.id) ?? 0) + dt;
+      a.holdT = t;
+      if (t < W.cutTime) {
+        this.wireCut.set(a.id, t);
+        continue;
+      }
+      this.wireCut.delete(a.id);
+      this.cutWire(wire, a);
+    }
+
+    const M = CONFIG.mine;
+    for (const p of this.props) {
+      if (!p.alive || p.kind !== 'mine') continue;
+      p.armT = (p.armT ?? 0) + dt;
+      if (p.trigT !== undefined) {
+        p.trigT -= dt;
+        if (p.trigT <= 0) this.blowProp(p, p.ownerId ?? -1);
+        continue;
+      }
+      if (p.armT < M.armTime) continue;
+      const owner = this.actors.get(p.ownerId ?? -1);
+      for (const a of this.actors.values()) {
+        if (!a.alive || dist(a.x, a.z, p.x, p.z) > M.trigger) continue;
+        const foe = owner ? this.opposed(owner, a) : a.team < 0 || a.team !== p.team;
+        if (!foe) continue;
+        p.trigT = M.delay;
+        this.events.push({ type: 'mine', id: 'click', x: p.x, z: p.z });
+        break;
+      }
+    }
+  }
+
+  private wireCut = new Map<number, number>();
+  /** When each fighter last took damage (regeneration waits). */
+  private lastHurt = new Map<number, number>();
+  /** Bots: which crate they are after and for how long. */
+  private dropTries = new Map<number, { id: number; t: number }>();
+
+  private cutWire(wire: SimProp, actor: Actor): void {
+    wire.alive = false;
+    this.events.push({ type: 'wire', id: 'cut', ownerId: actor.id, x: wire.x, z: wire.z });
+  }
+
+  /** N: a mine underfoot. Armed after a moment; goes off under an enemy, or when shot. */
+  private placeMine(actor: Actor): void {
+    if (actor.mines <= 0 || actor.downed) return;
+    if (this.props.some((p) => p.alive && p.kind === 'mine' && dist(p.x, p.z, actor.x, actor.z) < 1.5)) return;
+    actor.mines--;
+    const id = this.props.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+    this.props.push({
+      id, kind: 'mine', x: actor.x, z: actor.z, vx: 0, vz: 0, hw: 0.3, hh: 0.3, hp: 10,
+      explosive: true, fixed: false, alive: true, room: this.roomIndex, mass: 99, deployed: true,
+      ownerId: actor.id, team: actor.team, armT: 0,
+    });
+    this.events.push({ type: 'mine', id: 'place', ownerId: actor.id, x: actor.x, z: actor.z });
+  }
+
+  /** An explosive prop goes up: a barrel's big blast, a mine's tighter one. */
+  private blowProp(p: SimProp, sourceId: number): void {
+    if (!p.alive) return;
+    p.alive = false;
+    if (p.kind === 'mine') this.explode(p.x, p.z, CONFIG.mine.radius, CONFIG.mine.damage, p.ownerId ?? sourceId);
+    else this.explode(p.x, p.z, 7.5, 70, sourceId);
+  }
+
+  /** Client: object, crate, shell and flare states from a snapshot. */
+  syncWorldExtras(inter: { id: number; on: boolean; charge: number; cd: number }[], drops: SupplyDrop[], shells: StrikeShell[], flares: Flare[]): void {
+    for (const s of inter) {
+      const o = this.interactables.find((x) => x.id === s.id);
+      if (o) Object.assign(o, s);
+    }
+    this.drops = drops;
+    this.shells = shells;
+    this.flares = flares;
+  }
+
   isLit(x: number, z: number): boolean {
     // Burning ground lights its surroundings too.
     if (this.fires.some((f) => dist(x, z, f.x, f.z) < CONFIG.fire.lightRadius)) return true;
+    if (this.inFlareLight(x, z)) return true;
     return this.map.lamps.some((l, i) => this.lampAlive[i] && dist(x, z, l.x, l.z) < 9.5);
   }
 
@@ -3231,7 +3706,7 @@ export class Sim {
       if (!s.kind || this.props.some((p) => p.id === s.id)) continue;
       this.props.push({
         id: s.id, kind: s.kind, x: s.x, z: s.z, vx: 0, vz: 0, hw: s.hw ?? 1, hh: s.hh ?? 1, hp: s.hp ?? 1,
-        explosive: false, fixed: false, alive: s.alive, room: 0, mass: 4, deployed: true,
+        explosive: false, fixed: false, alive: s.alive, room: 0, mass: 4, deployed: true, ownerId: s.owner,
       });
     }
     for (const p of this.props) {
@@ -3317,4 +3792,13 @@ function turnTowards(current: number, target: number, maxDelta: number): number 
 
 function noBuffs(): Buffs {
   return { damage: 0, speed: 0, rapid: 0, nv: 0, regen: 0, stealth: 0, radar: 0, overshield: 0 };
+}
+
+/** Arena doors sit after co-op doors in `doors`, keyed from here. */
+export const ARENA_DOOR_BASE = 1000;
+const TILE_ARENA = 1.5;
+
+/** Walked over, not bumped into. */
+export function isGhostProp(kind: PropKind): boolean {
+  return kind === 'wire' || kind === 'mine';
 }

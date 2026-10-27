@@ -261,6 +261,32 @@ export class GameAudio {
     this.noise(0.045, 0.07 * volume, 900, 1.1, 'lowpass');
   }
 
+  /** A heavy switch thrown. */
+  click(dist: number): void {
+    if (dist > 20) return;
+    const v = 1 - dist / 20;
+    this.tone(2200, 1400, 0.03, 0.09 * v, 'square');
+    this.noise(0.05, 0.06 * v, 1800, 1.5, 'bandpass');
+  }
+
+  /** Incoming mortar shell: a falling whistle. */
+  whistle(dist: number): void {
+    const v = Math.max(0.25, 1 - dist / 60);
+    this.tone(1800, 500, 1.8, 0.05 * v, 'sine');
+  }
+
+  /** Transport plane passing over for a supply drop. */
+  plane(): void {
+    this.tone(70, 55, 3.5, 0.08, 'sawtooth');
+    this.noise(3, 0.05, 300, 0.6, 'lowpass');
+  }
+
+  /** A flare catches: a hiss. */
+  hiss(dist: number): void {
+    if (dist > 30) return;
+    this.noise(1.2, 0.08 * (1 - dist / 30), 3000, 0.8, 'highpass');
+  }
+
   door(): void {
     this.noise(0.7, 0.28, 260, 0.7, 'lowpass');
     this.tone(120, 70, 0.6, 0.16, 'sawtooth');

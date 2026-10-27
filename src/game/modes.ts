@@ -119,4 +119,6 @@ export const SHOP: ShopEntry[] = [
   { item: 'flash', name: 'Светошумовая граната', price: 200 },
   { item: 'molotov', name: 'Коктейль Молотова', price: 400 },
   { item: 'drone', name: 'FPV-дрон', price: 900 },
+  { item: 'flare', name: 'Осветительная ракета', price: 200 },
+  { item: 'mine', name: 'Противопехотная мина', price: 300 },
 ];

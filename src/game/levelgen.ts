@@ -2,6 +2,9 @@ import { Rng } from '../core/rng';
 import { CONFIG, TILE } from './config';
 import type {
   BushDef,
+  CraterDef,
+  InteractDef,
+  InteractKind,
   FloorRect,
   LampDef,
   MapData,
@@ -53,6 +56,9 @@ export const PROP_TABLE: Record<PropKind, PropSpec> = {
   cabinet: { hw: 0.55, hh: 0.4, hp: 999, explosive: false, fixed: true },
   tires: { hw: 0.9, hh: 0.9, hp: 999, explosive: false, fixed: true },
   ammo: { hw: 0.6, hh: 0.35, hp: 40, explosive: false, fixed: false },
+  // A roll of wire across a 1.5 m cell (stretched along rows by the arena builder).
+  wire: { hw: 0.75, hh: 0.45, hp: 999, explosive: false, fixed: true },
+  mine: { hw: 0.3, hh: 0.3, hp: 10, explosive: true, fixed: false },
 };
 
 /** Prop mix per theme: [kind, min, max]. */
@@ -108,6 +114,10 @@ export function generateMap(seed: number): MapData {
   const bushes: BushDef[] = [];
   const trenchRng = new Rng(seed ^ 0x7e4c);
   const bonusRng = new Rng(seed ^ 0xb0b0);
+  // Objects, wire and craters: their own stream too.
+  const interRng = new Rng(seed ^ 0x1e7e);
+  const interactables: InteractDef[] = [];
+  const craters: CraterDef[] = [];
   const trenches: TrenchDef[] = [];
   const roomCount = rng.int(CONFIG.roomsMin, CONFIG.roomsMax);
   const raw: RawRoom[] = [];
@@ -417,6 +427,49 @@ export function generateMap(seed: number): MapData {
       }
     }
 
+    // Things to use: a light switch by the way in, often an ammo crate or a med station.
+    const spotFor = (radius: number): { x: number; z: number } | null => {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const x = interRng.range(room.minX + 1.4, room.maxX - 1.4);
+        const z = interRng.range(room.minZ + 1.4, room.maxZ - 1.4);
+        if (props.some((p) => Math.abs(p.x - x) < p.hw + radius && Math.abs(p.z - z) < p.hh + radius)) continue;
+        if (!clearOfWalls(x, z, radius, radius, 0.3)) continue;
+        if (nearDoor(x, z, 2.4) || Math.hypot(x - room.wx, z - room.wz) < centreClear) continue;
+        if (interactables.some((o) => Math.hypot(o.x - x, o.z - z) < 3)) continue;
+        return { x, z };
+      }
+      return null;
+    };
+    const addObject = (kind: InteractKind, at: { x: number; z: number } | null) => {
+      if (at) interactables.push({ id: interactables.length + 1, kind, ...at });
+    };
+    if (room.index > 0) {
+      // Just inside the doorway, so it can be thrown on the way in.
+      const ix = room.doorX + Math.sign(room.wx - room.doorX) * (room.doorAxis === 'x' ? 2.4 : 0) + (room.doorAxis === 'z' ? 1.8 : 0);
+      const iz = room.doorZ + Math.sign(room.wz - room.doorZ) * (room.doorAxis === 'z' ? 2.4 : 0) + (room.doorAxis === 'x' ? 1.8 : 0);
+      const fits = clearOfWalls(ix, iz, 0.4, 0.4, 0.2) && !props.some((p) => Math.abs(p.x - ix) < p.hw + 0.6 && Math.abs(p.z - iz) < p.hh + 0.6);
+      addObject('switch', fits ? { x: ix, z: iz } : spotFor(0.6));
+      if (interRng.next() < 0.45) addObject('ammo', spotFor(0.8));
+      if (interRng.next() < 0.35) addObject('med', spotFor(0.8));
+    }
+    // Fields: shell craters and runs of barbed wire between the trench lines.
+    if (room.theme === 'field') {
+      for (let i = interRng.int(2, 4); i > 0; i--) {
+        const at = spotFor(1.3);
+        if (at) craters.push({ ...at, r: interRng.range(1.0, 1.5) });
+      }
+      for (let i = interRng.int(1, 2); i > 0; i--) {
+        const at = spotFor(1.0);
+        if (!at) continue;
+        const W = PROP_TABLE.wire;
+        for (let k = -1; k <= 1; k++) {
+          const x = at.x + k * W.hw * 2;
+          if (x < room.minX + 1 || x > room.maxX - 1) continue;
+          props.push({ id: propId++, kind: 'wire', x, z: at.z, hw: W.hw, hh: W.hh, explosive: false, fixed: true, hp: W.hp, room: room.index });
+        }
+      }
+    }
+
     // The start room hands out a first upgrade; later rooms 1-2 weapons.
     const weaponCount = room.index === 0 ? 1 : rng.int(1, 2);
     for (let i = 0; i < weaponCount; i++) {
@@ -464,6 +517,8 @@ export function generateMap(seed: number): MapData {
     lamps,
     bushes,
     trenches,
+    interactables,
+    craters,
     spawns: [],
     spawnX: spawnRoom.wx,
     spawnZ: spawnRoom.wz,

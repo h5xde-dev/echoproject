@@ -100,7 +100,11 @@ function drawPreview(): void {
         ch === '#' ? '#3a4352'
           : ch === 'S' ? '#3fd6c8'
             : '123456'.includes(ch) ? '#ffb066'
-              : 'hrxsfn'.includes(ch) ? '#5dff8a'
+              : 'hrxsfnagiuz'.includes(ch) ? '#5dff8a'
+              : 'GO+'.includes(ch) ? '#ffd04a'
+                : '|-'.includes(ch) ? '#8a6a44'
+                  : ch === 'W' ? '#9aa0a6'
+                    : ch === '=' || ch === 'o' ? '#2a2216'
                 : 'CBKVTPDMAtc'.includes(ch) ? '#26303c'
                   : '#121820';
       ctx.fillRect(ox + x * cell, oy + z * cell, Math.ceil(cell), Math.ceil(cell));

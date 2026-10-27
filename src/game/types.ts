@@ -54,7 +54,74 @@ export type PropKind =
   | 'drum'
   | 'cabinet'
   | 'tires'
-  | 'ammo';
+  | 'ammo'
+  /** Barbed wire: no collision, slows and cuts whoever wades through. */
+  | 'wire'
+  /** An engineer's mine: no collision, goes off under an enemy. */
+  | 'mine';
+
+/** Things to use with E. */
+export type InteractKind = 'switch' | 'ammo' | 'med';
+
+export interface InteractDef {
+  id: number;
+  kind: InteractKind;
+  x: number;
+  z: number;
+}
+
+export interface Interactable extends InteractDef {
+  /** Switch: the lamps around it are on. */
+  on: boolean;
+  /** Med station: hit points left to hand out. */
+  charge: number;
+  /** Seconds until it can be used again. */
+  cd: number;
+}
+
+/** A door on an arena: opened and shut with E. */
+export interface ArenaDoorDef {
+  x: number;
+  z: number;
+  /** Set in a wall running along z (you pass along x). */
+  vertical: boolean;
+}
+
+/** A shell hole: drawn as a crater; crouched in it you are hidden, like in a trench. */
+export interface CraterDef {
+  x: number;
+  z: number;
+  r: number;
+}
+
+/** A supply crate: falls, lands, opened by holding E. */
+export interface SupplyDrop {
+  id: number;
+  x: number;
+  z: number;
+  /** Seconds until it lands (<= 0: on the ground). */
+  landT: number;
+  /** Opening progress (s) and who is opening it. */
+  progress: number;
+  openerId: number;
+}
+
+/** A called-in mortar shell, whistling down. */
+export interface StrikeShell {
+  id: number;
+  x: number;
+  z: number;
+  t: number;
+  ownerId: number;
+}
+
+/** A burning flare on the ground. */
+export interface Flare {
+  id: number;
+  x: number;
+  z: number;
+  life: number;
+}
 
 export interface SimProp {
   id: number;
@@ -74,6 +141,11 @@ export interface SimProp {
   mass: number;
   /** Placed during the match (an engineer's shield): clients learn its shape from snapshots. */
   deployed?: boolean;
+  /** Mines: who laid it (and their team), armed after a moment, ticking once stepped on. */
+  ownerId?: number;
+  team?: number;
+  armT?: number;
+  trigT?: number;
 }
 
 export interface PropDef {
@@ -155,6 +227,9 @@ export interface MapData {
   lamps: LampDef[];
   bushes?: BushDef[];
   trenches?: TrenchDef[];
+  interactables?: InteractDef[];
+  arenaDoors?: ArenaDoorDef[];
+  craters?: CraterDef[];
   /** Deathmatch spawn points (empty for co-op levels). */
   spawns: { x: number; z: number }[];
   spawnX: number;
@@ -333,6 +408,13 @@ export interface Actor {
   /** FPV drones carried, and the one being flown (-1: none). */
   drones: number;
   piloting: number;
+  /** Kills since the last death; mortar strikes earned; mines and flares carried. */
+  streak: number;
+  strikes: number;
+  mines: number;
+  flares: number;
+  /** Holding E on a supply crate or barbed wire: seconds so far. */
+  holdT: number;
 }
 
 /** A kamikaze FPV drone: flown by a soldier who stands still meanwhile. */
@@ -416,7 +498,7 @@ export interface Bullet {
   range: number;
 }
 
-export type GrenadeKind = 'frag' | 'smoke' | 'flash' | 'molotov';
+export type GrenadeKind = 'frag' | 'smoke' | 'flash' | 'molotov' | 'flare';
 
 export interface Grenade {
   id: number;
@@ -449,7 +531,7 @@ export interface FireZone {
 }
 
 /** Things for sale in competitive mode. */
-export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov' | 'drone';
+export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov' | 'drone' | 'flare' | 'mine';
 
 export interface NoiseEvent {
   x: number;
@@ -491,7 +573,18 @@ export interface GameEvent {
     | 'roomClear'
     | 'roomEnter'
     | 'gameOver'
-    | 'victory';
+    | 'victory'
+    /** E on an object: id = kind, text = 'on' / 'off' for switches. */
+    | 'interact'
+    /** Supply drop: id = 'incoming' | 'landed' | 'opened'. */
+    | 'drop'
+    /** Kill streak reached: id = the count. */
+    | 'streak'
+    /** Mortar: id = 'call' (marker) | 'shell' (one comes down). */
+    | 'strike'
+    | 'mine'
+    | 'wire'
+    | 'flare';
   x?: number;
   z?: number;
   y?: number;

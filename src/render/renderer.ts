@@ -6,7 +6,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '../game/config';
-import type { FireZone, FlagState, FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, TrenchDef } from '../game/types';
+import type { CraterDef, FireZone, FlagState, Flare, FloorRect, GrenadeKind, Interactable, InteractDef, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, StrikeShell, SupplyDrop, TrenchDef } from '../game/types';
 import { smokeRadius } from '../game/sim';
 import type { WeaponId } from '../game/weapons';
 import { ActorVisual } from './actors';
@@ -89,9 +89,18 @@ export class Renderer {
     flash: new THREE.MeshStandardMaterial({ color: 0xd8dde2, roughness: 0.4, metalness: 0.5, emissive: 0x202020 }),
     // A glass bottle with a lit rag: it glows in the dark.
     molotov: new THREE.MeshStandardMaterial({ color: 0x4f6b3a, roughness: 0.15, metalness: 0.1, emissive: 0xff5a10, emissiveIntensity: 0.6 }),
+    // A signal flare: red tube, already sputtering.
+    flare: new THREE.MeshStandardMaterial({ color: 0xc8302a, roughness: 0.5, emissive: 0xff3020, emissiveIntensity: 1.2 }),
   };
   /** Lights on the burning patches nearest the camera (a fixed pool, see the constructor). */
   private fireLights: THREE.PointLight[] = [];
+  private flareLights: THREE.PointLight[] = [];
+  private flareGlows = new Map<number, THREE.Mesh>();
+  private interactVisuals = new Map<number, { group: THREE.Group; led: THREE.Mesh; pad: THREE.Mesh; kind: InteractDef['kind'] }>();
+  private dropVisuals = new Map<number, THREE.Group>();
+  private shellVisuals = new Map<number, THREE.Mesh>();
+  /** Mines the local player should not see (an enemy's, not up close). */
+  private hiddenProps = new Set<number>();
   /** A glowing pool on the ground under each burning patch, keyed by fire id. */
   private fireGlows = new Map<number, THREE.Mesh>();
   private fireGlowTex = makeGlowTexture();
@@ -190,6 +199,12 @@ export class Renderer {
       const light = new THREE.PointLight(0xff9a3c, 0, 30, 1.7);
       this.scene.add(light);
       this.boomLights.push({ light, life: 0, max: 0.45, peak: 260 });
+    }
+    // Flares: red light that stays as long as the flare burns.
+    for (let i = 0; i < 2; i++) {
+      const light = new THREE.PointLight(0xff4a3a, 0, 24, 1.6);
+      this.scene.add(light);
+      this.flareLights.push(light);
     }
     for (let i = 0; i < 3; i++) {
       const light = new THREE.PointLight(COLORS.lamp, 0, 22, 2);
@@ -436,7 +451,203 @@ export class Renderer {
       this.doorVisuals.push({ mesh, body, openT: 0 });
     }
 
+    for (const c of map.craters ?? []) g.add(craterMesh(c));
+    for (const o of map.interactables ?? []) this.addInteractVisual(o);
+
+    // Arena doors: plank doors on the same sinking rig as co-op shutters, after
+    // them in the list (the sim keeps the same order).
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2c, roughness: 0.85 });
+    const bandMat = new THREE.MeshStandardMaterial({ color: 0x2d2f33, roughness: 0.5, metalness: 0.7 });
+    for (const d of map.arenaDoors ?? []) {
+      const half = 0.75;
+      const body: StaticBody = d.vertical ? { cx: d.x, cz: d.z, hw: 0.22, hh: half } : { cx: d.x, cz: d.z, hw: half, hh: 0.22 };
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(body.hw * 2, WALL_HEIGHT * 0.85, body.hh * 2), woodMat);
+      mesh.position.set(body.cx, (WALL_HEIGHT * 0.85) / 2, body.cz);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      for (const y of [-0.6, 0.6]) {
+        const band = new THREE.Mesh(new THREE.BoxGeometry(body.hw * 2 + 0.03, 0.1, body.hh * 2 + 0.03), bandMat);
+        band.position.y = y;
+        mesh.add(band);
+      }
+      g.add(mesh);
+      this.doorVisuals.push({ mesh, body, openT: 0 });
+    }
+
     this.warmup();
+  }
+
+  private addInteractVisual(o: InteractDef): void {
+    const group = new THREE.Group();
+    group.position.set(o.x, 0, o.z);
+    const color = o.kind === 'switch' ? 0xffd04a : o.kind === 'ammo' ? 0xd8c27a : 0x5dff8a;
+    const pad = new THREE.Mesh(
+      new THREE.RingGeometry(0.75, 0.95, 32).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+    );
+    pad.position.y = 0.03;
+    group.add(pad);
+    const metal = new THREE.MeshStandardMaterial({ color: 0x4a5058, roughness: 0.5, metalness: 0.6 });
+    const ledMat = new THREE.MeshStandardMaterial({ color: 0x40ff60, emissive: 0x40ff60, emissiveIntensity: 2 });
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), ledMat);
+    if (o.kind === 'switch') {
+      // A breaker box on a post, lever on the side.
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.1, 8), metal);
+      post.position.y = 0.55;
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.25), new THREE.MeshStandardMaterial({ color: 0x8a7a2a, roughness: 0.6, metalness: 0.4 }));
+      box.position.y = 1.3;
+      const lever = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.34, 0.06), new THREE.MeshStandardMaterial({ color: 0xc83030 }));
+      lever.position.set(0.3, 1.38, 0);
+      lever.rotation.z = 0.5;
+      led.position.set(0, 1.5, 0.14);
+      group.add(post, box, lever, led);
+    } else if (o.kind === 'ammo') {
+      const crate = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.55, 0.62), new THREE.MeshStandardMaterial({ color: 0x4d5a32, roughness: 0.8 }));
+      crate.position.y = 0.28;
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.08, 0.64), new THREE.MeshStandardMaterial({ color: 0xd8b03a, roughness: 0.6 }));
+      stripe.position.y = 0.42;
+      led.position.set(0, 0.6, 0);
+      group.add(crate, stripe, led);
+    } else {
+      // A wall cabinet with a green cross, on a stand.
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.9, 0.12), metal);
+      stand.position.y = 0.45;
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.3), new THREE.MeshStandardMaterial({ color: 0xe8ecef, roughness: 0.5 }));
+      cab.position.y = 1.25;
+      const crossMat = new THREE.MeshStandardMaterial({ color: 0x3aff6a, emissive: 0x3aff6a, emissiveIntensity: 1.2 });
+      const a = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.32), crossMat);
+      const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.4, 0.32), crossMat);
+      a.position.y = b.position.y = 1.25;
+      led.position.set(0, 1.68, 0);
+      group.add(stand, cab, a, b, led);
+    }
+    group.traverse((m) => ((m as THREE.Mesh).castShadow = true));
+    this.mapGroup.add(group);
+    this.interactVisuals.set(o.id, { group, led, pad, kind: o.kind });
+  }
+
+  /** LEDs: green when ready / on, red when off or recharging; empty med stations dim. */
+  syncInteractables(list: Interactable[]): void {
+    for (const o of list) {
+      const v = this.interactVisuals.get(o.id);
+      if (!v) continue;
+      const ready = o.kind === 'switch' ? o.on : o.kind === 'ammo' ? o.cd <= 0 : o.charge >= 1;
+      const mat = v.led.material as THREE.MeshStandardMaterial;
+      const c = ready ? 0x40ff60 : 0xff3a2a;
+      mat.color.setHex(c);
+      mat.emissive.setHex(c);
+      mat.emissiveIntensity = ready ? 2 : 1 + Math.sin(this.time * 6) * 0.8;
+      (v.pad.material as THREE.MeshBasicMaterial).opacity = ready ? 0.35 + Math.sin(this.time * 3 + o.id) * 0.12 : 0.12;
+    }
+  }
+
+  /** Mines of the other side stay invisible until you are right on top of them. */
+  setHiddenProps(ids: Set<number>): void {
+    this.hiddenProps = ids;
+  }
+
+  /** Supply crates (falling under a canopy, then smoking red), mortar targets, flares. */
+  syncWorldExtras(drops: SupplyDrop[], shells: StrikeShell[], flares: Flare[], dt: number): void {
+    const D = CONFIG.drop;
+    const liveDrops = new Set<number>();
+    for (const d of drops) {
+      liveDrops.add(d.id);
+      let g = this.dropVisuals.get(d.id);
+      if (!g) {
+        g = new THREE.Group();
+        const crate = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.9, 1.1), new THREE.MeshStandardMaterial({ color: 0x3e4a5a, roughness: 0.6, metalness: 0.3 }));
+        crate.position.y = 0.45;
+        crate.castShadow = true;
+        const bandMat = new THREE.MeshStandardMaterial({ color: 0xff8a2a, emissive: 0xff6a10, emissiveIntensity: 0.8 });
+        const band = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.14, 1.12), bandMat);
+        band.position.y = 0.62;
+        const chute = new THREE.Mesh(
+          new THREE.SphereGeometry(1.8, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.4),
+          new THREE.MeshStandardMaterial({ color: 0xd8dccf, roughness: 0.9, side: THREE.DoubleSide }),
+        );
+        chute.name = 'chute';
+        chute.position.y = 3.6;
+        g.add(crate, band, chute);
+        this.scene.add(g);
+        this.dropVisuals.set(d.id, g);
+      }
+      const falling = d.landT > 0;
+      const h = falling ? (d.landT / D.fallTime) * 22 : 0;
+      g.position.set(d.x, h, d.z);
+      g.getObjectByName('chute')!.visible = falling;
+      g.rotation.y += falling ? dt * 0.6 : 0;
+      // Red signal smoke while it waits on the ground (and where it will land).
+      if (Math.random() < 14 * dt) {
+        this.tmpColor.setRGB(0.75, 0.12, 0.08);
+        this.smoke.spawn(d.x + (Math.random() - 0.5) * 0.4, 0.8, d.z + (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 1.4, (Math.random() - 0.5) * 0.4, 1.2, 4.5, this.tmpColor, 0.55, 0.6);
+      }
+    }
+    for (const [id, g] of this.dropVisuals) {
+      if (liveDrops.has(id)) continue;
+      this.scene.remove(g);
+      this.dropVisuals.delete(id);
+    }
+
+    const liveShells = new Set<number>();
+    for (const s of shells) {
+      liveShells.add(s.id);
+      let m = this.shellVisuals.get(s.id);
+      if (!m) {
+        m = new THREE.Mesh(
+          new THREE.RingGeometry(CONFIG.streak.shellRadius - 0.25, CONFIG.streak.shellRadius, 40).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({ color: 0xff3a2a, transparent: true, depthTest: false, toneMapped: false }),
+        );
+        m.position.set(s.x, 0.06, s.z);
+        this.overlay.add(m);
+        this.shellVisuals.set(s.id, m);
+      }
+      (m.material as THREE.MeshBasicMaterial).opacity = 0.35 + 0.35 * Math.abs(Math.sin(this.time * (6 + 6 / Math.max(0.3, s.t))));
+    }
+    for (const [id, m] of this.shellVisuals) {
+      if (liveShells.has(id)) continue;
+      this.overlay.remove(m);
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+      this.shellVisuals.delete(id);
+    }
+
+    const F = CONFIG.flare;
+    const cx = this.camTarget.x;
+    const cz = this.camTarget.z;
+    const near = [...flares].sort((a, b) => Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz));
+    this.flareLights.forEach((light, i) => {
+      const f = near[i];
+      const fade = f ? Math.min(1, f.life / 1.5) : 0;
+      light.intensity = f ? (80 + Math.random() * 25) * fade : 0;
+      if (f) light.position.set(f.x, 2.4, f.z);
+    });
+    const liveFlares = new Set<number>();
+    for (const f of flares) {
+      liveFlares.add(f.id);
+      let glow = this.flareGlows.get(f.id);
+      if (!glow) {
+        glow = new THREE.Mesh(
+          new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({ map: this.fireGlowTex, color: 0xff3a2a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
+        );
+        glow.position.set(f.x, 0.05, f.z);
+        this.scene.add(glow);
+        this.flareGlows.set(f.id, glow);
+      }
+      glow.scale.setScalar(F.radius * 0.6);
+      (glow.material as THREE.MeshBasicMaterial).opacity = Math.min(1, f.life / 1.5) * (0.6 + Math.random() * 0.2);
+      if (Math.random() < 30 * dt) {
+        this.tmpColor.setHex(0xff5a3a);
+        this.particles.spawn(f.x, 0.2, f.z, (Math.random() - 0.5) * 2, 2 + Math.random() * 2, (Math.random() - 0.5) * 2, 0.25, 4, this.tmpColor, 0.8, 1.5);
+      }
+    }
+    for (const [id, glow] of this.flareGlows) {
+      if (liveFlares.has(id)) continue;
+      this.scene.remove(glow);
+      glow.geometry.dispose();
+      (glow.material as THREE.Material).dispose();
+      this.flareGlows.delete(id);
+    }
   }
 
   /**
@@ -568,6 +779,14 @@ export class Renderer {
     this.ghosts.clear();
     this.propVisuals = [];
     this.doorVisuals = [];
+    this.interactVisuals.clear();
+    for (const g of this.dropVisuals.values()) this.scene.remove(g);
+    this.dropVisuals.clear();
+    for (const m of this.shellVisuals.values()) this.overlay.remove(m);
+    this.shellVisuals.clear();
+    for (const m of this.flareGlows.values()) this.scene.remove(m);
+    this.flareGlows.clear();
+    for (const l of this.flareLights) l.intensity = 0;
     for (const v of this.pickupVisuals.values()) this.scene.remove(v);
     this.pickupVisuals.clear();
     for (const v of this.powerupVisuals.values()) this.scene.remove(v);
@@ -1085,7 +1304,16 @@ export class Renderer {
     // Long props standing along Z are the model turned by 90°.
     const turned = p.hh > p.hw && LONG_PROPS.has(p.kind);
     const model = turned ? assets.prop(p.kind, p.hh * 2, p.hw * 2) : assets.prop(p.kind, p.hw * 2, p.hh * 2);
-    if (model) {
+    if (p.kind === 'wire') {
+      group.add(wireVisual(p.hw, p.hh));
+    } else if (p.kind === 'mine') {
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, 0.09, 14), new THREE.MeshStandardMaterial({ color: 0x3c4430, roughness: 0.7, metalness: 0.4 }));
+      disc.position.y = 0.05;
+      const led = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 4), new THREE.MeshBasicMaterial({ color: 0xff3020, toneMapped: false }));
+      led.position.y = 0.11;
+      led.name = 'led';
+      group.add(disc, led);
+    } else if (model) {
       if (turned) model.rotation.y = Math.PI / 2;
       // A little variety: same props, slightly different turns.
       else if (!LONG_PROPS.has(p.kind)) model.rotation.y = ((p.id * 7919) % 4) * (Math.PI / 2);
@@ -1122,8 +1350,10 @@ export class Renderer {
     for (const pv of this.propVisuals) {
       const p = props.find((x) => x.id === pv.id);
       if (!p) continue;
-      pv.group.visible = p.alive;
+      pv.group.visible = p.alive && !this.hiddenProps.has(p.id);
       pv.group.position.set(p.x, 0, p.z);
+      const led = p.kind === 'mine' ? pv.group.getObjectByName('led') : undefined;
+      if (led) led.visible = Math.sin(this.time * 8 + p.id) > 0.3;
       // Wear: a battered crate sags and leans before it gives way.
       if (pv.maxHp > 0 && p.hp !== undefined) {
         const wear = Math.min(1, Math.max(0, 1 - p.hp / pv.maxHp));
@@ -1967,4 +2197,61 @@ function makeLetterTexture(letter: string): THREE.Texture {
   ctx.fillStyle = '#ffb545';
   ctx.fillText(letter, size / 2, size / 2 + 6);
   return new THREE.CanvasTexture(canvas);
+}
+
+/** A shell hole: a dark scorched bowl with a raised rim of earth. */
+function craterMesh(c: CraterDef): THREE.Group {
+  const g = new THREE.Group();
+  const bowl = new THREE.Mesh(
+    new THREE.CircleGeometry(c.r, 28).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ map: craterTex(), transparent: true, depthWrite: false, color: 0x000000 }),
+  );
+  bowl.position.set(c.x, 0.02, c.z);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(c.r * 0.95, 0.22, 6, 28), new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 1 }));
+  rim.rotation.x = Math.PI / 2;
+  rim.scale.z = 0.5;
+  rim.position.set(c.x, 0.04, c.z);
+  rim.receiveShadow = true;
+  g.add(bowl, rim);
+  return g;
+}
+
+let craterTexture: THREE.Texture | null = null;
+function craterTex(): THREE.Texture {
+  if (craterTexture) return craterTexture;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const ctx = cv.getContext('2d')!;
+  const gr = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(0,0,0,0.85)');
+  gr.addColorStop(0.7, 'rgba(0,0,0,0.55)');
+  gr.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gr;
+  ctx.fillRect(0, 0, 64, 64);
+  craterTexture = new THREE.CanvasTexture(cv);
+  return craterTexture;
+}
+
+/** Barbed wire: stakes and coils along the longer side. */
+function wireVisual(hw: number, hh: number): THREE.Group {
+  const g = new THREE.Group();
+  const along = hw >= hh;
+  const len = (along ? hw : hh) * 2;
+  const metal = new THREE.MeshStandardMaterial({ color: 0x8a8e92, roughness: 0.4, metalness: 0.8 });
+  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3622, roughness: 0.9 });
+  const coils = Math.max(2, Math.round(len / 0.5));
+  for (let i = 0; i < coils; i++) {
+    const t = -len / 2 + (i + 0.5) * (len / coils);
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.018, 4, 14), metal);
+    coil.position.set(along ? t : 0, 0.34, along ? 0 : t);
+    coil.rotation.y = along ? Math.PI / 2 : 0;
+    coil.rotation.x = (i % 2) * 0.35;
+    g.add(coil);
+  }
+  for (const end of [-1, 1]) {
+    const stake = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.8, 0.08), wood);
+    stake.position.set(along ? (end * len) / 2 : 0, 0.4, along ? 0 : (end * len) / 2);
+    g.add(stake);
+  }
+  return g;
 }

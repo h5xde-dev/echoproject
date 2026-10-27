@@ -1,4 +1,4 @@
-import type { BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, Flare, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud, StrikeShell, SupplyDrop } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -51,6 +51,12 @@ export interface ActorState {
   /** FPV drones carried; the drone being flown (-1 / absent: none). */
   drones?: number;
   piloting?: number;
+  /** Kill streak, mortar strikes ready, mines and flares carried, E-hold progress. */
+  streak?: number;
+  strikes?: number;
+  mines?: number;
+  flares?: number;
+  hold?: number;
 }
 
 export interface BulletState {
@@ -72,6 +78,8 @@ export interface PropState {
   kind?: PropKind;
   hw?: number;
   hh?: number;
+  /** Mines: who laid it (allies see it, enemies only up close). */
+  owner?: number;
 }
 
 export interface PickupState {
@@ -130,6 +138,11 @@ export interface SnapshotMsg {
   smokes?: SmokeCloud[];
   fires?: FireZone[];
   drones?: Drone[];
+  /** Switches, ammo crates, med stations: what changes. */
+  inter?: { id: number; on: boolean; charge: number; cd: number }[];
+  supply?: SupplyDrop[];
+  shells?: StrikeShell[];
+  flares?: Flare[];
   mode: GameMode;
   /** Arena scoreboard: [actor id, kills, deaths, rounds won]. */
   scores: [number, number, number, number][];
@@ -185,6 +198,8 @@ export interface InputMsg {
   mark?: { x: number; z: number };
   deploy?: boolean;
   drone?: boolean;
+  strike?: boolean;
+  mine?: boolean;
 }
 
 export interface EventMsg {

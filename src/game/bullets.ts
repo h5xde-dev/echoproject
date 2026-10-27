@@ -76,6 +76,8 @@ export function updateBullets(bullets: Bullet[], ctx: BulletCtx, dt: number): Bu
     }
 
     for (const p of ctx.props) {
+      // Bullets fly through barbed wire.
+      if (p.kind === 'wire') continue;
       if (!p.alive) continue;
       const t = segCircleHit(
         b.x,

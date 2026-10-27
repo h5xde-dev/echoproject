@@ -52,6 +52,11 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
       color: a.color,
       drones: a.drones,
       piloting: a.piloting,
+      streak: a.streak || undefined,
+      strikes: a.strikes || undefined,
+      mines: a.mines || undefined,
+      flares: a.flares || undefined,
+      hold: a.holdT > 0 ? a.holdT : undefined,
     });
   }
   const bullets = sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -61,7 +66,7 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
     z: p.z,
     alive: p.alive,
     hp: Math.round(p.hp),
-    ...(p.deployed ? { kind: p.kind, hw: p.hw, hh: p.hh } : {}),
+    ...(p.deployed ? { kind: p.kind, hw: p.hw, hh: p.hh, owner: p.ownerId } : {}),
   }));
   const doors = sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT }));
   return {
@@ -81,6 +86,10 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
     smokes: sim.smokes,
     fires: sim.fires,
     drones: sim.drones.length > 0 ? sim.drones : undefined,
+    inter: sim.interactables.length > 0 ? sim.interactables.map((o) => ({ id: o.id, on: o.on, charge: Math.round(o.charge), cd: Math.round(o.cd * 10) / 10 })) : undefined,
+    supply: sim.drops.length > 0 ? sim.drops : undefined,
+    shells: sim.shells.length > 0 ? sim.shells : undefined,
+    flares: sim.flares.length > 0 ? sim.flares : undefined,
     mode: sim.mode,
     scores: scoreRows(sim),
     round: roundStateOf(sim),

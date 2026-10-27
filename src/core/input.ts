@@ -18,6 +18,8 @@ export type ActionName =
   | 'deploy'
   | 'drone'
   | 'grenade'
+  | 'strike'
+  | 'mine'
   | 'buy';
 
 const ACTION_KEYS: Record<string, ActionName> = {
@@ -39,6 +41,9 @@ const ACTION_KEYS: Record<string, ActionName> = {
   KeyZ: 'mark',
   KeyV: 'deploy',
   KeyX: 'drone',
+  // Kill-streak mortar strike at the cursor; engineer's mine.
+  KeyT: 'strike',
+  KeyN: 'mine',
   KeyG: 'grenade',
   KeyB: 'buy',
 };

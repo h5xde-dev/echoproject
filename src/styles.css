@@ -1036,6 +1036,9 @@ kbd {
 .weapon-extra .nade.smoke i { background: #9aa3ab; }
 .weapon-extra .nade.flash i { background: #f2f4f7; }
 .weapon-extra .nade.molotov i { background: #ff8a2a; }
+.weapon-extra .nade.flare i { background: #ff4a3a; box-shadow: 0 0 4px #ff4a3a; }
+.weapon-extra .light.strike { color: var(--accent-warm); border-color: var(--accent-warm); }
+.weapon-extra .streak { font-family: var(--mono); font-size: 10px; color: var(--accent-warm); letter-spacing: 0.1em; }
 .weapon-extra .nades s { text-decoration: none; opacity: 0.5; }
 
 /* Flash grenade: the whole view whites out. */
