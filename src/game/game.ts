@@ -10,7 +10,7 @@ import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
 import { Sim, type PlayerInput } from './sim';
-import type { Buffs, Bullet, Difficulty, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
+import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
@@ -67,6 +67,8 @@ export interface DisplayActor {
   cls: PlayerClass | null;
   shieldUsed: boolean;
   color: number;
+  drones: number;
+  piloting: number;
   isLocal: boolean;
   moving: boolean;
 }
@@ -161,11 +163,15 @@ export class Game {
     buy: '' as ShopItem | '',
     mark: null as { x: number; z: number } | null,
     deploy: false,
+    drone: false,
   };
   /** Minimap: recent noises of unseen enemies and team markers (ms timestamps). */
   private noiseBlips: { x: number; z: number; at: number }[] = [];
   private markBlips: { x: number; z: number; at: number }[] = [];
   private frameThrow = 10;
+  /** Client: when the last snapshot's drones arrived (they are drawn a little ahead). */
+  private droneSyncAt = 0;
+  private droneBuzzT = 0;
   private buyOpen = false;
   private gameOver = false;
   /** Host of a room: the warm-up lobby (null for solo games and clients). */
@@ -533,6 +539,8 @@ export class Game {
         cls: a.cls,
         shieldUsed: a.shieldUsed,
         color: a.color,
+        drones: a.drones,
+        piloting: a.piloting,
       });
     }
     const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
@@ -564,6 +572,7 @@ export class Game {
       lampsOut: this.sim.lampAlive.flatMap((alive, i) => (alive ? [] : [i])),
       smokes: this.sim.smokes,
       fires: this.sim.fires,
+      drones: this.sim.drones.length > 0 ? this.sim.drones : undefined,
       mode: this.matchMode,
       scores: this.scoreRows(),
       round: this.localRoundState(),
@@ -653,6 +662,8 @@ export class Game {
     this.sim.syncLamps(msg.lampsOut ?? []);
     this.sim.syncSmokes(msg.smokes ?? []);
     this.sim.syncFires(msg.fires ?? []);
+    this.sim.syncDrones(msg.drones ?? []);
+    this.droneSyncAt = performance.now();
     if (msg.flags) this.sim.syncFlags(msg.flags);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
@@ -689,9 +700,10 @@ export class Game {
       mirror.carrying = local.carrying ?? -1;
       mirror.downed = local.downed ?? false;
       this.sim.applySpeed(mirror);
+      const flying = (local.piloting ?? -1) >= 0;
       for (const p of this.pendingInputs) {
         mirror.gait = p.input.gait ?? 'run';
-        this.sim.moveActor(mirror, p.input.moveX, p.input.moveZ, p.input.dt);
+        this.sim.moveActor(mirror, flying ? 0 : p.input.moveX, flying ? 0 : p.input.moveZ, p.input.dt);
       }
       const ex = beforeX - mirror.x;
       const ez = beforeZ - mirror.z;
@@ -908,6 +920,16 @@ export class Game {
         this.soundAt(event.x ?? 0, event.z ?? 0, (d) => {
           if (d < 12) this.audio.tone(900, 300, 0.08, 0.08 * (1 - d / 12), 'sawtooth');
         });
+        break;
+      case 'drone':
+        if (event.id === 'launch') {
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.buzz(d, 1.6));
+          if (event.ownerId === this.localId) this.hud.message('Дрон в воздухе · ЛКМ или X — подрыв', 'good');
+        } else {
+          this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.impact());
+          this.renderer.impact(event.x ?? 0, event.z ?? 0);
+          if (event.ownerId === this.localId) this.hud.message('Связь с дроном потеряна', 'warn');
+        }
         break;
       case 'deploy':
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.door());
@@ -1162,6 +1184,7 @@ export class Game {
     if (this.input.consume('grenade')) this.pending.grenade = true;
     if (this.input.consume('nade')) this.nadeKind = this.nextNadeKind();
     if (this.input.consume('deploy')) this.pending.deploy = true;
+    if (this.input.consume('drone')) this.pending.drone = true;
     if (this.input.consume('mark')) {
       const g = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
       this.pending.mark = { x: g.x, z: g.z };
@@ -1186,7 +1209,9 @@ export class Game {
     const self = this.localDisplay();
     if (self) {
       const ground = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
-      this.frameAim = Math.atan2(ground.z - self.z, ground.x - self.x);
+      // Flying: the drone looks where the mouse is.
+      const eye = this.localDrone() ?? self;
+      this.frameAim = Math.atan2(ground.z - eye.z, ground.x - eye.x);
       this.frameThrow = Math.hypot(ground.z - self.z, ground.x - self.x);
     }
   }
@@ -1213,9 +1238,11 @@ export class Game {
       use: this.input.keys.has('KeyE'),
       mark: this.pending.mark ?? undefined,
       deploy: this.pending.deploy,
+      drone: this.pending.drone,
     };
     this.pending.mark = null;
     this.pending.deploy = false;
+    this.pending.drone = false;
     this.pending.reload = false;
     this.pending.interact = false;
     this.pending.flashlight = false;
@@ -1274,9 +1301,11 @@ export class Game {
       if (mirror) {
         this.mirrorPrev.x = mirror.x;
         this.mirrorPrev.z = mirror.z;
-        mirror.ang = input.aim;
         mirror.gait = input.gait ?? 'run';
-        if (mirror.alive) this.sim.moveActor(mirror, input.moveX, input.moveZ, dt);
+        // The pilot stands still while the drone flies.
+        const flying = (this.latestActors.get(this.localId)?.piloting ?? -1) >= 0;
+        if (!flying) mirror.ang = input.aim;
+        if (mirror.alive) this.sim.moveActor(mirror, flying ? 0 : input.moveX, flying ? 0 : input.moveZ, dt);
       }
       this.pendingInputs.push({ seq: input.seq, input });
       if (this.pendingInputs.length > 240) this.pendingInputs.shift();
@@ -1310,6 +1339,7 @@ export class Game {
       props: this.sim.props,
       actors,
       scratch: [],
+      drones: this.sim.drones,
     };
     for (const hit of updateBullets(this.clientBullets, ctx, dt)) {
       if (hit.kind === 'static') {
@@ -1341,7 +1371,7 @@ export class Game {
           x: blend ? prev!.x + (a.x - prev!.x) * alpha : a.x,
           z: blend ? prev!.z + (a.z - prev!.z) * alpha : a.z,
           // The local aim is shown as it is right now, not as of the last tick.
-          ang: isLocal ? this.frameAim : blend ? prev!.ang + shortestAngle(prev!.ang, a.ang) * alpha : a.ang,
+          ang: isLocal && a.piloting < 0 ? this.frameAim : blend ? prev!.ang + shortestAngle(prev!.ang, a.ang) * alpha : a.ang,
           hp: a.hp,
           maxHp: a.maxHp,
           armor: a.armor,
@@ -1377,6 +1407,8 @@ export class Game {
           cls: a.cls,
           shieldUsed: a.shieldUsed,
           color: a.color,
+          drones: a.drones,
+          piloting: a.piloting,
           isLocal,
           moving: a.moving,
         });
@@ -1407,6 +1439,14 @@ export class Game {
     this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
     this.renderer.setSmokes(this.sim.smokes);
     this.renderer.setFires(this.sim.fires, dt);
+    const drones = this.droneViews();
+    this.renderer.syncDrones(drones, dt);
+    // The buzz: a short whine from every drone in the air, panned to where it is.
+    this.droneBuzzT -= dt;
+    if (this.droneBuzzT <= 0 && drones.length > 0) {
+      this.droneBuzzT = 0.12;
+      for (const d of drones) if (!d.down) this.soundAt(d.x, d.z, (dist) => this.audio.buzz(dist));
+    }
     // A carried flag follows its carrier as drawn (smooth), not the last snapshot.
     const flags = this.sim.flags.map((f) => {
       const d = f.carrier >= 0 ? this.display.get(f.carrier) : undefined;
@@ -1514,6 +1554,8 @@ export class Game {
         cls: b.cls ?? null,
         shieldUsed: b.shieldUsed ?? false,
         color: b.color ?? -1,
+        drones: b.drones ?? 0,
+        piloting: b.piloting ?? -1,
         isLocal: id === this.localId,
         moving: false,
       };
@@ -1524,7 +1566,8 @@ export class Game {
           d.x = this.mirrorPrev.x + (mirror.x - this.mirrorPrev.x) * alpha + this.correction.x;
           d.z = this.mirrorPrev.z + (mirror.z - this.mirrorPrev.z) * alpha + this.correction.z;
         }
-        d.ang = this.frameAim;
+        const flying = (latest?.piloting ?? -1) >= 0;
+        if (!flying) d.ang = this.frameAim;
         // Own stats: newest values, not the interpolation-delayed ones.
         if (latest) {
           d.hp = latest.hp;
@@ -1560,6 +1603,25 @@ export class Game {
     return this.display.get(this.localId) ?? null;
   }
 
+  /** Drones as drawn: carried forward from the last tick / snapshot. */
+  private droneViews(): (Drone & { y: number })[] {
+    const ahead = this.isAuthority ? this.accumulator : Math.min(0.12, (performance.now() - this.droneSyncAt) / 1000);
+    const D = CONFIG.drone;
+    return this.sim.drones.map((d) => ({
+      ...d,
+      x: d.x + d.vx * ahead,
+      z: d.z + d.vz * ahead,
+      y: d.down ? Math.max(0.1, 1.6 * (1 - d.downT / D.fallTime)) : 1.6,
+    }));
+  }
+
+  /** The drone the local player is flying, as drawn. */
+  private localDrone(): (Drone & { y: number }) | null {
+    const self = this.localDisplay();
+    if (!self || self.piloting < 0) return null;
+    return this.droneViews().find((d) => d.id === self.piloting && !d.down) ?? null;
+  }
+
   /**
    * While dead: the killer for the first seconds (lit up even in the dark),
    * then a living ally. Null when alive or with no one to watch.
@@ -1589,6 +1651,8 @@ export class Game {
   /** Co-op: what a downed player, or someone next to one, should do. */
   private downedPrompt(self: DisplayActor | null): string {
     if (!self?.alive) return '';
+    const drone = this.localDrone();
+    if (drone) return `ДРОН · ${Math.ceil(drone.battery)} С · ЛКМ — ПОДРЫВ`;
     const D = CONFIG.down;
     if (self.downed) {
       return self.reviveT > 0
@@ -1669,6 +1733,13 @@ export class Game {
       if (d.kind !== 'player') continue;
       // Team modes: the other side's humans are not your eyes.
       if (isTeamMode(this.matchMode) && d.team !== team) continue;
+      // A pilot sees through the drone's camera (its own small lamp on).
+      const eye = d.piloting >= 0 ? this.sim.drones.find((x) => x.id === d.piloting && !x.down) : undefined;
+      if (eye) {
+        const view = this.droneViews().find((x) => x.id === eye.id)!;
+        out.push({ id: d.id, x: view.x, z: view.z, ang: d.isLocal ? this.frameAim : eye.ang, flashOn: true, alive: d.alive, nv: d.buffs.nv > 0, blind: d.blind });
+        continue;
+      }
       out.push({ id: d.id, x: d.x, z: d.z, ang: d.ang, flashOn: d.flashOn, alive: d.alive, nv: d.buffs.nv > 0, blind: d.blind });
     }
     out.sort((a, b) => (a.id === this.localId ? 0 : 1) - (b.id === this.localId ? 0 : 1));
@@ -1736,7 +1807,7 @@ export class Game {
   private updateHud(): void {
     const self = this.localDisplay();
     const watched = this.spectateTarget(self);
-    const cameraTarget = watched ?? self ?? { x: this.map.spawnX, z: this.map.spawnZ };
+    const cameraTarget = watched ?? this.localDrone() ?? self ?? { x: this.map.spawnX, z: this.map.spawnZ };
     this.renderer.setCameraTarget(cameraTarget.x, cameraTarget.z);
     this.hud.setSpectating(
       watched && watched.id !== this.localId
@@ -1810,6 +1881,7 @@ export class Game {
       attackTeam: this.sim.attackTeam,
       cls: self.cls,
       shieldReady: self.cls === 'engineer' && !self.shieldUsed,
+      drones: self.drones,
       blind: self.blind,
       money: self.money,
       tier: self.tier,
@@ -1867,7 +1939,7 @@ function shortestAngle(a: number, b: number): number {
 }
 
 /** The parts of an input that happen once per press, not every tick. */
-type OnceInput = Pick<PlayerInput, 'reload' | 'interact' | 'flashlight' | 'slot' | 'grenade' | 'throwDist' | 'grenadeKind' | 'buy' | 'mark' | 'deploy'>;
+type OnceInput = Pick<PlayerInput, 'reload' | 'interact' | 'flashlight' | 'slot' | 'grenade' | 'throwDist' | 'grenadeKind' | 'buy' | 'mark' | 'deploy' | 'drone'>;
 
 const NO_ONCE: OnceInput = {
   reload: false,
@@ -1880,6 +1952,7 @@ const NO_ONCE: OnceInput = {
   buy: '',
   mark: undefined,
   deploy: false,
+  drone: false,
 };
 
 /** Folds a packet's one-shot actions into those not yet applied. */
@@ -1897,4 +1970,5 @@ function mergeOnce(once: OnceInput, input: PlayerInput): void {
   if (input.buy) once.buy = input.buy;
   if (input.mark) once.mark = input.mark;
   if (input.deploy) once.deploy = true;
+  if (input.drone) once.drone = true;
 }

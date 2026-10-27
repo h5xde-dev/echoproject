@@ -1,6 +1,9 @@
 import { segCircleHit } from '../core/math';
 import { PhysicsWorld } from './physics';
-import type { Actor, Bullet, SimProp, StaticBody } from './types';
+import type { Actor, Bullet, Drone, SimProp, StaticBody } from './types';
+
+/** A drone is small: a bullet has to pass this close. */
+const DRONE_HIT_RADIUS = 0.45;
 
 /** Minimal shape a bullet needs from an actor to test a hit. */
 export interface BulletActor {
@@ -16,12 +19,15 @@ export interface BulletCtx {
   props: SimProp[];
   actors: Map<number, BulletActor>;
   scratch: StaticBody[];
+  /** Drones in the air; a shooter's own drone lets the bullet by. */
+  drones?: Drone[];
 }
 
 export type BulletHit =
   | { kind: 'static'; x: number; z: number; nx: number; nz: number; bullet: Bullet }
   | { kind: 'actor'; x: number; z: number; bullet: Bullet; actor: Actor }
-  | { kind: 'prop'; x: number; z: number; bullet: Bullet; prop: SimProp };
+  | { kind: 'prop'; x: number; z: number; bullet: Bullet; prop: SimProp }
+  | { kind: 'drone'; x: number; z: number; bullet: Bullet; drone: Drone };
 
 /**
  * Advances every bullet and resolves collisions. Shared by the authoritative
@@ -44,11 +50,12 @@ export function updateBullets(bullets: Bullet[], ctx: BulletCtx, dt: number): Bu
     b.range += travel;
 
     let bestT = travel + 1e-6;
-    let hitKind: 'none' | 'static' | 'actor' | 'prop' = 'none';
+    let hitKind: 'none' | 'static' | 'actor' | 'prop' | 'drone' = 'none';
     let hitNx = 0;
     let hitNz = 0;
     let hitActor: Actor | null = null;
     let hitProp: SimProp | null = null;
+    let hitDrone: Drone | null = null;
 
     const staticHit = ctx.world.castSegment(b.x, b.z, dirX, dirZ, travel, ctx.scratch);
     if (staticHit) {
@@ -86,6 +93,16 @@ export function updateBullets(bullets: Bullet[], ctx: BulletCtx, dt: number): Bu
       }
     }
 
+    for (const d of ctx.drones ?? []) {
+      if (d.down || d.ownerId === b.ownerId) continue;
+      const t = segCircleHit(b.x, b.z, b.x + dirX * travel, b.z + dirZ * travel, d.x, d.z, DRONE_HIT_RADIUS);
+      if (t !== null && t * travel < bestT) {
+        bestT = t * travel;
+        hitKind = 'drone';
+        hitDrone = d;
+      }
+    }
+
     if (hitKind === 'none') {
       b.x += dirX * travel;
       b.z += dirZ * travel;
@@ -104,6 +121,12 @@ export function updateBullets(bullets: Bullet[], ctx: BulletCtx, dt: number): Bu
 
     if (hitKind === 'actor' && hitActor) {
       hits.push({ kind: 'actor', x: hx, z: hz, bullet: b, actor: hitActor });
+      bullets.splice(i, 1);
+      continue;
+    }
+
+    if (hitKind === 'drone' && hitDrone) {
+      hits.push({ kind: 'drone', x: hx, z: hz, bullet: b, drone: hitDrone });
       bullets.splice(i, 1);
       continue;
     }

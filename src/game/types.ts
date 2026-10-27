@@ -322,6 +322,31 @@ export interface Actor {
   shieldUsed: boolean;
   /** Player's chosen ring colour (-1: the default palette). */
   color: number;
+  /** FPV drones carried, and the one being flown (-1: none). */
+  drones: number;
+  piloting: number;
+}
+
+/** A kamikaze FPV drone: flown by a soldier who stands still meanwhile. */
+export interface Drone {
+  id: number;
+  ownerId: number;
+  team: number;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  ang: number;
+  hp: number;
+  /** Seconds of flight left; it blows up when it runs out. */
+  battery: number;
+  age: number;
+  /** Shot down or the link lost: dropping out of the air, harmless. */
+  down: boolean;
+  downT: number;
+  /** Stick input from the pilot, held until the next packet. */
+  moveX: number;
+  moveZ: number;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */
@@ -414,7 +439,7 @@ export interface FireZone {
 }
 
 /** Things for sale in competitive mode. */
-export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov';
+export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov' | 'drone';
 
 export interface NoiseEvent {
   x: number;
@@ -436,6 +461,7 @@ export interface GameEvent {
     | 'revive'
     | 'objective'
     | 'deploy'
+    | 'drone'
     | 'stab'
     | 'smoke'
     | 'flash'

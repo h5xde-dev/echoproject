@@ -1,4 +1,4 @@
-import type { BombState, Buffs, EnemyRole, FireZone, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
+import type { BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -48,6 +48,9 @@ export interface ActorState {
   cls?: PlayerClass | null;
   shieldUsed?: boolean;
   color?: number;
+  /** FPV drones carried; the drone being flown (-1 / absent: none). */
+  drones?: number;
+  piloting?: number;
 }
 
 export interface BulletState {
@@ -126,6 +129,7 @@ export interface SnapshotMsg {
   lampsOut?: number[];
   smokes?: SmokeCloud[];
   fires?: FireZone[];
+  drones?: Drone[];
   mode: GameMode;
   /** Arena scoreboard: [actor id, kills, deaths, rounds won]. */
   scores: [number, number, number, number][];
@@ -180,6 +184,7 @@ export interface InputMsg {
   use?: boolean;
   mark?: { x: number; z: number };
   deploy?: boolean;
+  drone?: boolean;
 }
 
 export interface EventMsg {

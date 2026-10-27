@@ -661,6 +661,55 @@ export class Renderer {
   }
 
   /** Grenades in flight: body in the scene, danger ring above the fog. */
+  private droneVisuals = new Map<number, { group: THREE.Group; rotors: THREE.Mesh[]; led: THREE.MeshBasicMaterial }>();
+
+  /** FPV drones: a small quad with spinning props and a blinking light at the nose. */
+  syncDrones(drones: { id: number; x: number; y: number; z: number; ang: number; down: boolean }[], dt: number): void {
+    const live = new Set<number>();
+    for (const d of drones) {
+      live.add(d.id);
+      let v = this.droneVisuals.get(d.id);
+      if (!v) {
+        const group = new THREE.Group();
+        // Drawn larger than life: from the camera's height it would be a speck.
+        group.scale.setScalar(1.6);
+        const body = new THREE.Mesh(DRONE_BODY_GEO, DRONE_MAT);
+        body.castShadow = true;
+        group.add(body);
+        const rotors: THREE.Mesh[] = [];
+        for (let k = 0; k < 4; k++) {
+          const a = Math.PI / 4 + (k * Math.PI) / 2;
+          const arm = new THREE.Mesh(DRONE_ARM_GEO, DRONE_MAT);
+          arm.rotation.y = -a;
+          arm.position.set(Math.cos(a) * 0.17, 0, Math.sin(a) * 0.17);
+          group.add(arm);
+          const rotor = new THREE.Mesh(DRONE_ROTOR_GEO, DRONE_ROTOR_MAT);
+          rotor.position.set(Math.cos(a) * 0.3, 0.05, Math.sin(a) * 0.3);
+          group.add(rotor);
+          rotors.push(rotor);
+        }
+        const led = new THREE.MeshBasicMaterial({ color: 0xff3020, toneMapped: false });
+        const nose = new THREE.Mesh(DRONE_LED_GEO, led);
+        nose.position.set(0.16, 0.04, 0);
+        group.add(nose);
+        this.scene.add(group);
+        v = { group, rotors, led };
+        this.droneVisuals.set(d.id, v);
+      }
+      v.group.position.set(d.x, d.y, d.z);
+      v.group.rotation.y = -d.ang;
+      // Shot down: tumbling, props winding down.
+      v.group.rotation.z = d.down ? Math.min(1.2, v.group.rotation.z + dt * 3) : Math.sin(this.time * 9 + d.id) * 0.04;
+      for (const r of v.rotors) r.rotation.y += dt * (d.down ? 6 : 60);
+      v.led.color.setHex(d.down ? 0x301008 : Math.sin(this.time * 14) > 0 ? 0xff3020 : 0x40ff60);
+    }
+    for (const [id, v] of this.droneVisuals) {
+      if (live.has(id)) continue;
+      this.scene.remove(v.group);
+      this.droneVisuals.delete(id);
+    }
+  }
+
   syncGrenades(
     grenades: { kind?: GrenadeKind; x: number; y: number; z: number; vx: number; vy: number; vz: number; fuse: number }[],
     ahead: number,
@@ -1600,6 +1649,13 @@ const BUSH_BLOB_GEO = new THREE.IcosahedronGeometry(1, 1);
 
 /** Capture the flag: blue and red, as the team rings on soldiers. */
 const TEAM_FLAG_COLORS = [0x4aa8ff, 0xff5a4a];
+
+const DRONE_BODY_GEO = new THREE.BoxGeometry(0.26, 0.08, 0.2);
+const DRONE_ARM_GEO = new THREE.BoxGeometry(0.3, 0.03, 0.04);
+const DRONE_ROTOR_GEO = new THREE.BoxGeometry(0.26, 0.01, 0.035);
+const DRONE_LED_GEO = new THREE.SphereGeometry(0.035, 8, 6);
+const DRONE_MAT = new THREE.MeshStandardMaterial({ color: 0x2a2e33, roughness: 0.6, metalness: 0.4 });
+const DRONE_ROTOR_MAT = new THREE.MeshBasicMaterial({ color: 0x9aa0a8, transparent: true, opacity: 0.55 });
 
 /** A ceiling lamp seen from above: a flat disc. */
 const LAMP_FIXTURE_GEO = new THREE.CylinderGeometry(0.34, 0.34, 0.06, 20);

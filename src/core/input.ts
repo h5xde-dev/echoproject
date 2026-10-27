@@ -16,6 +16,7 @@ export type ActionName =
   | 'nade'
   | 'mark'
   | 'deploy'
+  | 'drone'
   | 'grenade'
   | 'buy';
 
@@ -37,6 +38,7 @@ const ACTION_KEYS: Record<string, ActionName> = {
   // Team marker; the middle mouse button does the same.
   KeyZ: 'mark',
   KeyV: 'deploy',
+  KeyX: 'drone',
   KeyG: 'grenade',
   KeyB: 'buy',
 };

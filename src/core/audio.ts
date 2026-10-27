@@ -234,6 +234,14 @@ export class GameAudio {
     this.noise(0.1, 0.05 * v, 2200, 0.7, 'bandpass');
   }
 
+  /** An FPV drone's whine: called a few times a second while it flies. */
+  buzz(dist: number, gain = 1): void {
+    const v = Math.max(0, 1 - dist / 22);
+    if (v <= 0) return;
+    this.tone(210, 228, 0.13, 0.035 * v * gain, 'sawtooth');
+    this.tone(420, 450, 0.13, 0.012 * v * gain, 'square');
+  }
+
   /** A molotov: the bottle breaks, the fuel goes up with a whoomp. */
   fireBurst(dist: number): void {
     const v = Math.max(0.12, 1 - dist / 34);

@@ -68,6 +68,8 @@ export interface HudState {
   cls: PlayerClass | null;
   /** Engineer: the shield is still to place this life. */
   shieldReady: boolean;
+  /** FPV drones carried (X launches one). */
+  drones: number;
   /** Seconds left blinded by a flash grenade. */
   blind: number;
   money: number;
@@ -613,7 +615,8 @@ export class Hud {
     const light = `<span class="light${state.flashOn ? ' on' : ''}"><kbd>F</kbd>${state.flashOn ? 'свет' : 'тьма'}</span>`;
     const clsName = state.cls ? CLASS_LABEL[state.cls] : '';
     const shield = state.cls === 'engineer' ? `<span class="light${state.shieldReady ? ' on' : ''}"><kbd>V</kbd>${state.shieldReady ? 'щит' : 'щит стоит'}</span>` : '';
-    const extra = `${clsName ? `<span class="cls-tag">${clsName}</span>` : ''}${money}${nades}${shield}${light}`;
+    const drone = state.drones > 0 ? `<span class="light on"><kbd>X</kbd>дрон</span>` : '';
+    const extra = `${clsName ? `<span class="cls-tag">${clsName}</span>` : ''}${money}${nades}${shield}${drone}${light}`;
     if (this.extraEl.innerHTML !== extra) this.extraEl.innerHTML = extra;
 
     // Gun game ladder.

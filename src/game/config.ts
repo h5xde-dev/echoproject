@@ -22,6 +22,21 @@ export const CONFIG = {
   },
 
   /** Bushes hide whoever walks, crouches or stands in them. */
+  drone: {
+    speed: 14,
+    accel: 45,
+    /** Seconds of flight. */
+    battery: 12,
+    hp: 30,
+    radius: 0.4,
+    blastRadius: 4.5,
+    blastDamage: 120,
+    /** The buzz: how far guards hear it. */
+    noise: 14,
+    /** A click this soon after launch does not count (the launch key may still be down). */
+    armTime: 0.3,
+    fallTime: 1.0,
+  },
   trench: {
     /** Speed while wading through a trench. */
     speedMul: 0.85,

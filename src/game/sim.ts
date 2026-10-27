@@ -10,6 +10,7 @@ import type {
   Actor,
   AiState,
   BombState,
+  Drone,
   Difficulty,
   EnemyRole,
   PlayerClass,
@@ -73,6 +74,8 @@ export interface PlayerInput {
   use?: boolean;
   /** Engineer: place the portable shield this tick (V). */
   deploy?: boolean;
+  /** Launch an FPV drone, or blow up the one being flown (X). */
+  drone?: boolean;
   /** Team marker placed this tick (middle mouse / Z), at a ground point. */
   mark?: { x: number; z: number };
 }
@@ -159,6 +162,8 @@ export class Sim {
   smokes: SmokeCloud[] = [];
   /** Burning ground (molotovs). */
   fires: FireZone[] = [];
+  drones: Drone[] = [];
+  private nextDroneId = 1;
   /** Counts down to the next pulse of fire damage. */
   private burnClock = 0;
   /** Ceiling lamps still burning, by index into `map.lamps`. */
@@ -426,6 +431,8 @@ export class Sim {
       cls: null,
       shieldUsed: false,
       color: -1,
+      drones: 0,
+      piloting: -1,
     };
   }
 
@@ -630,6 +637,11 @@ export class Sim {
       this.moveActor(actor, input.moveX, input.moveZ, input.dt);
       return;
     }
+    // Flying a drone: the soldier stands still, the stick steers the drone.
+    if (actor.piloting >= 0) {
+      this.pilotDrone(actor, input);
+      return;
+    }
     actor.using = !!input.use;
     if (input.deploy) this.deployShield(actor);
     // Markers go to everyone; clients show them to the marker's allies only.
@@ -645,6 +657,7 @@ export class Sim {
     }
 
     if (input.flashlight) actor.flashOn = !actor.flashOn;
+    if (input.drone) this.launchDrone(actor);
 
     // Number keys pick among the weapons the actor carries.
     if (input.slot >= 0 && input.slot < WEAPON_ORDER.length) {
@@ -783,6 +796,7 @@ export class Sim {
     this.updateGrenades(dt);
     this.updateSmokes(dt);
     this.updateFires(dt);
+    this.updateDrones(dt);
     this.updateDowned(dt);
     this.updateMedics(dt);
     this.updateProps(dt);
@@ -929,6 +943,8 @@ export class Sim {
   /** What a class starts each life with. */
   classKit(actor: Actor): void {
     actor.shieldUsed = false;
+    actor.piloting = -1;
+    if (actor.cls === 'engineer') actor.drones = Math.max(actor.drones, 1);
     if (actor.cls === 'assault') actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + CONFIG.classes.assault.extraFrags);
     if (actor.cls === 'scout' && CONFIG.classes.scout.nvOnSpawn) actor.buffs.nv = CONFIG.powerups.nvTime;
   }
@@ -945,6 +961,159 @@ export class Sim {
         a.hp = Math.min(a.maxHp, a.hp + M.healRate * dt);
       }
     }
+  }
+
+  // ---------------------------------------------------------------- drones
+
+  private launchDrone(actor: Actor): void {
+    if (actor.drones <= 0 || actor.downed || actor.piloting >= 0) return;
+    const x = actor.x + Math.cos(actor.ang) * 0.8;
+    const z = actor.z + Math.sin(actor.ang) * 0.8;
+    const clear = this.world.lineOfSight(actor.x, actor.z, x, z, this.scratch);
+    actor.drones--;
+    const drone: Drone = {
+      id: this.nextDroneId++,
+      ownerId: actor.id,
+      team: actor.team,
+      x: clear ? x : actor.x,
+      z: clear ? z : actor.z,
+      vx: 0,
+      vz: 0,
+      ang: actor.ang,
+      hp: CONFIG.drone.hp,
+      battery: CONFIG.drone.battery,
+      age: 0,
+      down: false,
+      downT: 0,
+      moveX: 0,
+      moveZ: 0,
+    };
+    this.drones.push(drone);
+    actor.piloting = drone.id;
+    actor.vx = actor.vz = 0;
+    this.events.push({ type: 'drone', id: 'launch', ownerId: actor.id, x: drone.x, z: drone.z });
+  }
+
+  private pilotDrone(actor: Actor, input: PlayerInput): void {
+    actor.using = false;
+    const drone = this.drones.find((d) => d.id === actor.piloting);
+    this.moveActor(actor, 0, 0, input.dt);
+    if (!drone || drone.down) {
+      actor.piloting = -1;
+      return;
+    }
+    if ((input.fire || input.drone) && drone.age >= CONFIG.drone.armTime) {
+      this.detonateDrone(drone);
+      return;
+    }
+    drone.ang = input.aim;
+    drone.moveX = input.moveX;
+    drone.moveZ = input.moveZ;
+  }
+
+  private detonateDrone(drone: Drone): void {
+    const D = CONFIG.drone;
+    this.drones = this.drones.filter((d) => d !== drone);
+    this.releasePilot(drone);
+    this.explode(drone.x, drone.z, D.blastRadius, D.blastDamage, drone.ownerId);
+  }
+
+  /** Shot down or the link lost: it drops without going off. */
+  private downDrone(drone: Drone): void {
+    if (drone.down) return;
+    drone.down = true;
+    drone.downT = 0;
+    this.releasePilot(drone);
+    this.events.push({ type: 'drone', id: 'down', ownerId: drone.ownerId, x: drone.x, z: drone.z });
+  }
+
+  private releasePilot(drone: Drone): void {
+    const pilot = this.actors.get(drone.ownerId);
+    if (pilot && pilot.piloting === drone.id) pilot.piloting = -1;
+  }
+
+  private updateDrones(dt: number): void {
+    const D = CONFIG.drone;
+    for (const drone of [...this.drones]) {
+      drone.age += dt;
+      if (drone.down) {
+        drone.downT += dt;
+        drone.vx *= Math.max(0, 1 - 3 * dt);
+        drone.vz *= Math.max(0, 1 - 3 * dt);
+        drone.x += drone.vx * dt;
+        drone.z += drone.vz * dt;
+        if (drone.downT >= D.fallTime) this.drones = this.drones.filter((d) => d !== drone);
+        continue;
+      }
+      const pilot = this.actors.get(drone.ownerId);
+      if (!pilot || !pilot.alive || pilot.downed || pilot.piloting !== drone.id) {
+        this.downDrone(drone);
+        continue;
+      }
+      drone.battery -= dt;
+      if (drone.battery <= 0) {
+        this.detonateDrone(drone);
+        continue;
+      }
+      // Quick, but not instant: it banks into turns.
+      const len = Math.hypot(drone.moveX, drone.moveZ);
+      const tvx = len > 0.01 ? (drone.moveX / Math.max(1, len)) * D.speed : 0;
+      const tvz = len > 0.01 ? (drone.moveZ / Math.max(1, len)) * D.speed : 0;
+      const dv = D.accel * dt;
+      drone.vx += clamp(tvx - drone.vx, -dv, dv);
+      drone.vz += clamp(tvz - drone.vz, -dv, dv);
+      // Over crates and cover, but walls and shut doors stop it.
+      const steps = Math.max(1, Math.ceil((Math.hypot(drone.vx, drone.vz) * dt) / 0.2));
+      for (let i = 0; i < steps; i++) {
+        const ox = drone.x;
+        const oz = drone.z;
+        drone.x += (drone.vx * dt) / steps;
+        drone.z += (drone.vz * dt) / steps;
+        const r = D.radius;
+        for (const b of this.world.query(drone.x - r, drone.z - r, drone.x + r, drone.z + r, this.scratch)) resolveCircleBox(drone, r, b.cx, b.cz, b.hw, b.hh);
+        for (const d of this.world.doors) if (!d.open) resolveCircleBox(drone, r, d.cx, d.cz, d.hw, d.hh);
+        if (i === steps - 1) {
+          drone.vx = ((drone.x - ox) * steps) / dt;
+          drone.vz = ((drone.z - oz) * steps) / dt;
+        }
+      }
+      drone.x = clamp(drone.x, this.map.minX + 0.5, this.map.maxX - 0.5);
+      drone.z = clamp(drone.z, this.map.minZ + 0.5, this.map.maxZ - 0.5);
+      // The buzz carries: guards turn to it.
+      if (Math.floor(drone.age * 2) !== Math.floor((drone.age - dt) * 2))
+        this.noises.push({ x: drone.x, z: drone.z, radius: D.noise, time: this.time, ownerId: drone.ownerId });
+    }
+  }
+
+  /** The nearest enemy drone a guard can see within reach of a shot (after a moment to react). */
+  private droneThreat(actor: Actor): Drone | null {
+    let best: Drone | null = null;
+    let bestD = 11;
+    for (const d of this.drones) {
+      if (d.down || d.age < 0.6) continue;
+      const owner = this.actors.get(d.ownerId);
+      if (!owner || !this.hostileTo(actor, owner)) continue;
+      const r = dist(actor.x, actor.z, d.x, d.z);
+      if (r >= bestD || !this.world.lineOfSight(actor.x, actor.z, d.x, d.z, this.scratch)) continue;
+      best = d;
+      bestD = r;
+    }
+    return best;
+  }
+
+  /** A bullet or blast hits a drone. */
+  private damageDrone(drone: Drone, amount: number, sourceId: number): void {
+    if (drone.down) return;
+    const src = this.actors.get(sourceId);
+    if (this.teams && src && src.id !== drone.ownerId && src.team === drone.team) return;
+    if (isCoopMode(this.mode) && src && src.kind === 'player') return;
+    drone.hp -= amount;
+    if (drone.hp <= 0) this.downDrone(drone);
+  }
+
+  /** Client: drones from a snapshot. */
+  syncDrones(drones: Drone[]): void {
+    this.drones = drones;
   }
 
   /** Engineer: a portable shield in front of them, one per life. */
@@ -1200,9 +1369,13 @@ export class Sim {
       props: this.props,
       actors: this.actors,
       scratch: this.scratch,
+      drones: this.drones,
     };
     for (const hit of updateBullets(bullets, ctx, dt)) {
-      if (hit.kind === 'static') {
+      if (hit.kind === 'drone') {
+        this.damageDrone(hit.drone, damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul, hit.bullet.ownerId);
+        this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1.6, weapon: hit.bullet.weapon });
+      } else if (hit.kind === 'static') {
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
       } else if (hit.kind === 'actor') {
         let dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
@@ -1250,6 +1423,12 @@ export class Sim {
     }
     actor.hp -= amount;
     this.events.push({ type: 'hurt', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z });
+    // Hit while flying: the pilot flinches and loses the link.
+    if (actor.piloting >= 0) {
+      const drone = this.drones.find((d) => d.id === actor.piloting);
+      if (drone) this.downDrone(drone);
+      actor.piloting = -1;
+    }
     if (actor.hp > 0) {
       // Being shot makes a guard aware of the shooter at once.
       const src = this.actors.get(sourceId);
@@ -1366,6 +1545,7 @@ export class Sim {
 
   explode(x: number, z: number, radius: number, damage: number, sourceId: number): void {
     this.events.push({ type: 'explosion', x, z, y: 1 });
+    for (const d of this.drones) if (dist(d.x, d.z, x, z) < radius) this.damageDrone(d, damage, sourceId);
     for (const actor of this.actors.values()) {
       if (!actor.alive) continue;
       const d = dist(actor.x, actor.z, x, z);
@@ -1450,6 +1630,17 @@ export class Sim {
     if (actor.blind > 0) {
       ai.awareness = 0;
       this.moveActor(actor, 0, 0, dt);
+      return;
+    }
+    // A hostile drone buzzing close and in sight: stand and shoot it down first.
+    const drone = this.droneThreat(actor);
+    if (drone) {
+      actor.ang = turnTowards(actor.ang, Math.atan2(drone.z - actor.z, drone.x - actor.x), 10 * dt);
+      this.moveActor(actor, 0, 0, dt);
+      if (actor.cooldown <= 0 && !actor.reloading) {
+        if (actor.ammo > 0) this.enemyShoot(actor, drone);
+        else this.startReload(actor);
+      }
       return;
     }
 
@@ -1981,6 +2172,9 @@ export class Sim {
     } else if (item === 'molotov') {
       if (actor.molotovs >= CONFIG.grenade.maxMolotov) return false;
       actor.molotovs++;
+    } else if (item === 'drone') {
+      if (actor.drones >= 1) return false;
+      actor.drones++;
     } else {
       if (actor.weapons.includes(item)) return false;
       this.equip(actor, item);
@@ -2148,7 +2342,7 @@ export class Sim {
     return { x: actor.x, z: actor.z };
   }
 
-  private enemyShoot(actor: Actor, target: Actor): void {
+  private enemyShoot(actor: Actor, target: { x: number; z: number }): void {
     const def = WEAPONS[actor.weapon];
     // A knife in hand (gun game's last rung): stab when close enough.
     if (def.melee) {
@@ -2869,6 +3063,7 @@ export class Sim {
     this.grenades = [];
     this.smokes = [];
     this.fires = [];
+    this.drones = [];
     // Spread everyone over the spawn points; survivors keep their kit.
     const spawns = [...this.map.spawns];
     for (let i = spawns.length - 1; i > 0; i--) {

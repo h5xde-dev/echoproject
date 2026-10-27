@@ -1228,6 +1228,122 @@ for (const info of ARENAS) {
   check(fromTrench >= near * 0.7, `a shot along the trench hits in full (${fromTrench.toFixed(0)} hp)`);
 }
 
+// FPV drone: the engineer flies it, the pilot stands still, a click blows it up.
+{
+  const base = buildArena('sklad', 4242, 'dm');
+  const map = { ...base, walls: [], props: [], lamps: [], bushes: [], pickups: [], powerups: [] };
+  const s = new Sim(map);
+  const dt = CONFIG.tickDt;
+  const p = s.addPlayer('local', 'пилот', 1, 'engineer');
+  const foe = s.addPlayer('foe', 'цель', 2);
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  const reset = () => {
+    for (const a of [p, foe]) {
+      a.alive = true;
+      a.hp = a.maxHp;
+      a.armor = 0;
+      a.shield = 0;
+      a.vx = a.vz = 0;
+    }
+    p.x = 10;
+    p.z = 15;
+    foe.x = 30;
+    foe.z = 15;
+    s.events.length = 0;
+  };
+  reset();
+  check(p.drones === 1, 'an engineer carries a drone');
+  s.applyInput(p, { ...input, drone: true });
+  check(p.piloting >= 0 && s.drones.length === 1 && p.drones === 0, 'X launches it');
+  for (let i = 0; i < 60; i++) {
+    p.shield = 0;
+    s.applyInput(p, { ...input, moveX: 1 });
+    s.step(dt);
+  }
+  const drone = s.drones[0];
+  check(Math.abs(p.x - 10) < 0.05 && drone.x > 20, `the drone flies, the pilot stays put (pilot ${p.x.toFixed(2)}, drone ${drone.x.toFixed(1)})`);
+  check(s.noises.some((n) => n.ownerId === p.id && n.radius === CONFIG.drone.noise) || drone.age > 0.5, 'it buzzes');
+  foe.x = drone.x + 1.5;
+  foe.z = drone.z;
+  foe.shield = 0;
+  s.applyInput(p, { ...input, fire: true });
+  s.step(dt);
+  check(s.drones.length === 0 && p.piloting === -1, 'a click blows it up');
+  check(foe.hp < foe.maxHp - 30 || !foe.alive, `the blast hurts whoever is near (${foe.hp.toFixed(0)} hp left)`);
+
+  // A battery runs out with a bang.
+  reset();
+  p.drones = 1;
+  s.applyInput(p, { ...input, drone: true });
+  for (let i = 0; i < Math.ceil(CONFIG.drone.battery / dt) + 5; i++) {
+    p.shield = 0;
+    s.applyInput(p, input);
+    s.step(dt);
+  }
+  check(s.drones.length === 0 && p.piloting === -1 && s.events.some((e) => e.type === 'explosion'), 'a flat battery sets it off');
+
+  // Shot down: it drops without going off.
+  reset();
+  p.drones = 1;
+  s.applyInput(p, { ...input, drone: true });
+  s.step(dt);
+  const d2 = s.drones[0];
+  d2.x = 25;
+  d2.z = 15;
+  s.events.length = 0;
+  s.bullets.push({
+    id: 'drone-shot', ownerId: foe.id, ownerKind: 'player', x: 28, z: 15, vx: -40, vz: 0, speed: 40,
+    damage: WEAPONS.rifle.damage, damageMul: 1, life: 1, weapon: 'rifle', color: 0xffffff, range: 0,
+  });
+  for (let i = 0; i < 10; i++) s.step(dt);
+  check(d2.down && p.piloting === -1, 'a rifle round knocks it out of the air');
+  for (let i = 0; i < 90; i++) s.step(dt);
+  check(s.drones.length === 0 && !s.events.some((e) => e.type === 'explosion'), 'and it falls without exploding');
+
+  // Hurt while flying: the link breaks.
+  reset();
+  p.drones = 1;
+  s.applyInput(p, { ...input, drone: true });
+  s.step(dt);
+  s.damageActor(p, 10, foe.id);
+  check(p.piloting === -1 && s.drones[0]?.down === true, 'a hit on the pilot breaks the link');
+
+  // Guards and bots shoot a drone down when it buzzes close.
+  {
+    const b = new Sim({ ...map });
+    const pilot = b.addPlayer('local', 'пилот', 1, 'engineer');
+    b.fillBots();
+    const bot = [...b.actors.values()].find((a) => a.kind === 'enemy')!;
+    for (const a of b.actors.values()) if (a !== bot && a !== pilot) a.alive = false;
+    pilot.x = 5;
+    pilot.z = 5;
+    bot.x = 30;
+    bot.z = 15;
+    b.applyInput(pilot, { ...input, drone: true });
+    const dr = b.drones[0];
+    dr.x = 24;
+    dr.z = 15;
+    let downAt = -1;
+    for (let i = 0; i < 300 && downAt < 0; i++) {
+      pilot.shield = 0;
+      bot.shield = 0;
+      bot.hp = bot.maxHp;
+      dr.battery = 10;
+      b.applyInput(pilot, input);
+      b.step(dt);
+      if (dr.down) downAt = i * dt;
+    }
+    check(downAt > 0 && downAt < 4, `a bot shoots down a drone hovering 6 m off (${downAt.toFixed(1)} s)`);
+  }
+
+  // On sale in competitive.
+  const c = new Sim(buildArena('sklad', 7171, 'comp'));
+  const buyer = c.addPlayer('local', 'тест', 1);
+  buyer.money = 10000;
+  (c as unknown as { roundAge: number }).roundAge = 0;
+  check(c.buy(buyer, 'drone') && buyer.drones === 1 && !c.buy(buyer, 'drone'), 'competitive: one drone can be bought');
+}
+
 // Progress between matches.
 {
   check(levelOf(0).level === 1 && levelOf(399).level === 1 && levelOf(400).level === 2 && levelOf(1000).level === 3, 'levels: 400 xp for the first, 200 more each after');

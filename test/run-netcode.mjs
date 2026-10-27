@@ -238,6 +238,54 @@ const shieldSeen = await page
   .catch(() => false);
 check("an engineer's shield appears for host and client", shieldSeen);
 
+// FPV drone launched by the client: it flies on the host, the client sees it
+// in snapshots, the pilot stands still, and X again sets it off on the host.
+await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const c = gameA.sim.actors.get(gameB.localId);
+  c.drones = 1;
+  c.shield = 30;
+  window.__pilotAt = { x: c.x, z: c.z };
+  gameB.pending.drone = true;
+});
+const launched = await page
+  .waitForFunction(() => {
+    const { gameA, gameB } = window.__net;
+    const d = gameA.sim.drones.find((x) => x.ownerId === gameB.localId);
+    return !!d && gameB.sim.drones.some((x) => x.id === d.id) && (gameB.latestActors.get(gameB.localId)?.piloting ?? -1) === d.id;
+  }, null, { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+check('a client launches a drone and sees it in snapshots', launched);
+await page.keyboard.down('KeyD');
+await page.waitForTimeout(700);
+await page.keyboard.up('KeyD');
+const flight = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const c = gameA.sim.actors.get(gameB.localId);
+  const d = gameA.sim.drones.find((x) => x.ownerId === gameB.localId);
+  const mirror = gameB.sim.actors.get(gameB.localId);
+  return {
+    pilotMoved: Math.hypot(c.x - window.__pilotAt.x, c.z - window.__pilotAt.z),
+    mirrorMoved: Math.hypot(mirror.x - window.__pilotAt.x, mirror.z - window.__pilotAt.z),
+    droneMoved: d ? Math.hypot(d.x - window.__pilotAt.x, d.z - window.__pilotAt.z) : -1,
+  };
+});
+check('the pilot stands still while the drone flies', flight.pilotMoved < 0.2 && flight.mirrorMoved < 0.3 && flight.droneMoved > 1.5, JSON.stringify(flight));
+await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  gameA.sim.actors.get(gameB.localId).shield = 30;
+  gameB.pending.drone = true;
+});
+const blown = await page
+  .waitForFunction(() => {
+    const { gameA, gameB } = window.__net;
+    return !gameA.sim.drones.some((x) => x.ownerId === gameB.localId) && gameA.sim.actors.get(gameB.localId).piloting === -1;
+  }, null, { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+check("the client's second X sets the drone off on the host", blown);
+
 // Lobby: a hosted room starts as a warm-up; the client says ready, the host
 // starts the match on a fresh map with everyone in it.
 const lobbyBefore = await page.evaluate(() => {
