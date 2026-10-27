@@ -16,7 +16,6 @@ mkdir -p /var/www/letsencrypt /etc/northecho
 
 if [[ ! -f /etc/northecho/env ]]; then
   : "${YANDEX_CLIENT_ID:?}" "${YANDEX_CLIENT_SECRET:?}"
-  umask 027
   cat > /etc/northecho/env <<ENV
 PORT=8090
 HOST=127.0.0.1
@@ -29,6 +28,7 @@ YANDEX_REDIRECT=https://$DOMAIN/callback
 RTC_PORT_BEGIN=40000
 RTC_PORT_END=40199
 ENV
+  chmod 640 /etc/northecho/env
   chgrp northecho /etc/northecho/env
 fi
 

@@ -3,6 +3,8 @@
 # GitHub moved, pull it, build the site and the server, swap the site in
 # atomically, and restart the game server only when its code changed.
 set -euo pipefail
+# nginx reads the build: files must be world-readable whatever umask we came with.
+umask 022
 
 APP=/var/www/northecho
 USER_=northecho
