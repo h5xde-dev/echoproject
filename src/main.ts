@@ -7,6 +7,7 @@ import { assets } from './render/assets';
 import { ARENAS, arenaGrid } from './game/arenas';
 import { modeInfo } from './game/modes';
 import type { GameMode } from './game/types';
+import { fetchAccount, logout, rename, type Account } from './ui/account';
 
 const viewport = must<HTMLElement>('#viewport');
 const hudRoot = must<HTMLElement>('#hud');
@@ -18,6 +19,9 @@ const codeInput = must<HTMLInputElement>('#room-code');
 const btnSolo = must<HTMLButtonElement>('#btn-solo');
 const btnHost = must<HTMLButtonElement>('#btn-host');
 const btnJoin = must<HTMLButtonElement>('#btn-join');
+const btnRanked = must<HTMLButtonElement>('#btn-ranked');
+const rankedQueue = must<HTMLElement>('#ranked-queue');
+const accountBox = must<HTMLElement>('.account');
 const roomPanel = must<HTMLElement>('.panel-room');
 
 const loadingFill = must<HTMLElement>('#loading-fill');
@@ -32,10 +36,12 @@ void assets
   })
   .then(() => {
     loadingBox.classList.add('done');
-    for (const b of [btnSolo, btnHost, btnJoin]) b.disabled = false;
+    for (const b of [btnSolo, btnHost, btnJoin, btnRanked]) b.disabled = false;
+    assetsReady = true;
     game.audio.setSamples(assets.sounds);
   });
 
+let assetsReady = false;
 const hud = new Hud(hudRoot);
 
 // Mode, arena and head-count pickers (the host decides; joiners get the host's).
@@ -151,6 +157,8 @@ function enterGame(): void {
 function backToMenu(): void {
   game.returnToMenu();
   refreshRank();
+  hideQueue();
+  void refreshAccount();
   menu.classList.remove('hidden');
   hudRoot.classList.add('hidden');
   roomResult.classList.add('hidden');
@@ -318,6 +326,96 @@ btnJoin.addEventListener('click', async () => {
     btnJoin.disabled = false;
     btnJoin.querySelector('.btn-title')!.textContent = 'ВОЙТИ';
   }
+});
+
+// ---------------------------------------------------------------- account & ranked
+
+let account: Account | null = null;
+
+async function refreshAccount(): Promise<void> {
+  const { user, available } = await fetchAccount();
+  account = user;
+  // No game server (a static preview): no login, no ranked play.
+  accountBox.classList.toggle('hidden', !available);
+  btnRanked.classList.toggle('hidden', !available);
+  accountBox.querySelector('.btn-yandex')!.classList.toggle('hidden', !!user);
+  const box = accountBox.querySelector<HTMLElement>('.account-user')!;
+  box.classList.toggle('hidden', !user);
+  if (user) {
+    box.querySelector('.account-name')!.textContent = user.name;
+    box.querySelector('.account-rating')!.textContent = `РЕЙТИНГ ${user.rating}${user.rank ? ` · #${user.rank}` : ''} · БОЁВ ${user.games}`;
+    const img = box.querySelector<HTMLImageElement>('.account-avatar')!;
+    img.src = user.avatar || '/logo.svg';
+    nameInput.value = user.name;
+  }
+  btnRanked.querySelector('.btn-desc')!.textContent = user ? 'Онлайн-арена, только люди, рейтинг Эло' : 'Войдите через Яндекс, чтобы играть на рейтинг';
+}
+
+accountBox.querySelector('.account-logout')!.addEventListener('click', async () => {
+  await logout();
+  await refreshAccount();
+});
+
+// Signed in, the call sign is the account's: changing it renames the account.
+nameInput.addEventListener('change', async () => {
+  if (!account) return;
+  const name = await rename(playerName());
+  if (name) {
+    account.name = name;
+    nameInput.value = name;
+  }
+});
+
+if (new URLSearchParams(location.search).get('login') === 'failed') showError('Не удалось войти через Яндекс. Попробуйте ещё раз.');
+void refreshAccount();
+
+function showQueue(text: string, hint?: string): void {
+  rankedQueue.classList.remove('hidden');
+  rankedQueue.querySelector('.ranked-count')!.textContent = text;
+  if (hint) rankedQueue.querySelector('.ranked-hint')!.textContent = hint;
+}
+
+function hideQueue(): void {
+  rankedQueue.classList.add('hidden');
+  btnRanked.disabled = !assetsReady;
+}
+
+game.onQueue = (msg) => {
+  if (msg.state === 'queue') {
+    showQueue(`${msg.players ?? 1} / ${msg.need ?? 2}`, msg.startIn !== undefined && msg.startIn >= 0 ? `Бой начнётся через ${msg.startIn} с — ждём ещё соперников.` : 'Ждём соперников. Deathmatch на сервере: без ботов, итог меняет рейтинг.');
+  } else if (msg.state === 'found') {
+    showQueue('БОЙ НАЙДЕН', `${msg.players ?? 2} игрока · загружаем арену…`);
+  } else {
+    showError(msg.text ?? 'Очередь прервана');
+    game.returnToMenu();
+    hideQueue();
+  }
+};
+game.onMatchStart = () => {
+  if (!game.ranked) return;
+  hideQueue();
+  enterGame();
+};
+
+btnRanked.addEventListener('click', async () => {
+  if (!account) {
+    location.href = '/auth/yandex?next=/play';
+    return;
+  }
+  game.audio.init();
+  btnRanked.disabled = true;
+  showQueue('…', 'Подключаемся к серверу…');
+  try {
+    await game.startRanked(account.name);
+  } catch (err) {
+    hideQueue();
+    showError(err instanceof Error ? err.message : 'Сервер недоступен');
+  }
+});
+
+rankedQueue.querySelector('.ranked-cancel')!.addEventListener('click', () => {
+  game.returnToMenu();
+  hideQueue();
 });
 
 codeInput.addEventListener('keydown', (e) => {

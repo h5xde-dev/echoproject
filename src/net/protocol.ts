@@ -243,7 +243,37 @@ export interface PingMsg {
   time: number;
 }
 
+/** Ranked matchmaking on the server: waiting in the queue, or a match is starting. */
+export interface MatchmakingMsg {
+  t: 'mm';
+  state: 'queue' | 'found' | 'error';
+  /** Players waiting, and how many a match needs. */
+  players?: number;
+  need?: number;
+  /** Seconds until a match starts with whoever is there (-1: not yet). */
+  startIn?: number;
+  text?: string;
+}
+
+/** Ranked match result: rating before and after for everyone who played. */
+export interface RankedMsg {
+  t: 'ranked';
+  rows: { id: number; name: string; place: number; kills: number; deaths: number; before: number; after: number }[];
+}
+
+/** WebRTC signalling for the server's unreliable channel (both directions). */
+export interface RtcMsg {
+  t: 'rtc';
+  sdp?: string;
+  type?: string;
+  candidate?: string;
+  mid?: string;
+}
+
 export type HostMessage =
+  | MatchmakingMsg
+  | RankedMsg
+  | RtcMsg
   | SnapshotMsg
   | WelcomeMsg
   | StartMsg
@@ -254,7 +284,7 @@ export type HostMessage =
   | LobbyMsg
   | PingMsg;
 
-export type ClientMessage = InputMsg | HelloMsg | ReadyMsg | PingMsg;
+export type ClientMessage = InputMsg | HelloMsg | ReadyMsg | PingMsg | RtcMsg;
 
 /** Deterministic seed so both peers can reproduce the exact same bullet spread. */
 export function shotSeed(actorId: number, shotSeq: number, mapSeed: number): number {

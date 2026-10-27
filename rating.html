@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Рейтинг игроков — North Echo</title>
+    <meta name="description" content="Таблица рейтинга North Echo: лучшие игроки рейтинговых онлайн-боёв, рейтинг Эло, победы и соотношение убийств к смертям." />
+    <link rel="canonical" href="https://evntary.ru/rating" />
+    <meta name="theme-color" content="#05070c" />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <meta property="og:title" content="Рейтинг игроков — North Echo" />
+    <meta property="og:image" content="https://evntary.ru/og.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body class="landing">
+    <header class="top">
+      <a class="brand" href="/">
+        <img src="/logo.svg" alt="" width="34" height="34" />
+        <span>NORTH ECHO</span>
+      </a>
+      <nav class="nav">
+        <a href="/">Главная</a>
+        <a href="/rating" aria-current="page">Рейтинг</a>
+      </nav>
+      <a class="cta small" href="/play">Играть</a>
+    </header>
+
+    <main class="block rating-page">
+      <h1>Рейтинг игроков</h1>
+      <p class="lead small">Рейтинговые бои — deathmatch на сервере, только живые игроки. Место в бою меняет рейтинг по системе Эло; старт — 1000.</p>
+      <div class="table-wrap">
+        <table class="rating-table">
+          <thead>
+            <tr><th>#</th><th>Игрок</th><th>Рейтинг</th><th>Боёв</th><th>Побед</th><th>У/С</th></tr>
+          </thead>
+          <!-- The server fills this in for search engines; rating.ts refreshes it. -->
+          <tbody id="rating-body"><!--LEADERBOARD--></tbody>
+        </table>
+      </div>
+      <a class="cta" href="/play"><span>СЫГРАТЬ НА РЕЙТИНГ</span></a>
+    </main>
+
+    <footer class="foot">
+      <span>© North Echo</span>
+      <a href="/">Главная</a>
+      <a href="/play">Играть</a>
+    </footer>
+
+    <script type="module" src="/src/rating.ts"></script>
+  </body>
+</html>

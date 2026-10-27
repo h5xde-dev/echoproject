@@ -1,5 +1,5 @@
 {
-  "name": "echo-protocol",
+  "name": "north-echo",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -10,17 +10,28 @@
     "typecheck": "tsc --noEmit",
     "assets": "node tools/build-assets.mjs",
     "test:netcode": "node test/run-netcode.mjs",
-    "test:arenas": "node test/run-dm.mjs"
+    "test:arenas": "node test/run-dm.mjs",
+    "build:server": "tsc -p server --noEmit && esbuild server/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=server-dist/main.mjs --packages=external",
+    "server": "node server-dist/main.mjs",
+    "dev:server": "npm run build:server && DEV_LOGIN=1 SECURE_COOKIES=0 node server-dist/main.mjs",
+    "test:server": "node test/run-server.mjs"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "node-datachannel": "^0.33.5",
     "peerjs": "^1.5.5",
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.5.1",
     "@gltf-transform/extensions": "^4.5.1",
     "@gltf-transform/functions": "^4.5.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.5",
     "@types/three": "^0.186.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
     "meshoptimizer": "^1.3.0",
     "playwright": "^1.56.0",
     "sharp": "^0.35.5",

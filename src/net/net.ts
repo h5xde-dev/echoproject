@@ -7,12 +7,15 @@ import type {
   HostMessage,
   InputMsg,
   LobbyMsg,
+  MatchmakingMsg,
   OverMsg,
   PlayerJoinedMsg,
   PlayerLeftMsg,
+  RankedMsg,
   SnapshotMsg,
   WelcomeMsg,
 } from './protocol';
+import { ServerLink, serverUrl } from './serverLink';
 
 export interface HostClient {
   playerId: number;
@@ -44,6 +47,9 @@ export interface NetClientHandlers {
   /** The channel to the host closed without us leaving. */
   onDisconnected(): void;
   onLobby(msg: LobbyMsg): void;
+  /** Dedicated server only: queue progress and the ranked result. */
+  onMatchmaking?(msg: MatchmakingMsg): void;
+  onRanked?(msg: RankedMsg): void;
 }
 
 export interface IceServerEntry {
@@ -138,6 +144,8 @@ export class Net {
   private pingTimer: number | null = null;
   private pingSeq = 0;
   private pingSentAt = new Map<number, number>();
+  /** Snapshots may arrive out of order over the unreliable channel: older ones are dropped. */
+  private lastSnapTick = -1;
 
   // ------------------------------------------------------------- hosting
 
@@ -324,15 +332,61 @@ export class Net {
     });
   }
 
+  /**
+   * Join the dedicated game server (ranked matches). Same handlers as a
+   * peer-to-peer room; the server plays the host.
+   */
+  joinServer(handlers: NetClientHandlers): Promise<void> {
+    this.mode = 'client';
+    this.clientHandlers = handlers;
+    this.code = 'SERVER';
+    this.lastSnapTick = -1;
+
+    return new Promise((resolve, reject) => {
+      const conn: DataChannelLike = new ServerLink(serverUrl());
+      this.conn = conn;
+      conn.on('open', () => {
+        this.debug = 'server link open';
+        this.startPinging();
+        resolve();
+      });
+      conn.on('data', (raw) => this.onClientData(raw));
+      conn.on('close', () => {
+        this.debug = 'server link closed';
+        if (this.conn === conn) handlers.onDisconnected();
+      });
+      conn.on('error', (err) => {
+        if (this.conn !== conn) return;
+        handlers.onError(err.message ?? 'Игровой сервер недоступен.');
+        reject(new Error(err.message ?? 'server'));
+      });
+    });
+  }
+
+  /** True when the server link runs over the UDP-like data channel. */
+  get udp(): boolean {
+    return this.conn instanceof ServerLink && this.conn.udp;
+  }
+
   private onClientData(raw: unknown): void {
     const msg = raw as HostMessage;
     if (!msg || typeof msg !== 'object') return;
     switch (msg.t) {
       case 'welcome':
+        this.lastSnapTick = msg.snapshot.tick - 1;
         this.clientHandlers?.onWelcome(msg);
         break;
       case 'snap':
+        // A welcome restarts the tick count; otherwise only newer snapshots count.
+        if (msg.tick <= this.lastSnapTick) break;
+        this.lastSnapTick = msg.tick;
         this.clientHandlers?.onSnapshot(msg);
+        break;
+      case 'mm':
+        this.clientHandlers?.onMatchmaking?.(msg);
+        break;
+      case 'ranked':
+        this.clientHandlers?.onRanked?.(msg);
         break;
       case 'evt':
         this.clientHandlers?.onEvent(msg);

@@ -24,7 +24,7 @@ async function main(): Promise<void> {
     installLoopbackTransport();
 
     // Reuse the production HUD markup so the test exercises the real widget.
-    const html = await fetch('/index.html').then((r) => r.text());
+    const html = await fetch('/play.html').then((r) => r.text());
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const template = doc.getElementById('hud')?.innerHTML ?? '';
 

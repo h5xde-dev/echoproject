@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>North Echo — играть онлайн</title>
+    <meta name="description" content="North Echo: тактический top-down шутер прямо в браузере. Кооператив, арены, рейтинговые бои без ботов." />
+    <link rel="canonical" href="https://evntary.ru/play" />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#05070c" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Rajdhani:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport"></div>
+
+      <div id="hud" class="hud hidden">
+        <!-- First, so the panels stay readable while the view is flashed white. -->
+        <div class="flash-overlay"></div>
+        <div class="vignette"></div>
+        <div class="plates"></div>
+        <div class="dmg-dirs"></div>
+        <div class="crosshair"><i></i><i></i><i></i><i></i><b></b><u></u><s></s><s></s><s></s><s></s></div>
+
+        <div class="panel panel-topleft">
+          <div class="panel-title">ОПЕРАТОРЫ</div>
+          <div class="squad"></div>
+          <div class="latency">— мс</div>
+        </div>
+
+        <div class="panel panel-topcenter">
+          <div class="objective-room">КОМНАТА 1 / 1</div>
+          <div class="objective-text">ЗАЧИСТИТЕ КОМНАТУ</div>
+        </div>
+
+        <div class="panel panel-topright">
+          <canvas class="minimap" width="184" height="184"></canvas>
+          <div class="flashlight-tag">ФОНАРЬ ВКЛ</div>
+          <div class="stats-tag hidden"></div>
+          <div class="gait-tag">БЕГ · СЛЫШНО</div>
+        </div>
+
+        <div class="panel panel-room hidden">
+          <div class="panel-title">КОД КОМНАТЫ</div>
+          <div class="room-code-inline">-----</div>
+          <div class="room-hint">Нажмите, чтобы скопировать</div>
+        </div>
+
+        <div class="panel panel-bottomleft">
+          <div class="hp-track"><i class="hp-fill"></i></div>
+          <div class="armor-track"><i class="armor-fill"></i></div>
+          <div class="hp-readout">
+            <span class="hp-label">HP</span><span class="hp-text">100</span>
+            <span class="armor-label">БРОНЯ</span><span class="armor-text">0</span>
+          </div>
+          <div class="buffs"></div>
+        </div>
+
+        <div class="panel panel-bottomright">
+          <div class="weapon-name">M9</div>
+          <div class="ammo"><span class="ammo-current">12</span><span class="ammo-mag">/12</span></div>
+          <div class="ammo-pips"></div>
+          <div class="weapon-slots"></div>
+          <div class="weapon-extra"></div>
+          <div class="reload-bar"><i></i></div>
+        </div>
+
+        <div class="feed"></div>
+        <div class="killfeed"></div>
+        <div class="respawn-banner"></div>
+        <div class="banner"></div>
+        <div class="ladder"></div>
+        <div class="shop"></div>
+        <div class="scoreboard">
+          <div class="scoreboard-title">ТАБЛИЦА</div>
+          <table class="scoreboard-table"></table>
+        </div>
+
+        <div class="panel panel-hints">
+          <span><b>WASD</b> движение</span>
+          <span><b>Shift</b> шаг</span>
+          <span><b>C</b> присед</span>
+          <span><b>ЛКМ</b> огонь</span>
+          <span><b>R</b> перезарядка</span>
+          <span><b>F</b> фонарь</span>
+          <span><b>1-5</b> оружие</span>
+          <span><b>Esc</b> пауза</span>
+          <span><b>G</b> граната</span>
+          <span><b>Z</b> метка</span>
+          <span class="hint-comp"><b>B</b> магазин</span>
+          <span class="hint-dm"><b>Tab</b> счёт</span>
+        </div>
+
+        <div class="status-line"></div>
+
+        <div class="spectate"></div>
+        <div class="panel panel-lobby hidden">
+          <div class="panel-title">ЛОББИ · РАЗМИНКА</div>
+          <div class="lobby-list"></div>
+          <button class="btn lobby-action"><span class="btn-title">ГОТОВ</span></button>
+          <div class="lobby-hint"></div>
+        </div>
+        <div class="gameover">
+          <div class="gameover-title">ОБЪЕКТ ЗАЧИЩЕН</div>
+          <div class="gameover-text"></div>
+          <div class="gameover-progress"></div>
+          <table class="gameover-scores"></table>
+          <button class="btn primary gameover-again"><span class="btn-title">ЕЩЁ РАЗ</span></button>
+        </div>
+
+        <div class="pause">
+          <div class="pause-title">ПАУЗА</div>
+          <div class="pause-actions">
+            <button class="btn primary pause-resume">
+              <span class="btn-title">ПРОДОЛЖИТЬ</span>
+              <span class="btn-desc">Esc</span>
+            </button>
+            <button class="btn pause-menu">
+              <span class="btn-title">В ГЛАВНОЕ МЕНЮ</span>
+              <span class="btn-desc">выйти из матча</span>
+            </button>
+          </div>
+          <div class="pause-settings">
+            <label class="setting"><span>Громкость</span><input class="set-volume" type="range" min="0" max="100" /></label>
+            <label class="setting">
+              <span>Графика</span>
+              <select class="set-quality">
+                <option value="high">Высокая</option>
+                <option value="low">Низкая — без теней</option>
+              </select>
+            </label>
+            <label class="setting check"><input class="set-shake" type="checkbox" /><span>Тряска камеры</span></label>
+            <label class="setting check"><input class="set-stats" type="checkbox" /><span>FPS и пинг</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div id="menu" class="menu">
+        <div class="menu-bg"></div>
+        <div class="menu-card wide">
+          <section class="menu-left">
+            <a class="logo" href="/" title="North Echo — на главную">
+              <img class="logo-mark" src="/logo.svg" alt="" width="54" height="54" />
+              <span class="logo-text">
+                <span class="logo-main">NORTH ECHO</span>
+                <span class="logo-sub">ТАКТИЧЕСКИЙ ШУТЕР · СВЕТ И ТЕНИ</span>
+              </span>
+            </a>
+
+            <!-- Filled from /api/me in main.ts. -->
+            <div class="account hidden">
+              <a class="btn-yandex" href="/auth/yandex?next=/play">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#fc3f1d"/><path fill="#fff" d="M13.6 6.2h-1.1c-2 0-3 1-3 2.5 0 1.7.8 2.5 2.3 3.5l1.2.8-3.5 5.2H7.2l3.2-4.7C8.6 12.3 7.5 11 7.5 8.8c0-2.8 1.9-4.6 5-4.6h3.1v14.3h-2V6.2z"/></svg>
+                Войти через Яндекс
+              </a>
+              <div class="account-user hidden">
+                <img class="account-avatar" alt="" width="34" height="34" />
+                <span class="account-info"><b class="account-name"></b><small class="account-rating"></small></span>
+                <a class="account-link" href="/rating">Рейтинг</a>
+                <button class="account-link account-logout" type="button">Выйти</button>
+              </div>
+            </div>
+            <p class="tagline">
+              Пули летят по-настоящему. В темноте тебя не видно — но и ты не видишь никого.
+              Включённый фонарь даёт обзор, но выдаёт тебя.
+            </p>
+
+            <label class="field">
+              <span>Позывной</span>
+              <input id="player-name" type="text" maxlength="14" value="оператор" autocomplete="off" />
+            </label>
+            <div class="rank">
+              <div class="rank-line"><b class="rank-level">УРОВЕНЬ 1</b><span class="rank-xp"></span></div>
+              <div class="rank-track"><i class="rank-fill"></i></div>
+              <div class="ring-colors" role="radiogroup" aria-label="Цвет кольца"></div>
+            </div>
+
+            <span class="field-label">Режим</span>
+            <div class="mode-grid" role="radiogroup" aria-label="Режим">
+              <button class="mode-card active" data-mode="coop" role="radio" aria-checked="true">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 5-5s5 2 5 5M11 20c0-3 2.5-5 5-5s5 2 5 5"/></svg>
+                <b>Кооператив</b><small>Зачистка объекта</small>
+              </button>
+              <button class="mode-card" data-mode="dm" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>
+                <b>Deathmatch</b><small>Каждый сам за себя</small>
+              </button>
+              <button class="mode-card" data-mode="tdm" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="9" r="2.5"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c0-2.5 1.8-4 4-4s4 1.5 4 4M13 19c0-2.5 1.8-4 4-4s4 1.5 4 4M12 4v16"/></svg>
+                <b>Командный бой</b><small>Синие против красных</small>
+              </button>
+              <button class="mode-card" data-mode="waves" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0M2 14c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0M2 20c2.5-2 4.5-2 7 0s4.5 2 7 0 4.5-2 6 0"/></svg>
+                <b>Волны</b><small>Кооп против волн</small>
+              </button>
+              <button class="mode-card" data-mode="ctf" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2.5 4L16 12H5"/></svg>
+                <b>Захват флага</b><small>Две базы, два флага</small>
+              </button>
+              <button class="mode-card" data-mode="bomb" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="14" r="6"/><path d="M15 10l3-3M18 4v2M20 6h-2"/></svg>
+                <b>Закладка бомбы</b><small>Раунды: атака и защита</small>
+              </button>
+              <button class="mode-card" data-mode="gun" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h4v-4h4v-4h4V6h4"/><path d="M17 3l3 3-3 3"/></svg>
+                <b>Гонка вооружений</b><small>Убийства дают стволы</small>
+              </button>
+              <button class="mode-card" data-mode="comp" role="radio" aria-checked="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+                <b>Соревнование</b><small>Раунды и закупка</small>
+              </button>
+            </div>
+          </section>
+
+          <section class="menu-right">
+            <div class="mode-detail">
+              <div class="mode-detail-title">Кооператив</div>
+              <p class="mode-detail-desc"></p>
+            </div>
+
+            <div class="arena-select hidden">
+              <span class="field-label">Арена</span>
+              <div class="arena-row">
+                <canvas class="arena-preview" width="246" height="130"></canvas>
+                <!-- Filled from ARENAS in main.ts. -->
+                <div class="arena-list"></div>
+              </div>
+              <label class="fighters">
+                <span class="field-label">Бойцов на арене: <b class="fighters-value">6</b></span>
+                <input class="fighters-range" type="range" min="2" max="8" value="6" />
+              </label>
+            </div>
+
+            <div class="difficulty">
+              <span class="field-label">Класс</span>
+              <div class="difficulty-row" role="radiogroup" aria-label="Класс бойца">
+                <button class="cls-btn diff-btn" data-cls="assault" title="+1 осколочная, быстрее перезарядка">Штурмовик</button>
+                <button class="cls-btn diff-btn" data-cls="scout" title="Тише шаги, быстрее присед, ПНВ на старте">Разведчик</button>
+                <button class="cls-btn diff-btn" data-cls="medic" title="Поднимает вдвое быстрее, лечит союзников рядом">Медик</button>
+                <button class="cls-btn diff-btn" data-cls="engineer" title="Ставит переносной щит (V), запускает FPV-дрон (X)">Инженер</button>
+              </div>
+              <span class="field-label">Боты</span>
+              <div class="difficulty-row" role="radiogroup" aria-label="Сложность ботов">
+                <button class="diff-btn" data-difficulty="easy">Лёгкие</button>
+                <button class="diff-btn" data-difficulty="normal">Обычные</button>
+                <button class="diff-btn" data-difficulty="hard">Тяжёлые</button>
+              </div>
+            </div>
+
+            <div class="loading" id="loading">
+              <div class="loading-track"><i id="loading-fill"></i></div>
+              <span id="loading-text">Загрузка снаряжения… 0%</span>
+            </div>
+
+            <div class="menu-actions">
+              <button id="btn-solo" class="btn primary" disabled>
+                <span class="btn-title">ИГРАТЬ</span>
+                <span class="btn-desc">Пройти объект в одиночку</span>
+              </button>
+              <button id="btn-host" class="btn" disabled>
+                <span class="btn-title">СОЗДАТЬ КОМНАТУ</span>
+                <span class="btn-desc">Позвать друзей по коду</span>
+              </button>
+              <button id="btn-ranked" class="btn ranked" disabled>
+                <span class="btn-title">РЕЙТИНГОВЫЙ БОЙ</span>
+                <span class="btn-desc">Онлайн-арена, только люди, рейтинг Эло</span>
+              </button>
+            </div>
+
+            <div id="ranked-queue" class="room-result ranked-queue hidden">
+              <div class="room-code-label">ПОИСК СОПЕРНИКОВ</div>
+              <div class="room-code-value ranked-count">1 / 2</div>
+              <div class="room-hint ranked-hint">Deathmatch на сервере: без ботов, итог меняет рейтинг.</div>
+              <button class="btn ranked-cancel" type="button"><span class="btn-title">ОТМЕНА</span></button>
+            </div>
+
+            <div class="join-block">
+              <label class="field">
+                <span>Код комнаты друга</span>
+                <input id="room-code" type="text" maxlength="8" placeholder="ABCDE" autocomplete="off" />
+              </label>
+              <button id="btn-join" class="btn" disabled>
+                <span class="btn-title">ВОЙТИ</span>
+              </button>
+            </div>
+
+            <div id="room-result" class="room-result hidden">
+              <div class="room-code-label">КОД КОМНАТЫ</div>
+              <div id="room-code-value" class="room-code-value">-----</div>
+              <div class="room-hint">Отправьте код — друг введёт его в поле «Код комнаты».</div>
+            </div>
+
+            <div class="menu-keys">
+              <span><kbd>WASD</kbd> движение</span><span><kbd>ЛКМ</kbd> огонь</span><span><kbd>F</kbd> фонарь</span>
+              <span><kbd>G</kbd> граната</span><span><kbd>R</kbd> перезарядка</span><span><kbd>B</kbd> магазин</span><span><kbd>Tab</kbd> счёт</span>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

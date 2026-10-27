@@ -457,9 +457,9 @@ export class Hud {
     this.statsEl.classList.toggle('hidden', !on);
   }
 
-  setLatency(ms: number): void {
+  setLatency(ms: number, via = ''): void {
     this.latency = ms;
-    this.latencyEl.textContent = `${ms} мс`;
+    this.latencyEl.textContent = via ? `${ms} мс · ${via}` : `${ms} мс`;
     this.latencyEl.classList.toggle('bad', ms > 140);
   }
 
@@ -747,7 +747,20 @@ export class Hud {
     this.overEl.classList.add('visible');
   }
 
+  /** Ranked: the rating change under the result. */
+  showRating(text: string): void {
+    const box = must(this.overEl, '.gameover-progress');
+    let line = box.parentElement!.querySelector<HTMLElement>('.gameover-rating');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'gameover-rating';
+      box.after(line);
+    }
+    line.textContent = text;
+  }
+
   hideGameOver(): void {
+    this.overEl.querySelector('.gameover-rating')?.remove();
     this.overEl.classList.remove('visible');
   }
 

@@ -1,0 +1,25 @@
+[Unit]
+Description=North Echo game server (auth, rating, ranked matches)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=northecho
+Group=northecho
+WorkingDirectory=/var/www/northecho
+EnvironmentFile=/etc/northecho/env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server-dist/main.mjs
+Restart=always
+RestartSec=3
+StateDirectory=northecho
+SyslogIdentifier=northecho
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/www/northecho
+
+[Install]
+WantedBy=multi-user.target

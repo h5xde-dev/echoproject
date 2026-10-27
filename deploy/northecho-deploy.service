@@ -1,0 +1,10 @@
+[Unit]
+Description=North Echo autodeploy from GitHub main
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/var/www/northecho/deploy/deploy.sh
+SyslogIdentifier=northecho-deploy
+TimeoutStartSec=900
+Nice=10

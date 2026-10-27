@@ -1,14 +1,16 @@
 import { GameAudio } from '../core/audio';
 import { Input } from '../core/input';
 import { clamp } from '../core/math';
-import { Net } from '../net/net';
-import type { ActorState, EventMsg, HostMessage, LobbyMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '../net/protocol';
+import { Net, type NetClientHandlers } from '../net/net';
+import { buildSnapshot, roundStateOf, scoreRows, waveStateOf } from '../net/snapshot';
+import type { ActorState, EventMsg, HostMessage, LobbyMsg, MatchmakingMsg, RankedMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '../net/protocol';
 import { Renderer } from '../render/renderer';
 import { buildArena } from './arenas';
 import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
 import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
-import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
+import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from './modes';
+import { NO_ONCE, mergeOnce, type OnceInput } from './once';
 import { Sim, type PlayerInput } from './sim';
 import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, MapData, PowerupKind, ShopItem } from './types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from './weapons';
@@ -256,13 +258,43 @@ export class Game {
   async startClient(name: string, code: string): Promise<void> {
     this.mode = 'client';
     this.isAuthority = false;
+    this.ranked = false;
     this.localName = name;
     this.joinCode = code;
     await this.connectToHost();
   }
 
+  /**
+   * Ranked: queue on the dedicated server, which hosts the match itself (no
+   * bots) and rates everyone at the end. `onQueue` hears the queue progress;
+   * `onMatchStart` fires with the first welcome.
+   */
+  async startRanked(name: string): Promise<void> {
+    this.mode = 'client';
+    this.isAuthority = false;
+    this.ranked = true;
+    this.localName = name;
+    this.joinCode = '';
+    await this.connectToHost();
+  }
+
+  /** Playing a ranked match on the server. */
+  ranked = false;
+  onQueue: ((msg: MatchmakingMsg) => void) | null = null;
+  onMatchStart: (() => void) | null = null;
+
+  private onRanked(msg: RankedMsg): void {
+    const me = msg.rows.find((r) => r.id === this.localId);
+    if (!me) return;
+    const d = Math.round(me.after - me.before);
+    this.hud.showRating(`РЕЙТИНГ ${Math.round(me.before)} → ${Math.round(me.after)} (${d >= 0 ? '+' : ''}${d}) · МЕСТО ${me.place} ИЗ ${msg.rows.length}`);
+  }
+
   private async connectToHost(): Promise<void> {
-    await this.net.join(this.joinCode, {
+    const join = this.ranked ? (h: NetClientHandlers) => this.net.joinServer(h) : (h: NetClientHandlers) => this.net.join(this.joinCode, h);
+    await join({
+      onMatchmaking: (msg) => this.onQueue?.(msg),
+      onRanked: (msg) => this.onRanked(msg),
       onWelcome: (msg) => this.onWelcome(msg),
       onSnapshot: (msg) => this.onSnapshot(msg),
       onEvent: (msg) => this.onEvent(msg),
@@ -283,7 +315,7 @@ export class Game {
       onError: (text) => this.hud.setError(text),
       onLatency: (ms) => {
         this.rttMs = ms;
-        this.hud.setLatency(ms);
+        this.hud.setLatency(ms, this.ranked ? (this.net.udp ? 'UDP' : 'TCP') : '');
       },
       onDisconnected: () => void this.recoverConnection(),
       onLobby: (msg) => this.showLobby(msg),
@@ -495,118 +527,24 @@ export class Game {
   }
 
   private buildSnapshot(): SnapshotMsg {
-    const actors: ActorState[] = [];
-    for (const a of this.sim.actors.values()) {
-      actors.push({
-        id: a.id,
-        kind: a.kind,
-        peerId: a.peerId,
-        name: a.name,
-        x: a.x,
-        z: a.z,
-        ang: a.ang,
-        hp: a.hp,
-        maxHp: a.maxHp,
-        armor: a.armor,
-        alive: a.alive,
-        weapon: a.weapon,
-        weapons: a.weapons,
-        buffs: a.buffs,
-        shield: a.shield,
-        grenades: a.grenades,
-        money: a.money,
-        tier: a.tier,
-        tierKills: a.tierKills,
-        ammo: a.ammo,
-        reloading: a.reloading,
-        flashOn: a.flashOn,
-        slot: a.slot,
-        smokes: a.smokes,
-        flashes: a.flashes,
-        molotovs: a.molotovs,
-        burning: a.burnT > 0,
-        blind: a.blind,
-        concealed: a.concealed,
-        team: a.team,
-        carrying: a.carrying,
-        useT: a.useT,
-        crouched: a.gait === 'crouch',
-        downed: a.downed,
-        downT: a.downT,
-        reviveT: a.reviveT,
-        role: a.role,
-        aiming: a.role === 'sniper' && a.ai?.mode === 'attack',
-        cls: a.cls,
-        shieldUsed: a.shieldUsed,
-        color: a.color,
-        drones: a.drones,
-        piloting: a.piloting,
-      });
-    }
-    const bullets = this.sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
-    const props = this.sim.props.map((p) => ({
-      id: p.id,
-      x: p.x,
-      z: p.z,
-      alive: p.alive,
-      hp: Math.round(p.hp),
-      ...(p.deployed ? { kind: p.kind, hw: p.hw, hh: p.hh } : {}),
-    }));
-    const doors = this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT }));
     const ack: Record<string, number> = {};
     for (const [key, state] of this.clientInputs) ack[key] = state.lastAck;
-
-    return {
-      t: 'snap',
-      tick: this.tick,
-      time: this.sim.time,
-      room: this.sim.roomIndex,
-      phase: this.sim.roomPhase,
-      actors,
-      bullets,
-      props,
-      doors,
-      pickups: this.sim.pickups.map((p) => ({ id: p.id, weapon: p.weapon, x: p.x, z: p.z })),
-      powerups: this.sim.powerups.map((p) => ({ id: p.id, kind: p.kind, x: p.x, z: p.z, active: p.active })),
-      grenades: this.sim.grenades,
-      lampsOut: this.sim.lampAlive.flatMap((alive, i) => (alive ? [] : [i])),
-      smokes: this.sim.smokes,
-      fires: this.sim.fires,
-      drones: this.sim.drones.length > 0 ? this.sim.drones : undefined,
-      mode: this.matchMode,
-      scores: this.scoreRows(),
-      round: this.localRoundState(),
-      timeLeft: this.sim.timeLeft,
-      teamScore: this.sim.teamScore,
-      wave: this.waveState() ?? undefined,
-      flags: this.sim.flags.length > 0 ? this.sim.flags : undefined,
-      bases: this.sim.bases.length > 0 ? this.sim.bases : undefined,
-      bomb: this.matchMode === 'bomb' ? this.sim.bomb : undefined,
-      attackTeam: this.matchMode === 'bomb' ? this.sim.attackTeam : undefined,
-      objectives: this.sim.objectives.length > 0 ? this.sim.objectives : undefined,
-      sites: this.sim.sites.length > 0 ? this.sim.sites : undefined,
-      ack,
-    };
+    return buildSnapshot(this.sim, this.tick, ack);
   }
 
   private scoreRows(): [number, number, number, number][] {
-    return [...this.sim.scores].map(([id, s]) => [id, s.kills, s.deaths, s.rounds]);
+    return scoreRows(this.sim);
   }
 
   /** Waves: progress (host: from the sim; client: from snapshots). */
   private waveState(): WaveState | null {
     if (this.matchMode !== 'waves') return null;
-    if (!this.isAuthority) return this.wave;
-    let left = 0;
-    for (const a of this.sim.actors.values()) if (a.kind === 'enemy' && a.alive) left++;
-    return { n: this.sim.wave, phase: this.sim.wavePhase, t: Math.max(0, this.sim.waveT), left, canBuy: this.sim.canBuy };
+    return this.isAuthority ? waveStateOf(this.sim) : this.wave;
   }
 
   /** Competitive round info (host: from the sim; client: from snapshots). */
   private localRoundState(): RoundState | null {
-    if (!this.isAuthority) return this.roundState;
-    if (!isRoundMode(this.matchMode)) return null;
-    return { n: this.sim.round, phase: this.sim.roundPhase, t: Math.max(0, this.sim.roundT), canBuy: this.sim.canBuy };
+    return this.isAuthority ? roundStateOf(this.sim) : this.roundState;
   }
 
   // ---------------------------------------------------------------- client
@@ -630,7 +568,8 @@ export class Game {
     this.setupWorld();
     this.startLoop();
     this.onSnapshot(msg.snapshot);
-    this.hud.message('Соединение установлено', 'good');
+    this.hud.message(this.ranked ? 'Рейтинговый бой: боты отключены' : 'Соединение установлено', 'good');
+    this.onMatchStart?.();
   }
 
   private onSnapshot(msg: SnapshotMsg): void {
@@ -1952,36 +1891,3 @@ function shortestAngle(a: number, b: number): number {
 }
 
 /** The parts of an input that happen once per press, not every tick. */
-type OnceInput = Pick<PlayerInput, 'reload' | 'interact' | 'flashlight' | 'slot' | 'grenade' | 'throwDist' | 'grenadeKind' | 'buy' | 'mark' | 'deploy' | 'drone'>;
-
-const NO_ONCE: OnceInput = {
-  reload: false,
-  interact: false,
-  flashlight: false,
-  slot: -1,
-  grenade: false,
-  throwDist: undefined,
-  grenadeKind: undefined,
-  buy: '',
-  mark: undefined,
-  deploy: false,
-  drone: false,
-};
-
-/** Folds a packet's one-shot actions into those not yet applied. */
-function mergeOnce(once: OnceInput, input: PlayerInput): void {
-  if (input.reload) once.reload = true;
-  if (input.interact) once.interact = true;
-  // Two presses before a tick cancel out, as they would have one tick apart.
-  if (input.flashlight) once.flashlight = !once.flashlight;
-  if (input.slot >= 0) once.slot = input.slot;
-  if (input.grenade) {
-    once.grenade = true;
-    once.throwDist = input.throwDist;
-    once.grenadeKind = input.grenadeKind;
-  }
-  if (input.buy) once.buy = input.buy;
-  if (input.mark) once.mark = input.mark;
-  if (input.deploy) once.deploy = true;
-  if (input.drone) once.drone = true;
-}
