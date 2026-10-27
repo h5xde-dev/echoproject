@@ -23,8 +23,20 @@ export const CONFIG = {
 
   /** Bushes hide whoever walks, crouches or stands in them. */
   drone: {
-    speed: 14,
-    accel: 45,
+    /**
+     * Flight model: the stick tilts the drone relative to its nose (W/S pitch,
+     * A/D roll), the mouse yaws it. Thrust against air drag gives momentum.
+     */
+    thrust: 24,
+    strafeThrust: 15,
+    /** Drag per second under stick; with the stick released it levels and brakes harder. */
+    drag: 1.45,
+    brakeDrag: 2.6,
+    maxSpeed: 17,
+    /** Radians per second the nose can turn. */
+    yawRate: 4.2,
+    /** Hitting a wall faster than this (m/s lost in the impact) breaks it. */
+    crashSpeed: 9,
     /** Seconds of flight. */
     battery: 12,
     hp: 30,

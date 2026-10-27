@@ -987,6 +987,7 @@ export class Sim {
       downT: 0,
       moveX: 0,
       moveZ: 0,
+      aim: actor.ang,
     };
     this.drones.push(drone);
     actor.piloting = drone.id;
@@ -1006,7 +1007,7 @@ export class Sim {
       this.detonateDrone(drone);
       return;
     }
-    drone.ang = input.aim;
+    drone.aim = input.aim;
     drone.moveX = input.moveX;
     drone.moveZ = input.moveZ;
   }
@@ -1055,13 +1056,24 @@ export class Sim {
         this.detonateDrone(drone);
         continue;
       }
-      // Quick, but not instant: it banks into turns.
-      const len = Math.hypot(drone.moveX, drone.moveZ);
-      const tvx = len > 0.01 ? (drone.moveX / Math.max(1, len)) * D.speed : 0;
-      const tvz = len > 0.01 ? (drone.moveZ / Math.max(1, len)) * D.speed : 0;
-      const dv = D.accel * dt;
-      drone.vx += clamp(tvx - drone.vx, -dv, dv);
-      drone.vz += clamp(tvz - drone.vz, -dv, dv);
+      // The nose follows the mouse, but a quad only yaws so fast.
+      drone.ang = turnTowards(drone.ang, drone.aim, D.yawRate * dt);
+      // Stick relative to the nose: W/S pitch forward / back, A/D roll sideways.
+      const fwd = -drone.moveZ;
+      const side = drone.moveX;
+      const cos = Math.cos(drone.ang);
+      const sin = Math.sin(drone.ang);
+      const ax = cos * fwd * D.thrust - sin * side * D.strafeThrust;
+      const az = sin * fwd * D.thrust + cos * side * D.strafeThrust;
+      const drag = Math.abs(fwd) + Math.abs(side) > 0.01 ? D.drag : D.brakeDrag;
+      drone.vx += (ax - drone.vx * drag) * dt;
+      drone.vz += (az - drone.vz * drag) * dt;
+      const sp = Math.hypot(drone.vx, drone.vz);
+      if (sp > D.maxSpeed) {
+        drone.vx *= D.maxSpeed / sp;
+        drone.vz *= D.maxSpeed / sp;
+      }
+      const before = Math.hypot(drone.vx, drone.vz);
       // Over crates and cover, but walls and shut doors stop it.
       const steps = Math.max(1, Math.ceil((Math.hypot(drone.vx, drone.vz) * dt) / 0.2));
       for (let i = 0; i < steps; i++) {
@@ -1076,6 +1088,11 @@ export class Sim {
           drone.vx = ((drone.x - ox) * steps) / dt;
           drone.vz = ((drone.z - oz) * steps) / dt;
         }
+      }
+      // Into a wall at speed: props shatter, it drops.
+      if (before - Math.hypot(drone.vx, drone.vz) > D.crashSpeed) {
+        this.downDrone(drone);
+        continue;
       }
       drone.x = clamp(drone.x, this.map.minX + 0.5, this.map.maxX - 0.5);
       drone.z = clamp(drone.z, this.map.minZ + 0.5, this.map.maxZ - 0.5);

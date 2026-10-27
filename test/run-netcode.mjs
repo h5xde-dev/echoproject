@@ -258,7 +258,13 @@ const launched = await page
   .catch(() => false);
 check('a client launches a drone and sees it in snapshots', launched);
 await page.keyboard.down('KeyD');
-await page.waitForTimeout(700);
+await page
+  .waitForFunction(() => {
+    const { gameA, gameB } = window.__net;
+    const d = gameA.sim.drones.find((x) => x.ownerId === gameB.localId);
+    return !!d && Math.hypot(d.x - window.__pilotAt.x, d.z - window.__pilotAt.z) > 2;
+  }, null, { timeout: 10000 })
+  .catch(() => {});
 await page.keyboard.up('KeyD');
 const flight = await page.evaluate(() => {
   const { gameA, gameB } = window.__net;

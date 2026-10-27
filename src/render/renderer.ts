@@ -664,7 +664,7 @@ export class Renderer {
   private droneVisuals = new Map<number, { group: THREE.Group; rotors: THREE.Mesh[]; led: THREE.MeshBasicMaterial }>();
 
   /** FPV drones: a small quad with spinning props and a blinking light at the nose. */
-  syncDrones(drones: { id: number; x: number; y: number; z: number; ang: number; down: boolean }[], dt: number): void {
+  syncDrones(drones: { id: number; x: number; y: number; z: number; vx: number; vz: number; ang: number; down: boolean }[], dt: number): void {
     const live = new Set<number>();
     for (const d of drones) {
       live.add(d.id);
@@ -673,6 +673,8 @@ export class Renderer {
         const group = new THREE.Group();
         // Drawn larger than life: from the camera's height it would be a speck.
         group.scale.setScalar(1.6);
+        // Yaw first, then pitch and roll about the drone's own axes.
+        group.rotation.order = 'YXZ';
         const body = new THREE.Mesh(DRONE_BODY_GEO, DRONE_MAT);
         body.castShadow = true;
         group.add(body);
@@ -698,8 +700,20 @@ export class Renderer {
       }
       v.group.position.set(d.x, d.y, d.z);
       v.group.rotation.y = -d.ang;
-      // Shot down: tumbling, props winding down.
-      v.group.rotation.z = d.down ? Math.min(1.2, v.group.rotation.z + dt * 3) : Math.sin(this.time * 9 + d.id) * 0.04;
+      if (d.down) {
+        // Shot down: tumbling, props winding down.
+        v.group.rotation.z = Math.min(1.2, v.group.rotation.z + dt * 3);
+      } else {
+        // A quad leans into where it is going: nose down to fly forward, a wing down to slide.
+        const c = Math.cos(d.ang);
+        const s = Math.sin(d.ang);
+        const max = CONFIG.drone.maxSpeed;
+        const pitch = -((d.vx * c + d.vz * s) / max) * 0.5;
+        const roll = ((-d.vx * s + d.vz * c) / max) * 0.5;
+        const k = Math.min(1, dt * 10);
+        v.group.rotation.z += (pitch + Math.sin(this.time * 9 + d.id) * 0.03 - v.group.rotation.z) * k;
+        v.group.rotation.x += (roll - v.group.rotation.x) * k;
+      }
       for (const r of v.rotors) r.rotation.y += dt * (d.down ? 6 : 60);
       v.led.color.setHex(d.down ? 0x301008 : Math.sin(this.time * 14) > 0 ? 0xff3020 : 0x40ff60);
     }

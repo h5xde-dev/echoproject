@@ -344,9 +344,11 @@ export interface Drone {
   /** Shot down or the link lost: dropping out of the air, harmless. */
   down: boolean;
   downT: number;
-  /** Stick input from the pilot, held until the next packet. */
+  /** Stick input from the pilot (screen axes), held until the next packet. */
   moveX: number;
   moveZ: number;
+  /** Where the pilot wants the nose: the drone yaws toward it at a limited rate. */
+  aim: number;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */

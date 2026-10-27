@@ -1652,7 +1652,7 @@ export class Game {
   private downedPrompt(self: DisplayActor | null): string {
     if (!self?.alive) return '';
     const drone = this.localDrone();
-    if (drone) return `ДРОН · ${Math.ceil(drone.battery)} С · ЛКМ — ПОДРЫВ`;
+    if (drone) return `ДРОН · ${Math.ceil(drone.battery)} С · ${Math.round(Math.hypot(drone.vx, drone.vz) * 3.6)} КМ/Ч · ЛКМ — ПОДРЫВ`;
     const D = CONFIG.down;
     if (self.downed) {
       return self.reviveT > 0

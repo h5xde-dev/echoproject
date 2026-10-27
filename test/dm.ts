@@ -1257,11 +1257,12 @@ for (const info of ARENAS) {
   check(p.piloting >= 0 && s.drones.length === 1 && p.drones === 0, 'X launches it');
   for (let i = 0; i < 60; i++) {
     p.shield = 0;
-    s.applyInput(p, { ...input, moveX: 1 });
+    s.applyInput(p, { ...input, moveZ: -1 });
     s.step(dt);
   }
   const drone = s.drones[0];
-  check(Math.abs(p.x - 10) < 0.05 && drone.x > 20, `the drone flies, the pilot stays put (pilot ${p.x.toFixed(2)}, drone ${drone.x.toFixed(1)})`);
+  check(Math.abs(drone.z - 15) < 0.3, `W flies along the nose (drift ${(drone.z - 15).toFixed(2)} m)`);
+  check(Math.abs(p.x - 10) < 0.05 && drone.x > 17, `the drone flies, the pilot stays put (pilot ${p.x.toFixed(2)}, drone ${drone.x.toFixed(1)})`);
   check(s.noises.some((n) => n.ownerId === p.id && n.radius === CONFIG.drone.noise) || drone.age > 0.5, 'it buzzes');
   foe.x = drone.x + 1.5;
   foe.z = drone.z;
@@ -1307,6 +1308,63 @@ for (const info of ARENAS) {
   s.step(dt);
   s.damageActor(p, 10, foe.id);
   check(p.piloting === -1 && s.drones[0]?.down === true, 'a hit on the pilot breaks the link');
+
+  // Flight model: momentum, a limited yaw rate, stick relative to the nose, wall crashes.
+  {
+    const f = new Sim({ ...map });
+    const pl = f.addPlayer('local', 'пилот', 1, 'engineer');
+    pl.x = 5;
+    pl.z = 15;
+    const fly = (ticks: number, inp: Partial<typeof input>) => {
+      for (let i = 0; i < ticks; i++) {
+        pl.shield = 0;
+        f.applyInput(pl, { ...input, ...inp });
+        f.step(dt);
+      }
+    };
+    f.applyInput(pl, { ...input, drone: true });
+    const dr = f.drones[0];
+    fly(6, { moveZ: -1 });
+    const early = Math.hypot(dr.vx, dr.vz);
+    fly(60, { moveZ: -1 });
+    const top = Math.hypot(dr.vx, dr.vz);
+    check(early < top * 0.5 && top > 13 && top <= CONFIG.drone.maxSpeed + 0.01, `it builds speed, not instantly (${early.toFixed(1)} → ${top.toFixed(1)} m/s)`);
+    const x0 = dr.x;
+    fly(20, {});
+    check(dr.x - x0 > 2 && Math.hypot(dr.vx, dr.vz) < top * 0.75, `released, it coasts and brakes (${(dr.x - x0).toFixed(1)} m)`);
+    // Nose turned south: a half turn takes a moment, then W flies south.
+    fly(6, { aim: Math.PI / 2 });
+    check(Math.abs(dr.ang - Math.PI / 2) > 0.3, `the nose turns at a limited rate (${dr.ang.toFixed(2)} rad after 0.1 s)`);
+    fly(30, { aim: Math.PI / 2 });
+    check(Math.abs(dr.ang - Math.PI / 2) < 0.01, 'and gets there');
+    dr.vx = dr.vz = 0;
+    const z0 = dr.z;
+    const xs = dr.x;
+    fly(30, { aim: Math.PI / 2, moveX: 1 });
+    check(dr.x < xs - 1 && Math.abs(dr.z - z0) < 0.5, `D slides to the nose's right (west when facing south: dx ${(dr.x - xs).toFixed(1)})`);
+  }
+  {
+    const wallMap = buildArena('sklad', 4243, 'dm');
+    const w = new Sim({ ...wallMap, props: [], pickups: [], powerups: [] });
+    const pl = w.addPlayer('local', 'пилот', 1, 'engineer');
+    for (const a of w.actors.values()) if (a !== pl) a.alive = false;
+    w.applyInput(pl, { ...input, drone: true });
+    const dr = w.drones[0];
+    // Full speed at the outer wall.
+    dr.x = 6;
+    dr.z = 3;
+    dr.ang = dr.aim = -Math.PI / 2;
+    dr.vx = 0;
+    dr.vz = -CONFIG.drone.maxSpeed;
+    let crashed = false;
+    for (let i = 0; i < 30 && !crashed; i++) {
+      pl.shield = 0;
+      w.applyInput(pl, { ...input, aim: -Math.PI / 2, moveZ: -1 });
+      w.step(dt);
+      crashed = dr.down;
+    }
+    check(crashed, 'flown into a wall at full speed, it breaks');
+  }
 
   // Guards and bots shoot a drone down when it buzzes close.
   {
