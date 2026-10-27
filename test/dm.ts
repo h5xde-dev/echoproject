@@ -1299,7 +1299,7 @@ for (const info of ARENAS) {
   for (let i = 0; i < 10; i++) s.step(dt);
   check(d2.down && p.piloting === -1, 'a rifle round knocks it out of the air');
   for (let i = 0; i < 90; i++) s.step(dt);
-  check(s.drones.length === 0 && !s.events.some((e) => e.type === 'explosion'), 'and it falls without exploding');
+  check(s.drones.length === 0 && s.events.some((e) => e.type === 'explosion'), 'and it goes off where it falls');
 
   // Hurt while flying: the link breaks.
   reset();
@@ -1364,6 +1364,12 @@ for (const info of ARENAS) {
       crashed = dr.down;
     }
     check(crashed, 'flown into a wall at full speed, it breaks');
+    const hp = pl.hp;
+    for (let i = 0; i < 90; i++) {
+      pl.shield = 0;
+      w.step(dt);
+    }
+    check(w.drones.length === 0 && w.events.some((e) => e.type === 'explosion'), `the wreck explodes on the ground (pilot ${hp} → ${pl.hp} hp)`);
   }
 
   // Guards and bots shoot a drone down when it buzzes close.

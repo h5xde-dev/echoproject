@@ -123,6 +123,7 @@ export class Renderer {
 
   private camTarget = new THREE.Vector3();
   private camPos = new THREE.Vector3();
+  private lookAheadOn = true;
   private camInit = false;
   private look = new THREE.Vector2();
   private lookSmooth = new THREE.Vector2();
@@ -1365,6 +1366,15 @@ export class Renderer {
 
   // --------------------------------------------------------------- camera
 
+  viewRect(): DOMRect {
+    return this.renderer.domElement.getBoundingClientRect();
+  }
+
+  /** Off while flying a drone: the view stays centred on it. */
+  setLookAhead(on: boolean): void {
+    this.lookAheadOn = on;
+  }
+
   setCameraTarget(x: number, z: number): void {
     this.camTarget.set(x, 0, z);
   }
@@ -1471,7 +1481,7 @@ export class Renderer {
     this.visionPass.uniforms.uTime.value = this.time;
 
     // Camera: follow with look-ahead toward the cursor, smooth shake.
-    const la = CONFIG.camera.lookAhead;
+    const la = this.lookAheadOn ? CONFIG.camera.lookAhead : 0;
     this.look.set(clampAbs(this.pointer.x, 1) * la * this.camera.aspect * 0.6, clampAbs(this.pointer.y, 1) * la);
     const lk = 1 - Math.exp(-4 * dt);
     this.lookSmooth.lerp(this.look, lk);

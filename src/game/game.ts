@@ -1209,9 +1209,22 @@ export class Game {
     const self = this.localDisplay();
     if (self) {
       const ground = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
-      // Flying: the drone looks where the mouse is.
-      const eye = this.localDrone() ?? self;
-      this.frameAim = Math.atan2(ground.z - eye.z, ground.x - eye.x);
+      const drone = this.localDrone();
+      this.renderer.setLookAhead(!drone);
+      if (drone) {
+        // Flying: the nose points from the screen centre toward the cursor. Measured
+        // against the drone itself it would flip each time the drone caught up with
+        // the cursor, since the camera follows it; near the centre the heading holds.
+        const rect = this.renderer.viewRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        if (Math.hypot(this.input.mouseX - cx, this.input.mouseY - cy) > Math.min(rect.width, rect.height) * 0.06) {
+          const centre = this.renderer.screenToGround(cx, cy);
+          this.frameAim = Math.atan2(ground.z - centre.z, ground.x - centre.x);
+        }
+      } else {
+        this.frameAim = Math.atan2(ground.z - self.z, ground.x - self.x);
+      }
       this.frameThrow = Math.hypot(ground.z - self.z, ground.x - self.x);
     }
   }

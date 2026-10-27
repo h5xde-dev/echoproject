@@ -1019,7 +1019,7 @@ export class Sim {
     this.explode(drone.x, drone.z, D.blastRadius, D.blastDamage, drone.ownerId);
   }
 
-  /** Shot down or the link lost: it drops without going off. */
+  /** Shot down, crashed or the link lost: it drops and goes off where it lands. */
   private downDrone(drone: Drone): void {
     if (drone.down) return;
     drone.down = true;
@@ -1043,7 +1043,7 @@ export class Sim {
         drone.vz *= Math.max(0, 1 - 3 * dt);
         drone.x += drone.vx * dt;
         drone.z += drone.vz * dt;
-        if (drone.downT >= D.fallTime) this.drones = this.drones.filter((d) => d !== drone);
+        if (drone.downT >= D.fallTime) this.detonateDrone(drone);
         continue;
       }
       const pilot = this.actors.get(drone.ownerId);
