@@ -1151,6 +1151,83 @@ for (const info of ARENAS) {
   }
 }
 
+// Trenches: slow you down, hide you crouched, soak long shots from the open.
+{
+  const fields = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => generateMap(seed * 6007)).filter((m) => m.rooms.some((r) => r.theme === 'field'));
+  check(fields.length > 0 && fields.every((m) => (m.trenches?.length ?? 0) >= 4), `co-op field rooms are dug with trenches (${fields.map((m) => m.trenches?.length).join(', ')})`);
+  const noField = [1, 2, 3, 4, 5, 6, 7, 8].map((seed) => generateMap(seed * 6007)).filter((m) => !m.rooms.some((r) => r.theme === 'field'));
+  check(noField.every((m) => (m.trenches?.length ?? 0) === 0), 'no trenches outside field rooms');
+
+  const base = buildArena('sklad', 9191, 'dm');
+  const map = { ...base, walls: [], props: [], lamps: [], bushes: [], pickups: [], powerups: [], trenches: [{ x0: 0, z0: -1, x1: 40, z1: 1 }] };
+  const s = new Sim(map);
+  const p = s.addPlayer('local', 'тест', 1);
+  const dt = CONFIG.tickDt;
+  const input = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt };
+  const runFor = (x: number, z: number) => {
+    p.x = x;
+    p.z = z;
+    p.vx = p.vz = 0;
+    for (let i = 0; i < 40; i++) s.moveActor(p, 1, 0, dt);
+    return p.x - x;
+  };
+  const inside = runFor(5, 0);
+  const outside = runFor(5, 10);
+  check(inside < outside * 0.9 && inside > outside * 0.75, `a trench slows you (${inside.toFixed(2)} vs ${outside.toFixed(2)} m)`);
+
+  const put = (x: number, z: number) => {
+    p.x = x;
+    p.z = z;
+    p.vx = p.vz = 0;
+  };
+  put(20, 0);
+  s.applyInput(p, { ...input, gait: 'crouch' });
+  put(20, 0);
+  (s as unknown as { updateConcealment(a: unknown): void }).updateConcealment(p);
+  check(p.concealed, 'crouching in a trench hides you');
+  s.applyInput(p, { ...input, gait: 'run' });
+  (s as unknown as { updateConcealment(a: unknown): void }).updateConcealment(p);
+  check(!p.concealed, 'standing up in a trench does not');
+
+  // A bullet from 20 m out in the open, then one from 3 m.
+  const shooter = s.addPlayer('enemy', 'стрелок', 2);
+  const shot = (fromX: number, fromZ: number) => {
+    p.hp = p.maxHp;
+    p.armor = 0;
+    p.shield = 0;
+    p.alive = true;
+    put(20, 0);
+    shooter.x = fromX;
+    shooter.z = fromZ;
+    const d = Math.hypot(20 - fromX, fromZ);
+    s.bullets.length = 0;
+    s.bullets.push({
+      id: 'trench' + fromX,
+      ownerId: shooter.id,
+      ownerKind: 'player',
+      x: 20 - ((20 - fromX) / d) * 1.2,
+      z: fromZ - (fromZ / d) * 1.2 + 0,
+      vx: ((20 - fromX) / d) * 40,
+      vz: (-fromZ / d) * 40,
+      speed: 40,
+      damage: WEAPONS.rifle.damage,
+      damageMul: 1,
+      life: 1,
+      weapon: 'rifle',
+      color: 0xffffff,
+      range: d - 1.2,
+    });
+    for (let i = 0; i < 90 && s.bullets.length > 0; i++) (s as unknown as { updateBullets(dt: number): void }).updateBullets(dt);
+    return p.maxHp - p.hp;
+  };
+  const far = shot(20, 20);
+  const near = shot(20, 3);
+  check(far > 0 && near > 0 && far < near * 0.5, `a trench soaks a long shot from the open (${far.toFixed(0)} vs ${near.toFixed(0)} hp)`);
+  shooter.x = 5;
+  const fromTrench = shot(2, 0);
+  check(fromTrench >= near * 0.7, `a shot along the trench hits in full (${fromTrench.toFixed(0)} hp)`);
+}
+
 // Progress between matches.
 {
   check(levelOf(0).level === 1 && levelOf(399).level === 1 && levelOf(400).level === 2 && levelOf(1000).level === 3, 'levels: 400 xp for the first, 200 more each after');

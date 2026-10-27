@@ -128,6 +128,37 @@ export function makeBarrelTexture(): THREE.Texture {
 }
 
 /** Forest floor: dark grass and earth, patchy. */
+/** Churned earth: mud, stones and boot-trodden ruts. */
+export function makeDirtTexture(size = 512): THREE.Texture {
+  const cv = noiseCanvas(size, [86, 70, 50], 0.5, 0xd127d127);
+  const ctx = cv.getContext('2d')!;
+  for (let i = 0; i < 50; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 10 + Math.random() * 40;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, Math.random() < 0.6 ? 'rgba(34,26,18,0.3)' : 'rgba(130,112,84,0.22)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Pebbles.
+  for (let i = 0; i < 500; i++) {
+    ctx.fillStyle = Math.random() < 0.5 ? 'rgba(150,140,124,0.5)' : 'rgba(40,32,24,0.5)';
+    ctx.beginPath();
+    ctx.arc(Math.random() * size, Math.random() * size, 0.8 + Math.random() * 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 export function makeGrassTexture(size = 512): THREE.Texture {
   const cv = noiseCanvas(size, [58, 78, 42], 0.45, 0x5eed6a55);
   const ctx = cv.getContext('2d')!;

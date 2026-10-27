@@ -524,13 +524,18 @@ export class Sim {
     const count = clamp(2 + Math.floor(room.index * 0.8), 2, 6);
     const rng = new Rng(this.map.seed + room.index * 7919);
     const placed: { x: number; z: number }[] = [];
+    // Fields: every other guard waits in a trench.
+    const dugouts = (this.map.trenches ?? []).filter(
+      (t) => t.x0 >= room.minX - 0.5 && t.x1 <= room.maxX + 0.5 && t.z0 >= room.minZ - 0.5 && t.z1 <= room.maxZ + 0.5,
+    );
 
     for (let i = 0; i < count; i++) {
       let x = room.wx;
       let z = room.wz;
       for (let attempt = 0; attempt < 40; attempt++) {
-        const tx = rng.range(room.minX + 1.2, room.maxX - 1.2);
-        const tz = rng.range(room.minZ + 1.2, room.maxZ - 1.2);
+        const t = dugouts.length > 0 && i % 2 === 0 && attempt < 30 ? dugouts[rng.int(0, dugouts.length - 1)] : null;
+        const tx = t ? rng.range(t.x0 + 0.4, t.x1 - 0.4) : rng.range(room.minX + 1.2, room.maxX - 1.2);
+        const tz = t ? (t.z0 + t.z1) / 2 : rng.range(room.minZ + 1.2, room.maxZ - 1.2);
         if (placed.some((p) => dist(p.x, p.z, tx, tz) < 5)) continue;
         if (this.props.some((p) => p.alive && Math.abs(p.x - tx) < p.hw + 0.8 && Math.abs(p.z - tz) < p.hh + 0.8)) continue;
         if (!this.nav.walkable(tx, tz)) continue;
@@ -993,7 +998,17 @@ export class Sim {
   private updateConcealment(actor: Actor): void {
     const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
     const quiet = actor.gait !== 'run' || Math.hypot(actor.vx, actor.vz) < 0.4;
-    actor.concealed = inBush && quiet && actor.revealT <= 0;
+    // Ducked down in a trench is as good as a bush.
+    const dugIn = actor.gait === 'crouch' && this.inTrench(actor.x, actor.z);
+    actor.concealed = (inBush && quiet || dugIn) && actor.revealT <= 0;
+  }
+
+  /** Inside one of the map's trenches. */
+  inTrench(x: number, z: number): boolean {
+    const ts = this.map.trenches;
+    if (!ts) return false;
+    for (const t of ts) if (x >= t.x0 && x <= t.x1 && z >= t.z0 && z <= t.z1) return true;
+    return false;
   }
 
   /** Every few metres a moving soldier makes noise: loud running, quiet walking, none crouched. */
@@ -1042,7 +1057,8 @@ export class Sim {
         actor.speed *
         gaitSpeed *
         (actor.carrying >= 0 ? CONFIG.ctf.carrySpeed : 1) *
-        (actor.downed ? CONFIG.down.crawl : 1);
+        (actor.downed ? CONFIG.down.crawl : 1) *
+        (this.inTrench(actor.x, actor.z) ? CONFIG.trench.speedMul : 1);
       const tvx = moveX * speed;
       const tvz = moveZ * speed;
       const maxDv = actor.accel * dt;
@@ -1189,9 +1205,13 @@ export class Sim {
       if (hit.kind === 'static') {
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
       } else if (hit.kind === 'actor') {
-        const dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
+        let dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
         // Co-op and teams: no friendly fire (the bullet still stops on the body).
         const shooter = this.actors.get(hit.bullet.ownerId);
+        // A trench is a low profile: shots from out in the open and from afar mostly hit the parapet.
+        const T = CONFIG.trench;
+        if (hit.bullet.range > T.coverDist && this.inTrench(hit.actor.x, hit.actor.z) && !(shooter && this.inTrench(shooter.x, shooter.z)))
+          dmg *= T.coverMul;
         const friendly =
           (isCoopMode(this.mode) && hit.bullet.ownerKind === hit.actor.kind) ||
           (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team);
@@ -1423,6 +1443,9 @@ export class Sim {
     const ai = actor.ai;
     if (!ai) return;
     actor.using = false;
+    // In a trench, ducks while waiting or trading shots; climbs out at a run.
+    if (this.map.trenches?.length && actor.role !== 'scout')
+      actor.gait = (ai.mode === 'idle' || ai.mode === 'attack') && this.inTrench(actor.x, actor.z) ? 'crouch' : 'run';
     // Flashed: stands still, sees nothing, does not shoot.
     if (actor.blind > 0) {
       ai.awareness = 0;

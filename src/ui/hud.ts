@@ -796,6 +796,10 @@ export class Hud {
       }
     }
 
+    // Trenches: dark cuts in the ground.
+    ctx.fillStyle = 'rgba(10, 8, 6, 0.85)';
+    for (const t of map.trenches ?? []) ctx.fillRect(px(t.x0), pz(t.z0), Math.max(1, (t.x1 - t.x0) * scale), Math.max(1, (t.z1 - t.z0) * scale));
+
     // Bushes: where you can hide.
     ctx.fillStyle = 'rgba(70, 120, 55, 0.45)';
     for (const b of map.bushes ?? []) {

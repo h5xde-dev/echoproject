@@ -6,13 +6,13 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '../game/config';
-import type { FireZone, FlagState, FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody } from '../game/types';
+import type { FireZone, FlagState, FloorRect, GrenadeKind, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, TrenchDef } from '../game/types';
 import { smokeRadius } from '../game/sim';
 import type { WeaponId } from '../game/weapons';
 import { ActorVisual } from './actors';
 import { assets } from './assets';
 import { Decals, Ghosts, Particles, Shockwaves, SoundPings } from './fx';
-import { makeBarrelTexture, makeFloorTexture, makeGlowTexture, makeGrassTexture, makeWallTexture } from './textures';
+import { makeBarrelTexture, makeDirtTexture, makeFloorTexture, makeGlowTexture, makeGrassTexture, makeWallTexture } from './textures';
 import { setRagdollWalls } from './ragdoll';
 import { Beam, VISION, VISION_SHADER, Viewer, rayBox } from './vision';
 
@@ -410,6 +410,8 @@ export class Renderer {
       return { x: b.x, z: b.z, r: b.r, material };
     });
 
+    if (map.trenches?.length) g.add(trenchMesh(map.trenches));
+
     // Props: asset models fitted to the collision boxes, primitives otherwise.
     for (const p of map.props) this.addPropVisual(p);
 
@@ -488,7 +490,9 @@ export class Renderer {
           ? makeTileTexture()
           : style.tex === 'grass'
             ? makeGrassTexture(512)
-            : assets.textures.wall ?? makeWallTexture(256);
+            : style.tex === 'dirt'
+              ? makeDirtTexture(512)
+              : assets.textures.wall ?? makeWallTexture(256);
     return new THREE.MeshStandardMaterial({
       map,
       normalMap: style.tex === 'asphalt' ? assets.textures.floorNormal ?? null : null,
@@ -1605,7 +1609,8 @@ const LAMP_INTENSITY = 32;
 
 const LONG_PROPS = new Set<PropKind>(['cover', 'car', 'table', 'pallet', 'ammo', 'cabinet']);
 
-const FLOOR_STYLE: Record<RoomTheme, { tile: number; color: number; tex: 'asphalt' | 'concrete' | 'tiles' | 'grass' }> = {
+const FLOOR_STYLE: Record<RoomTheme, { tile: number; color: number; tex: 'asphalt' | 'concrete' | 'tiles' | 'grass' | 'dirt' }> = {
+  field: { tile: 4.5, color: 0xa89880, tex: 'dirt' },
   forest: { tile: 5, color: 0x9cb486, tex: 'grass' },
   yard: { tile: 3.5, color: 0xa4a8ae, tex: 'asphalt' },
   warehouse: { tile: 4, color: 0x9a948a, tex: 'concrete' },
@@ -1651,6 +1656,42 @@ function floorMarkings(f: FloorRect, out: THREE.BufferGeometry[]): void {
   } else if (f.theme === 'bunker') {
     for (let x = f.x0 + 1; x < f.x1 - 1; x += 1.2) line(x, f.z0 + 0.7, x + 0.6, f.z0 + 0.9, 0xd0a020);
   }
+}
+
+/** Trenches from above: a dark cut with duckboards along the bottom and a churned lip. */
+function trenchMesh(trenches: TrenchDef[]): THREE.Mesh {
+  const geos: THREE.BufferGeometry[] = [];
+  const quad = (x0: number, z0: number, x1: number, z1: number, y: number, color: number) => {
+    const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate((x0 + x1) / 2, y, (z0 + z1) / 2);
+    const c = new THREE.Color(color);
+    const cols = new Float32Array(geo.attributes.position.count * 3);
+    for (let i = 0; i < geo.attributes.position.count; i++) c.toArray(cols, i * 3);
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    geo.deleteAttribute('uv');
+    geos.push(geo);
+  };
+  const lip = 0.22;
+  for (const t of trenches) quad(t.x0 - lip, t.z0 - lip, t.x1 + lip, t.z1 + lip, 0.006, 0x4a3a28);
+  for (const t of trenches) quad(t.x0, t.z0, t.x1, t.z1, 0.01, 0x17110b);
+  for (const t of trenches) {
+    // Boards run across the trench, every 0.5 m along its length.
+    const alongX = t.x1 - t.x0 >= t.z1 - t.z0;
+    const len = alongX ? t.x1 - t.x0 : t.z1 - t.z0;
+    const w = alongX ? t.z1 - t.z0 : t.x1 - t.x0;
+    const m = w * 0.28;
+    for (let a = 0.15; a < len - 0.2; a += 0.5) {
+      if (alongX) quad(t.x0 + a, t.z0 + m, t.x0 + a + 0.32, t.z1 - m, 0.014, 0x4b3824);
+      else quad(t.x0 + m, t.z0 + a, t.x1 - m, t.z0 + a + 0.32, 0.014, 0x4b3824);
+    }
+  }
+  const mesh = new THREE.Mesh(
+    mergeGeometries(geos),
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2 }),
+  );
+  mesh.receiveShadow = true;
+  return mesh;
 }
 
 let tileTex: THREE.Texture | null = null;

@@ -14,7 +14,7 @@ export interface StaticBody {
 }
 
 /** Visual and dressing style of a room (or a whole arena). */
-export type RoomTheme = 'warehouse' | 'office' | 'yard' | 'bunker' | 'forest';
+export type RoomTheme = 'warehouse' | 'office' | 'yard' | 'bunker' | 'forest' | 'field';
 
 export interface RoomDef {
   index: number;
@@ -124,6 +124,14 @@ export interface BushDef {
   r: number;
 }
 
+/** A trench: slows you down; crouched inside, you are hidden and hard to hit from afar. */
+export interface TrenchDef {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+}
+
 export interface LampDef {
   x: number;
   z: number;
@@ -146,6 +154,7 @@ export interface MapData {
   floors: FloorRect[];
   lamps: LampDef[];
   bushes?: BushDef[];
+  trenches?: TrenchDef[];
   /** Deathmatch spawn points (empty for co-op levels). */
   spawns: { x: number; z: number }[];
   spawnX: number;

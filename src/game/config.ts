@@ -22,6 +22,14 @@ export const CONFIG = {
   },
 
   /** Bushes hide whoever walks, crouches or stands in them. */
+  trench: {
+    /** Speed while wading through a trench. */
+    speedMul: 0.85,
+    width: 1.6,
+    /** Bullets from outside the trench, from further than this, hit a soldier in it for less. */
+    coverDist: 5,
+    coverMul: 0.35,
+  },
   bush: {
     radius: { min: 1.2, max: 1.7 },
     /** Bushes per yard room in co-op levels. */

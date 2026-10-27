@@ -13,6 +13,7 @@ import type {
   RoomDef,
   RoomTheme,
   StaticBody,
+  TrenchDef,
 } from './types';
 import { PICKUP_WEAPONS, type WeaponId } from './weapons';
 
@@ -62,6 +63,8 @@ const DRESSING: Record<RoomTheme, [PropKind, number, number][]> = {
   bunker: [['ammo', 2, 3], ['cover', 1, 2], ['crate', 1, 2], ['barrel', 1, 2], ['cabinet', 0, 1]],
   // Rocks (concrete blocks), a forgotten pallet or two.
   forest: [['cover', 1, 3], ['pallet', 0, 2], ['drum', 0, 1]],
+  // Open ground: the trenches and their sandbags are the cover.
+  field: [['ammo', 0, 2], ['crate', 0, 1], ['barrel', 0, 1]],
 };
 
 export const THEME_LAMP: Record<RoomTheme, number> = {
@@ -71,6 +74,8 @@ export const THEME_LAMP: Record<RoomTheme, number> = {
   bunker: 0xb0ff9a,
   // Moonlight through the trees: pale and cold.
   forest: 0x8fa8c8,
+  // Flares over no man's land.
+  field: 0xffd9a0,
 };
 
 const POWERUP_WEIGHTS: [PowerupKind, number][] = [
@@ -96,6 +101,8 @@ export function generateMap(seed: number): MapData {
   // Own stream, so adding bushes leaves every other layout decision as it was.
   const bushRng = new Rng(seed ^ 0xb054);
   const bushes: BushDef[] = [];
+  const trenchRng = new Rng(seed ^ 0x7e4c);
+  const trenches: TrenchDef[] = [];
   const roomCount = rng.int(CONFIG.roomsMin, CONFIG.roomsMax);
   const raw: RawRoom[] = [];
 
@@ -244,6 +251,8 @@ export function generateMap(seed: number): MapData {
     const j = rng.int(0, i);
     [themeCycle[i], themeCycle[j]] = [themeCycle[j], themeCycle[i]];
   }
+  // Fields slot in from their own stream, so the shuffle above stays as it was.
+  themeCycle.splice(trenchRng.int(0, themeCycle.length), 0, 'field');
   const rooms: RoomDef[] = raw.map((r, index) => {
     const minX = r.cx0 * TILE;
     const minZ = r.cz0 * TILE;
@@ -296,46 +305,77 @@ export function generateMap(seed: number): MapData {
     // The first room's centre is where the squad spawns (players stand ±1.6 m off it).
     const centreClear = room.index === 0 ? 4.5 : 2.6;
 
+    /** Puts a prop at (x, z) if it fits there; anchored props keep a walkable gap. */
+    const put = (kind: PropKind, x: number, z: number): boolean => {
+      const def = PROP_TABLE[kind];
+      const fixed = def.fixed;
+      if (Math.hypot(x - room.wx, z - room.wz) < centreClear) return false;
+      if (nearDoor(x, z, fixed ? 5.5 : 3.6)) return false;
+      if (!clearOfWalls(x, z, def.hw, def.hh, fixed ? 1.9 : 0.2)) return false;
+      if (
+        props.some((p) => {
+          const both = fixed || p.fixed;
+          return (
+            Math.abs(p.x - x) < p.hw + def.hw + (both ? 1.9 : 0.8) &&
+            Math.abs(p.z - z) < p.hh + def.hh + (both ? 1.9 : 0.8)
+          );
+        })
+      )
+        return false;
+      props.push({
+        id: propId++,
+        kind,
+        x,
+        z,
+        hw: def.hw,
+        hh: def.hh,
+        explosive: def.explosive,
+        fixed: def.fixed,
+        hp: def.hp,
+        room: room.index,
+      });
+      return true;
+    };
+
     const place = (kind: PropKind, count: number) => {
       const def = PROP_TABLE[kind];
+      const gap = def.fixed ? 1.9 : 0.65;
       for (let i = 0; i < count; i++) {
-        // Anchored props can never be pushed out of the way, so they keep a
-        // walkable gap to walls, doors and every other prop.
-        const fixed = def.fixed;
-        const gap = fixed ? 1.9 : 0.65;
         for (let attempt = 0; attempt < 16; attempt++) {
           const x = rng.range(room.minX + def.hw + gap, room.maxX - def.hw - gap);
           const z = rng.range(room.minZ + def.hh + gap, room.maxZ - def.hh - gap);
-          if (Math.hypot(x - room.wx, z - room.wz) < centreClear) continue;
-          if (nearDoor(x, z, fixed ? 5.5 : 3.6)) continue;
-          if (!clearOfWalls(x, z, def.hw, def.hh, fixed ? 1.9 : 0.2)) continue;
-          if (
-            props.some((p) => {
-              const both = fixed || p.fixed;
-              // Anchored props leave a gap wide enough to walk through.
-              return (
-                Math.abs(p.x - x) < p.hw + def.hw + (both ? 1.9 : 0.8) &&
-                Math.abs(p.z - z) < p.hh + def.hh + (both ? 1.9 : 0.8)
-              );
-            })
-          )
-            continue;
-          props.push({
-            id: propId++,
-            kind,
-            x,
-            z,
-            hw: def.hw,
-            hh: def.hh,
-            explosive: def.explosive,
-            fixed: def.fixed,
-            hp: def.hp,
-            room: room.index,
-          });
-          break;
+          if (put(kind, x, z)) break;
         }
       }
     };
+
+    // Fields: 2-3 zigzag trenches across the room, sandbags along the parapet.
+    if (room.theme === 'field') {
+      const W = CONFIG.trench.width;
+      const depth = room.maxZ - room.minZ;
+      const lines = depth > 20 ? 3 : 2;
+      const u0 = room.minX + 1.2;
+      const u1 = room.maxX - 1.2;
+      const segs = 3;
+      const segLen = (u1 - u0) / segs;
+      for (let k = 0; k < lines; k++) {
+        const zc = room.minZ + (depth * (k + 1)) / (lines + 1) + trenchRng.range(-0.8, 0.8);
+        let flip = trenchRng.next() < 0.5 ? 1 : -1;
+        let prevZ = 0;
+        for (let sIdx = 0; sIdx < segs; sIdx++) {
+          const z = zc + flip * 0.9;
+          const x0 = u0 + sIdx * segLen;
+          const x1 = x0 + segLen;
+          trenches.push({ x0, z0: z - W / 2, x1, z1: z + W / 2 });
+          // A dog-leg joins this run to the last one.
+          if (sIdx > 0) trenches.push({ x0: x0 - W / 2, z0: Math.min(z, prevZ) - W / 2, x1: x0 + W / 2, z1: Math.max(z, prevZ) + W / 2 });
+          prevZ = z;
+          flip = -flip;
+          const side = trenchRng.next() < 0.5 ? 1 : -1;
+          if (trenchRng.next() < 0.7) put('cover', (x0 + x1) / 2, z + side * (W / 2 + PROP_TABLE.cover.hh + 0.1));
+        }
+      }
+    }
 
     // Anchored pieces first: they are the hardest to fit.
     const mix = [...DRESSING[room.theme]].sort((a, b) => Number(PROP_TABLE[b[0]].fixed) - Number(PROP_TABLE[a[0]].fixed));
@@ -412,6 +452,7 @@ export function generateMap(seed: number): MapData {
     floors,
     lamps,
     bushes,
+    trenches,
     spawns: [],
     spawnX: spawnRoom.wx,
     spawnZ: spawnRoom.wz,
