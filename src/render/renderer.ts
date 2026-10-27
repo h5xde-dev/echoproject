@@ -1705,6 +1705,11 @@ export const POWERUP_COLOR: Record<PowerupKind, number> = {
   speed: 0xffe04a,
   rapid: 0xff9a2a,
   nv: 0x7dff6a,
+  ammo: 0xd8c27a,
+  regen: 0x3fffc8,
+  overshield: 0x8fd8ff,
+  stealth: 0xb48aff,
+  radar: 0x4affe0,
 };
 
 /** Painted lines: warehouse lanes, parking bays in yards, hazard edges in bunkers. */
@@ -1850,6 +1855,28 @@ function powerupVisual(kind: PowerupKind): THREE.Group {
     const c = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.6, 3), mat);
     c.rotation.z = -Math.PI / 2;
     icon.add(c);
+  } else if (kind === 'ammo') {
+    // Three rounds standing in a row.
+    for (let i = -1; i <= 1; i++) {
+      const r = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.42, 8), mat);
+      r.position.x = i * 0.18;
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.14, 8), white);
+      tip.position.set(i * 0.18, 0.28, 0);
+      icon.add(r, tip);
+    }
+  } else if (kind === 'regen') {
+    const h = new THREE.Mesh(new THREE.TorusKnotGeometry(0.18, 0.05, 40, 6), mat);
+    icon.add(h);
+  } else if (kind === 'overshield') {
+    icon.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.32, 0), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.4, transparent: true, opacity: 0.75 })));
+  } else if (kind === 'stealth') {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+    icon.add(m);
+  } else if (kind === 'radar') {
+    const dish = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.04, 6, 24, Math.PI), mat);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 6), white);
+    mast.position.y = -0.2;
+    icon.add(dish, mast);
   } else {
     const t = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.08, 8, 20), mat);
     t.rotation.x = Math.PI / 2;

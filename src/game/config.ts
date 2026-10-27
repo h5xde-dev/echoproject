@@ -171,6 +171,16 @@ export const CONFIG = {
     nvTime: 10,
     /** Night vision amplifies a flash grenade too. */
     nvBlindMul: 1.5,
+    regenRate: 6,
+    regenTime: 10,
+    stealthTime: 12,
+    radarTime: 8,
+    overshield: 50,
+    /** Overshield points lost per second. */
+    overshieldDecay: 50 / 15,
+    /** Chance that anyone killed on an arena drops a powerup (lies 20 s). */
+    arenaDropChance: 0.18,
+    dropLife: 20,
     /** Chance that a killed guard drops a powerup (co-op). */
     dropChance: 0.35,
     /** Respawn time of map powerups / weapon pickups in deathmatch. */

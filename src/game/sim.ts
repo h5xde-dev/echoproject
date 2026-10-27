@@ -10,6 +10,7 @@ import type {
   Actor,
   AiState,
   BombState,
+  Buffs,
   Drone,
   Difficulty,
   EnemyRole,
@@ -400,7 +401,7 @@ export class Sim {
       money: CONFIG.comp.startMoney,
       tier: 0,
       tierKills: 0,
-      buffs: { damage: 0, speed: 0, rapid: 0, nv: 0 },
+      buffs: noBuffs(),
       ai: isPlayer ? null : makeAi(),
       slot: 0,
       shotSeq: 0,
@@ -823,6 +824,13 @@ export class Sim {
     b.rapid = Math.max(0, b.rapid - dt);
     b.nv = Math.max(0, b.nv - dt);
     b.speed = Math.max(0, b.speed - dt);
+    b.stealth = Math.max(0, b.stealth - dt);
+    b.radar = Math.max(0, b.radar - dt);
+    b.overshield = Math.max(0, b.overshield - CONFIG.powerups.overshieldDecay * dt);
+    if (b.regen > 0) {
+      b.regen = Math.max(0, b.regen - dt);
+      if (actor.alive && !actor.downed) actor.hp = Math.min(actor.maxHp, actor.hp + CONFIG.powerups.regenRate * dt);
+    }
     this.applySpeed(actor);
 
     if (actor.reloading) {
@@ -1186,7 +1194,8 @@ export class Sim {
     const quiet = actor.gait !== 'run' || Math.hypot(actor.vx, actor.vz) < 0.4;
     // Ducked down in a trench is as good as a bush.
     const dugIn = actor.gait === 'crouch' && this.inTrench(actor.x, actor.z);
-    actor.concealed = (inBush && quiet || dugIn) && actor.revealT <= 0;
+    const cloaked = actor.buffs.stealth > 0 && quiet;
+    actor.concealed = ((inBush && quiet) || dugIn || cloaked) && actor.revealT <= 0;
   }
 
   /** Inside one of the map's trenches. */
@@ -1351,7 +1360,45 @@ export class Sim {
       case 'nv':
         actor.buffs.nv = P.nvTime;
         return true;
+      case 'ammo': {
+        const def = WEAPONS[actor.weapon];
+        const full = actor.ammo >= def.mag && actor.grenades >= CONFIG.grenade.max && actor.smokes >= 1 && actor.flashes >= 1;
+        if (full) return false;
+        actor.ammo = def.mag;
+        actor.reloading = false;
+        actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + 1);
+        actor.smokes = Math.max(actor.smokes, 1);
+        actor.flashes = Math.max(actor.flashes, 1);
+        return true;
+      }
+      case 'regen':
+        if (actor.hp >= actor.maxHp && actor.buffs.regen > 0) return false;
+        actor.buffs.regen = P.regenTime;
+        return true;
+      case 'overshield':
+        actor.buffs.overshield = P.overshield;
+        return true;
+      case 'stealth':
+        actor.buffs.stealth = P.stealthTime;
+        return true;
+      case 'radar':
+        actor.buffs.radar = P.radarTime;
+        return true;
     }
+  }
+
+  /** A powerup lying where someone fell, for a short while. */
+  private dropPowerup(x: number, z: number, life: number): void {
+    this.powerups.push({
+      id: this.nextPowerupId++,
+      kind: pickPowerup(this.rng.next()),
+      x,
+      z,
+      room: this.roomIndex,
+      active: true,
+      respawnT: life,
+      dropped: true,
+    });
   }
 
   private updateItems(dt: number): void {
@@ -1366,7 +1413,14 @@ export class Sim {
     }
     for (let i = this.powerups.length - 1; i >= 0; i--) {
       const p = this.powerups[i];
-      if (p.active) continue;
+      if (p.active) {
+        // Dropped on an arena: lies there for a while (respawnT is its life).
+        if (p.dropped && p.respawnT > 0) {
+          p.respawnT -= dt;
+          if (p.respawnT <= 0) this.powerups.splice(i, 1);
+        }
+        continue;
+      }
       if (p.dropped || p.respawnT <= 0) {
         // One-off (co-op map items, drops): gone once taken.
         if (p.dropped || !this.arena) this.powerups.splice(i, 1);
@@ -1432,6 +1486,16 @@ export class Sim {
 
   damageActor(actor: Actor, amount: number, sourceId: number): void {
     if (!actor.alive || actor.shield > 0) return;
+    // Overshield takes the whole hit first.
+    if (actor.buffs.overshield > 0) {
+      const soak = Math.min(actor.buffs.overshield, amount);
+      actor.buffs.overshield -= soak;
+      amount -= soak;
+      if (amount <= 0) {
+        this.events.push({ type: 'hurt', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z });
+        return;
+      }
+    }
     // Armor soaks a share of every hit until it runs out.
     if (actor.armor > 0) {
       const soak = Math.min(actor.armor, amount * CONFIG.powerups.armorAbsorb);
@@ -1501,6 +1565,7 @@ export class Sim {
 
     if (actor.kind === 'player') {
       actor.respawnT = CONFIG.respawnDelay;
+      if (this.arena && this.rng.next() < CONFIG.powerups.arenaDropChance) this.dropPowerup(actor.x, actor.z, CONFIG.powerups.dropLife);
       return;
     }
     // Co-op guard: the body stays (ragdoll, drops); old bodies are cleared.
@@ -2488,7 +2553,7 @@ export class Sim {
     actor.vx = 0;
     actor.vz = 0;
     actor.armor = 0;
-    actor.buffs.damage = actor.buffs.speed = actor.buffs.rapid = actor.buffs.nv = 0;
+    actor.buffs = noBuffs();
     actor.carrying = -1;
     actor.downed = false;
     this.classKit(actor);
@@ -3108,7 +3173,7 @@ export class Sim {
       a.hp = a.maxHp;
       a.respawnT = 0;
       a.burnT = 0;
-      a.buffs.damage = a.buffs.speed = a.buffs.rapid = a.buffs.nv = 0;
+      a.buffs = noBuffs();
       this.classKit(a);
       if (!survived) {
         a.weapons = a.kind === 'player' ? ['pistol', 'knife'] : ['pistol'];
@@ -3248,4 +3313,8 @@ function turnTowards(current: number, target: number, maxDelta: number): number 
   if (d < -Math.PI) d += Math.PI * 2;
   const step = clamp(d, -maxDelta, maxDelta);
   return current + step;
+}
+
+function noBuffs(): Buffs {
+  return { damage: 0, speed: 0, rapid: 0, nv: 0, regen: 0, stealth: 0, radar: 0, overshield: 0 };
 }

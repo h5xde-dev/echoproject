@@ -79,12 +79,17 @@ export const THEME_LAMP: Record<RoomTheme, number> = {
 };
 
 const POWERUP_WEIGHTS: [PowerupKind, number][] = [
-  ['medkit', 0.31],
-  ['armor', 0.22],
-  ['damage', 0.14],
-  ['rapid', 0.12],
-  ['speed', 0.11],
-  ['nv', 0.1],
+  ['medkit', 0.22],
+  ['armor', 0.15],
+  ['ammo', 0.12],
+  ['damage', 0.09],
+  ['rapid', 0.08],
+  ['speed', 0.07],
+  ['regen', 0.07],
+  ['nv', 0.06],
+  ['overshield', 0.05],
+  ['stealth', 0.05],
+  ['radar', 0.04],
 ];
 
 export function pickPowerup(roll: number): PowerupKind {
@@ -102,6 +107,7 @@ export function generateMap(seed: number): MapData {
   const bushRng = new Rng(seed ^ 0xb054);
   const bushes: BushDef[] = [];
   const trenchRng = new Rng(seed ^ 0x7e4c);
+  const bonusRng = new Rng(seed ^ 0xb0b0);
   const trenches: TrenchDef[] = [];
   const roomCount = rng.int(CONFIG.roomsMin, CONFIG.roomsMax);
   const raw: RawRoom[] = [];
@@ -422,6 +428,11 @@ export function generateMap(seed: number): MapData {
     if (room.index > 0 && rng.next() < 0.75) {
       const spot = freeSpot(0.8);
       if (spot) powerups.push({ id: powerupId++, kind: pickPowerup(rng.next()), ...spot, room: room.index });
+    }
+    // A second one from its own stream, so the layout above stays as it was.
+    if (room.index > 0 && bonusRng.next() < 0.7) {
+      const spot = freeSpot(0.8);
+      if (spot) powerups.push({ id: powerupId++, kind: pickPowerup(bonusRng.next()), ...spot, room: room.index });
     }
   }
 

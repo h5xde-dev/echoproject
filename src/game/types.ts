@@ -98,7 +98,7 @@ export interface PickupDef {
   room: number;
 }
 
-export type PowerupKind = 'medkit' | 'armor' | 'damage' | 'speed' | 'rapid' | 'nv';
+export type PowerupKind = 'medkit' | 'armor' | 'damage' | 'speed' | 'rapid' | 'nv' | 'ammo' | 'regen' | 'overshield' | 'stealth' | 'radar';
 
 export interface PowerupDef {
   id: number;
@@ -228,6 +228,14 @@ export interface Buffs {
   rapid: number;
   /** Night vision: full sight range without the flashlight. */
   nv: number;
+  /** Healing over time. */
+  regen: number;
+  /** Hidden like in a bush while not running or shooting. */
+  stealth: number;
+  /** Enemies show on the minimap. */
+  radar: number;
+  /** Extra hit points on top of armor, melting away (not seconds: points). */
+  overshield: number;
 }
 
 export interface Actor {

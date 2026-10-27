@@ -561,6 +561,10 @@ export class Hud {
       ['speed', 'СКОРОСТЬ', state.buffs.speed, BUFF_TIME.speed],
       ['rapid', 'ТЕМП', state.buffs.rapid, BUFF_TIME.rapid],
       ['nv', 'ПНВ', state.buffs.nv, BUFF_TIME.nv],
+      ['regen', 'РЕГЕН', state.buffs.regen ?? 0, BUFF_TIME.regen],
+      ['stealth', 'СТЕЛС', state.buffs.stealth ?? 0, BUFF_TIME.stealth],
+      ['radar', 'РАДАР', state.buffs.radar ?? 0, BUFF_TIME.radar],
+      ['overshield', 'ЩИТ+', state.buffs.overshield ?? 0, CONFIG.powerups.overshield],
       ['shield', 'ЗАЩИТА', state.shield, 1.6],
     ];
     const active = buffs.filter((b) => b[2] > 0);
@@ -871,6 +875,9 @@ const BUFF_TIME = {
   speed: CONFIG.powerups.speedTime,
   rapid: CONFIG.powerups.rapidTime,
   nv: CONFIG.powerups.nvTime,
+  regen: CONFIG.powerups.regenTime,
+  stealth: CONFIG.powerups.stealthTime,
+  radar: CONFIG.powerups.radarTime,
 };
 
 function escapeHtml(s: string): string {

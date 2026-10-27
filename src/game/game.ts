@@ -98,6 +98,11 @@ const POWERUP_TEXT: Record<PowerupKind, string> = {
   speed: 'Скорость',
   rapid: 'Скорострельность',
   nv: 'Ночное зрение',
+  ammo: 'Боеприпасы',
+  regen: 'Регенерация',
+  overshield: 'Сверхщит +' + CONFIG.powerups.overshield,
+  stealth: 'Маскировка',
+  radar: 'Радар: враги на карте',
 };
 
 /** Error below this is smoothed out; above it the player snaps (teleport). */
@@ -1842,9 +1847,11 @@ export class Game {
       modeTitle: modeInfo(this.matchMode).title,
     });
 
-    // Fog of war applies to the minimap too: only hostiles that are seen.
+    // Fog of war applies to the minimap too: only hostiles that are seen,
+    // unless a radar (powerup or kill streak) is running.
+    const radar = (self.buffs.radar ?? 0) > 0;
     const known = [...this.display.values()]
-      .filter((d) => !this.isHostile(d.id) || this.renderer.isRevealed(d.id))
+      .filter((d) => !this.isHostile(d.id) || this.renderer.isRevealed(d.id) || (radar && d.alive))
       .map((d) => ({ ...d, ally: !this.isHostile(d.id) }));
     const now = performance.now();
     this.noiseBlips = this.noiseBlips.filter((b) => now - b.at < 1500);

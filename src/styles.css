@@ -911,6 +911,10 @@ body {
 .buff-speed { color: #ffe04a; }
 .buff-rapid { color: #ffa040; }
 .buff-nv { color: #7dff6a; }
+.buff-regen { color: #3fffc8; }
+.buff-stealth { color: #b48aff; }
+.buff-radar { color: #4affe0; }
+.buff-overshield { color: #8fd8ff; }
 
 /* Night vision goggles: green phosphor, brightened. */
 #viewport.night-vision canvas { filter: grayscale(1) sepia(1) hue-rotate(60deg) saturate(4) brightness(1.7) contrast(1.1); }
