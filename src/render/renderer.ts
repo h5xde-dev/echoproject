@@ -1974,24 +1974,37 @@ function floorMarkings(f: FloorRect, out: THREE.BufferGeometry[]): void {
 }
 
 /** Trenches from above: a dark cut with duckboards along the bottom and a churned lip. */
+/**
+ * Trenches look dug in: a dark floor with duckboards, plank revetments down
+ * every side and a parapet of sandbags along the top. The sides come from the
+ * union of all trench strips on a fine grid, so junctions stay open.
+ */
 function trenchMesh(trenches: TrenchDef[]): THREE.Mesh {
   const geos: THREE.BufferGeometry[] = [];
-  const quad = (x0: number, z0: number, x1: number, z1: number, y: number, color: number) => {
-    const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
-    geo.rotateX(-Math.PI / 2);
-    geo.translate((x0 + x1) / 2, y, (z0 + z1) / 2);
+  const colorize = (geo: THREE.BufferGeometry, color: number, jitter = 0) => {
     const c = new THREE.Color(color);
+    if (jitter) c.offsetHSL(0, 0, (Math.random() - 0.5) * jitter);
     const cols = new Float32Array(geo.attributes.position.count * 3);
     for (let i = 0; i < geo.attributes.position.count; i++) c.toArray(cols, i * 3);
     geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
     geo.deleteAttribute('uv');
     geos.push(geo);
   };
-  const lip = 0.22;
-  for (const t of trenches) quad(t.x0 - lip, t.z0 - lip, t.x1 + lip, t.z1 + lip, 0.006, 0x4a3a28);
+  const quad = (x0: number, z0: number, x1: number, z1: number, y: number, color: number) => {
+    const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate((x0 + x1) / 2, y, (z0 + z1) / 2);
+    colorize(geo, color);
+  };
+  const box = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, color: number, jitter = 0) => {
+    const geo = new THREE.BoxGeometry(sx, sy, sz);
+    geo.translate(cx, cy, cz);
+    colorize(geo, color, jitter);
+  };
+
   for (const t of trenches) quad(t.x0, t.z0, t.x1, t.z1, 0.01, 0x17110b);
   for (const t of trenches) {
-    // Boards run across the trench, every 0.5 m along its length.
+    // Duckboards run across the trench, every 0.5 m along its length.
     const alongX = t.x1 - t.x0 >= t.z1 - t.z0;
     const len = alongX ? t.x1 - t.x0 : t.z1 - t.z0;
     const w = alongX ? t.z1 - t.z0 : t.x1 - t.x0;
@@ -2001,11 +2014,93 @@ function trenchMesh(trenches: TrenchDef[]): THREE.Mesh {
       else quad(t.x0 + m, t.z0 + a, t.x1 - m, t.z0 + a + 0.32, 0.014, 0x4b3824);
     }
   }
+
+  // The union on a 0.25 m grid; every run of boundary is one side of the trench.
+  const R = 0.25;
+  const minX = Math.min(...trenches.map((t) => t.x0)) - R;
+  const minZ = Math.min(...trenches.map((t) => t.z0)) - R;
+  const nx = Math.ceil((Math.max(...trenches.map((t) => t.x1)) - minX) / R) + 2;
+  const nz = Math.ceil((Math.max(...trenches.map((t) => t.z1)) - minZ) / R) + 2;
+  const inside = new Uint8Array(nx * nz);
+  for (const t of trenches) {
+    for (let iz = Math.floor((t.z0 - minZ) / R); iz < Math.ceil((t.z1 - minZ) / R); iz++) {
+      for (let ix = Math.floor((t.x0 - minX) / R); ix < Math.ceil((t.x1 - minX) / R); ix++) {
+        const cx = minX + (ix + 0.5) * R;
+        const cz = minZ + (iz + 0.5) * R;
+        if (cx > t.x0 && cx < t.x1 && cz > t.z0 && cz < t.z1) inside[iz * nx + ix] = 1;
+      }
+    }
+  }
+  const at = (ix: number, iz: number) => (ix < 0 || iz < 0 || ix >= nx || iz >= nz ? 0 : inside[iz * nx + ix]);
+
+  const WALL_H = 0.42;
+  const PLANK = 0x5a4128;
+  const SAND = 0x8a7a55;
+  const POST = 0x2e2216;
+  /** One straight side: planks down the inside, sandbags along the top. */
+  const side = (alongX: boolean, a0: number, a1: number, edge: number, out: number) => {
+    const len = a1 - a0;
+    const mid = (a0 + a1) / 2;
+    // Revetment: a plank wall standing on the edge, inside the trench.
+    const wx = alongX ? mid : edge - out * 0.03;
+    const wz = alongX ? edge - out * 0.03 : mid;
+    box(wx, WALL_H / 2, wz, alongX ? len : 0.05, WALL_H, alongX ? 0.05 : len, PLANK, 0.08);
+    // Posts holding the planks, every 1.5 m.
+    for (let p = a0 + 0.2; p < a1; p += 1.5) {
+      const px = alongX ? p : edge - out * 0.07;
+      const pz = alongX ? edge - out * 0.07 : p;
+      box(px, WALL_H / 2 + 0.03, pz, 0.09, WALL_H + 0.06, 0.09, POST);
+    }
+    // Parapet: sandbags in 0.55 m bags, two rows high in places.
+    for (let p = a0; p < a1 - 0.1; p += 0.55) {
+      const l = Math.min(0.52, a1 - p);
+      const c = p + l / 2;
+      const bx = alongX ? c : edge + out * 0.2;
+      const bz = alongX ? edge + out * 0.2 : c;
+      box(bx, 0.13, bz, alongX ? l : 0.36, 0.26, alongX ? 0.36 : l, SAND, 0.12);
+      if (Math.floor(p / 0.55) % 3 === 1) {
+        const tx = alongX ? c + 0.27 : edge + out * 0.22;
+        const tz = alongX ? edge + out * 0.22 : c + 0.27;
+        box(tx, 0.36, tz, alongX ? Math.min(0.5, l) : 0.32, 0.2, alongX ? 0.32 : Math.min(0.5, l), SAND, 0.12);
+      }
+    }
+  };
+  // Sides along x: scan each row for cells whose neighbour across the edge is outside.
+  for (const [dz, out] of [[-1, -1], [1, 1]] as const) {
+    for (let iz = 0; iz < nz; iz++) {
+      let run = -1;
+      for (let ix = 0; ix <= nx; ix++) {
+        const edge = ix < nx && at(ix, iz) && !at(ix, iz + dz);
+        if (edge && run < 0) run = ix;
+        if (!edge && run >= 0) {
+          const z = minZ + (dz < 0 ? iz : iz + 1) * R;
+          if ((ix - run) * R > 0.3) side(true, minX + run * R, minX + ix * R, z, out);
+          run = -1;
+        }
+      }
+    }
+  }
+  for (const [dx, out] of [[-1, -1], [1, 1]] as const) {
+    for (let ix = 0; ix < nx; ix++) {
+      let run = -1;
+      for (let iz = 0; iz <= nz; iz++) {
+        const edge = iz < nz && at(ix, iz) && !at(ix + dx, iz);
+        if (edge && run < 0) run = iz;
+        if (!edge && run >= 0) {
+          const x = minX + (dx < 0 ? ix : ix + 1) * R;
+          if ((iz - run) * R > 0.3) side(false, minZ + run * R, minZ + iz * R, x, out);
+          run = -1;
+        }
+      }
+    }
+  }
+
   const mesh = new THREE.Mesh(
     mergeGeometries(geos),
     new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2 }),
   );
   mesh.receiveShadow = true;
+  mesh.castShadow = true;
   return mesh;
 }
 
@@ -2207,9 +2302,11 @@ function craterMesh(c: CraterDef): THREE.Group {
     new THREE.MeshBasicMaterial({ map: craterTex(), transparent: true, depthWrite: false, color: 0x000000 }),
   );
   bowl.position.set(c.x, 0.02, c.z);
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(c.r * 0.95, 0.22, 6, 28), new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 1 }));
+  // A low, uneven lip of thrown-up earth.
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(c.r * 1.02, 0.16, 5, 18), new THREE.MeshStandardMaterial({ color: 0x6a5236, roughness: 1, flatShading: true }));
   rim.rotation.x = Math.PI / 2;
-  rim.scale.z = 0.5;
+  rim.rotation.z = c.x * 1.7;
+  rim.scale.set(1, 1.08, 0.3);
   rim.position.set(c.x, 0.04, c.z);
   rim.receiveShadow = true;
   g.add(bowl, rim);

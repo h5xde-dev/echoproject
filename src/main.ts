@@ -8,6 +8,7 @@ import { ARENAS, arenaGrid } from './game/arenas';
 import { modeInfo } from './game/modes';
 import type { GameMode } from './game/types';
 import { fetchAccount, logout, rename, type Account } from './ui/account';
+import { classCard, HelpPanel } from './ui/help';
 
 const viewport = must<HTMLElement>('#viewport');
 const hudRoot = must<HTMLElement>('#hud');
@@ -171,9 +172,19 @@ function backToMenu(): void {
   nameInput.select();
 }
 
+// Help: from the menu and from the pause overlay.
+const help = new HelpPanel();
+must<HTMLButtonElement>('.btn-help').addEventListener('click', () => help.open());
+must<HTMLButtonElement>('.pause-help').addEventListener('click', () => help.open('controls'));
+
 // Escape opens the pause overlay; the second Escape closes it.
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (help.isOpen) {
+    e.preventDefault();
+    help.close();
+    return;
+  }
   if (!menu.classList.contains('hidden')) return;
   if (!game.inSession) return;
   e.preventDefault();
@@ -237,9 +248,11 @@ showDifficulty();
 
 // Class (menu), remembered too; applied when a game starts or is joined.
 const clsButtons = document.querySelectorAll<HTMLButtonElement>('.cls-btn');
+const clsCardEl = must<HTMLElement>('.cls-card');
 const showClass = () => {
   clsButtons.forEach((b) => b.classList.toggle('active', b.dataset.cls === settings.cls));
   game.playerClass = settings.cls;
+  clsCardEl.innerHTML = settings.cls ? classCard(settings.cls) : '';
 };
 clsButtons.forEach((b) =>
   b.addEventListener('click', () => {

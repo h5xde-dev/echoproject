@@ -292,6 +292,36 @@ const blown = await page
   .catch(() => false);
 check("the client's second X sets the drone off on the host", blown);
 
+// A client throws a light switch: the lamps go out on the host and in the
+// client's mirror (through the snapshot's lamp list).
+const switched = await page.evaluate(() => {
+  const { gameA, gameB } = window.__net;
+  const sw = gameA.sim.interactables.find((o) => o.kind === 'switch');
+  if (!sw) return { ok: false, why: 'no switch on the map' };
+  const lamps = gameA.map.lamps.map((l, i) => [l, i]).filter(([l]) => Math.hypot(l.x - sw.x, l.z - sw.z) < 13).map(([, i]) => i);
+  const c = gameA.sim.actors.get(gameB.localId);
+  c.x = sw.x + 0.7;
+  c.z = sw.z;
+  c.shield = 30;
+  window.__switch = { id: sw.id, lamps };
+  return { ok: lamps.length > 0, lamps: lamps.length };
+});
+await page.waitForTimeout(400);
+await page.evaluate(() => {
+  window.__net.gameB.pending.interact = true;
+});
+const lightsOut = switched.ok
+  ? await page
+      .waitForFunction(() => {
+        const { gameA, gameB } = window.__net;
+        const { lamps } = window.__switch;
+        return lamps.every((i) => !gameA.sim.lampAlive[i]) && lamps.every((i) => !gameB.sim.lampAlive[i]);
+      }, null, { timeout: 10000 })
+      .then(() => true)
+      .catch(() => false)
+  : false;
+check('a client throws a switch: the lamps go out for host and client', lightsOut, JSON.stringify(switched));
+
 // Lobby: a hosted room starts as a warm-up; the client says ready, the host
 // starts the match on a fresh map with everyone in it.
 const lobbyBefore = await page.evaluate(() => {
