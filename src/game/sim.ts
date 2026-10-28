@@ -803,6 +803,7 @@ export class Sim {
       speed,
       damage: def.damage,
       damageMul: actor.buffs.damage > 0 ? CONFIG.powerups.damageMul : 1,
+      criticalMul: def.criticalChance && this.rng.next() < def.criticalChance ? def.criticalMul ?? 1.5 : 1,
       life: projectileLife(def, speed),
       weapon: actor.weapon,
       color: actor.kind === 'player' ? def.color : 0xff7a5c,
@@ -998,7 +999,7 @@ export class Sim {
     actor.shieldUsed = false;
     actor.piloting = -1;
     if (actor.cls === 'engineer') {
-      actor.drones = Math.max(actor.drones, 1);
+      actor.drones = Math.max(actor.drones, 3);
       actor.mines = Math.max(actor.mines, CONFIG.mine.perEngineer);
     }
     if (actor.cls === 'scout') actor.flares = Math.max(actor.flares, 1);
@@ -1495,7 +1496,7 @@ export class Sim {
       } else if (hit.kind === 'static') {
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
       } else if (hit.kind === 'actor') {
-        let dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
+        let dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul * (hit.bullet.criticalMul ?? 1);
         // Co-op and teams: no friendly fire (the bullet still stops on the body).
         const shooter = this.actors.get(hit.bullet.ownerId);
         // A trench is a low profile: shots from out in the open and from afar mostly hit the parapet.
@@ -1506,7 +1507,7 @@ export class Sim {
           (isCoopMode(this.mode) && hit.bullet.ownerKind === hit.actor.kind) ||
           (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team);
         if (!friendly) {
-          this.damageActor(hit.actor, dmg, hit.bullet.ownerId);
+          this.damageActor(hit.actor, dmg, hit.bullet.ownerId, hit.bullet.weapon, (hit.bullet.criticalMul ?? 1) > 1);
           if (WEAPONS[hit.bullet.weapon].flame) this.ignite(hit.actor, hit.bullet.ownerId);
         }
         this.events.push({
@@ -1528,7 +1529,7 @@ export class Sim {
     }
   }
 
-  damageActor(actor: Actor, amount: number, sourceId: number): void {
+  damageActor(actor: Actor, amount: number, sourceId: number, weapon?: WeaponId, critical = false): void {
     if (!actor.alive || actor.shield > 0) return;
     this.lastHurt.set(actor.id, this.time);
     // A hit makes you let go of a crate or the wire cutters.
@@ -1583,7 +1584,7 @@ export class Sim {
     actor.vx = 0;
     actor.vz = 0;
     actor.reloading = false;
-    this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id) });
+    this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id), weapon, text: critical ? 'critical' : undefined });
     actor.streak = 0;
     actor.holdT = 0;
     const scorer = this.actors.get(sourceId);
@@ -2814,7 +2815,7 @@ export class Sim {
       }
       return;
     }
-    const limitHit = this.mode === 'dm' && leader && leader.score.kills >= CONFIG.dm.fragLimit;
+    const limitHit = (this.mode === 'dm' || this.mode === 'duel') && leader && leader.score.kills >= (this.mode === 'duel' ? 10 : CONFIG.dm.fragLimit);
     if (limitHit || this.timeLeft <= 0) {
       this.finishMatch(leader?.id, leader ? `${leader.name} — ${leader.score.kills} фрагов` : 'Ничья');
     }
@@ -3517,9 +3518,12 @@ export class Sim {
     let weapon: WeaponId | undefined;
     // Gun game hands out guns by the ladder only.
     if (this.mode !== 'gun') {
-      weapon = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)];
-      this.equip(actor, weapon);
-      actor.ammo = WEAPONS[weapon].mag;
+      weapon = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)] as WeaponId;
+      if (weapon) {
+        this.equip(actor, weapon);
+        actor.ammo = WEAPONS[weapon].mag;
+        if ((weapon as string) === 'drone') actor.drones = Math.min(6, actor.drones + 2);
+      }
     }
     let given = 0;
     for (let tries = 0; tries < 12 && given < 2; tries++) if (this.applyPowerup(actor, pickPowerup(this.rng.next()))) given++;

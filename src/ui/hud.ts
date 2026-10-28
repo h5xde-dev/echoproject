@@ -306,16 +306,26 @@ export class Hud {
   }
 
   /** "killer ✕ victim" line; `by` empty for suicides and accidents. */
-  killFeed(by: string, victim: string, mine: boolean, me: boolean): void {
+  killFeed(by: string, victim: string, mine: boolean, me: boolean, weapon = 'pistol', critical = false): void {
     const el = document.createElement('div');
     el.className = `kill-line${mine ? ' mine' : ''}${me ? ' me' : ''}`;
     const a = document.createElement('span');
     a.textContent = by;
     const x = document.createElement('i');
     x.textContent = by ? '✕' : '☠';
+    const icon = document.createElement('b');
+    icon.className = `kill-weapon weapon-${weapon}`;
+    icon.textContent = weapon === 'sniper' ? '▰' : weapon === 'shotgun' ? '≡' : weapon === 'knife' ? '†' : weapon === 'drone' ? '◇' : '▸';
+    icon.title = critical ? 'Критический выстрел' : weapon;
     const b = document.createElement('span');
     b.textContent = victim;
-    el.append(a, x, b);
+    if (critical) {
+      const head = document.createElement('strong');
+      head.className = 'headshot-icon';
+      head.textContent = 'HS';
+      head.title = 'Критический выстрел';
+      el.append(a, x, icon, head, b);
+    } else el.append(a, x, icon, b);
     this.killfeedEl.prepend(el);
     this.kills.push({ el, life: 6 });
     while (this.kills.length > 5) this.kills.shift()?.el.remove();

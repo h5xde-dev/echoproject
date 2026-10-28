@@ -28,6 +28,13 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'duel',
+    title: 'Дуэль 1v1',
+    short: '1V1',
+    desc: 'Честная дуэль один на один. Создайте комнату и пригласите друга кодом.',
+    arena: true,
+  },
+  {
     id: 'tdm',
     title: 'Командный бой',
     short: 'КОМАНДЫ',

@@ -59,6 +59,7 @@ const fightersValue = must<HTMLElement>('.fighters-value');
 const SOLO_DESC: Record<GameMode, string> = {
   coop: 'Пройти объект в одиночку',
   dm: 'Арена против ботов',
+  duel: '1v1 с другом по коду комнаты',
   gun: 'Гонка против ботов',
   comp: 'Раунды против ботов',
   tdm: 'Ваша команда с ботами против ботов',
@@ -401,7 +402,7 @@ game.onQueue = (msg) => {
   if (msg.state === 'queue') {
     showQueue(`${msg.players ?? 1} / ${msg.need ?? 2}`, msg.startIn !== undefined && msg.startIn >= 0 ? `Бой начнётся через ${msg.startIn} с — ждём ещё соперников.` : 'Ждём соперников. Deathmatch на сервере: без ботов, итог меняет рейтинг.');
   } else if (msg.state === 'found') {
-    showQueue('БОЙ НАЙДЕН', `${msg.players ?? 2} игрока · загружаем арену…`);
+    showQueue('БОЙ НАЙДЕН', `${msg.players ?? 2} игрок�� · загружаем арену…`);
   } else {
     showError(msg.text ?? 'Очередь прервана');
     game.returnToMenu();
