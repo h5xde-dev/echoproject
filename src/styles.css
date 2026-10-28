@@ -1258,3 +1258,9 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
   .help-row, .help-list .help-row:has(> kbd:first-child) { grid-template-columns: 1fr; gap: 2px; }
   .help-body { overflow-x: auto; }
 }
+
+/* Room setting: bots in a network room. */
+.room-bots { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 2px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.room-bots input { margin-top: 3px; accent-color: var(--accent); }
+.room-bots small { display: block; color: var(--ink-dim); font-size: 11px; letter-spacing: 0.02em; }
+.room-bots.hidden { display: none; }
