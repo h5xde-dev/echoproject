@@ -36,13 +36,13 @@ export const CONFIG = {
     /** Radians per second the nose can turn. */
     yawRate: 4.2,
     /** Hitting a wall faster than this (m/s lost in the impact) breaks it. */
-    crashSpeed: 9,
+    crashSpeed: 12,
     /** Seconds of flight. */
     battery: 20,
     hp: 50,
     radius: 0.4,
     blastRadius: 4.5,
-    blastDamage: 200,
+    blastDamage: 250,
     /** The buzz: how far guards hear it. */
     noise: 14,
     /** A click this soon after launch does not count (the launch key may still be down). */
@@ -89,7 +89,7 @@ export const CONFIG = {
     shellGap: 0.3,
     shellSpread: 2.2,
     shellRadius: 3.6,
-    shellDamage: 70,
+    shellDamage: 90,
   },
   wire: {
     speedMul: 0.45,
@@ -162,7 +162,7 @@ export const CONFIG = {
   },
 
   camera: {
-    height: 36,
+    height: 35,
     back: 6,
     fov: 29,
     lerp: 7,
@@ -248,7 +248,7 @@ export const CONFIG = {
   /** Flashlight on: long sight, but you are easy to spot (and your beam shows). */
   flashlight: {
     visionOn: 24,
-    visionOff: 13,
+    visionOff: 12,
   },
 
   grenade: {
