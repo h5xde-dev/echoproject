@@ -6,6 +6,10 @@ export interface WeaponDef {
   short: string;
   /** Damage per projectile before falloff. */
   damage: number;
+  /** Chance for a precision critical hit. */
+  criticalChance?: number;
+  /** Critical damage multiplier. */
+  criticalMul?: number;
   /** Rounds per minute. */
   rpm: number;
   mag: number;
@@ -130,6 +134,8 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   sniper: {
     id: 'sniper',
+    criticalChance: 0.22,
+    criticalMul: 1.75,
     name: 'Снайперка «Стриж»',
     short: 'Снайп.',
     damage: 110,

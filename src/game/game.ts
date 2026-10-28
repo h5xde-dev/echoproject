@@ -788,7 +788,7 @@ export class Game {
         }
         if (isArena(this.matchMode)) {
           const by = event.by === event.ownerId ? '' : this.nameOf(event.by);
-          this.hud.killFeed(by, this.nameOf(event.ownerId), event.by === this.localId, event.ownerId === this.localId);
+          this.hud.killFeed(by, this.nameOf(event.ownerId), event.by === this.localId, event.ownerId === this.localId, event.weapon ?? 'pistol', event.text === 'critical');
         } else if (event.by === this.localId && event.ownerId !== this.localId) {
           this.hud.message('Противник нейтрализован', 'good');
         } else if (event.ownerId === this.localId) {

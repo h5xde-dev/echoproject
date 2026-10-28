@@ -492,6 +492,8 @@ export interface Bullet {
   damage: number;
   /** Damage multiplier of the shooter at the moment of firing (buffs). */
   damageMul: number;
+  /** Precision critical damage multiplier rolled when the shot was fired. */
+  criticalMul?: number;
   life: number;
   weapon: WeaponId;
   color: number;
