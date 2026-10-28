@@ -38,7 +38,7 @@ export const CONFIG = {
     /** Hitting a wall faster than this (m/s lost in the impact) breaks it. */
     crashSpeed: 9,
     /** Seconds of flight. */
-    battery: 12,
+    battery: 14,
     hp: 30,
     radius: 0.4,
     blastRadius: 4.5,
@@ -77,7 +77,7 @@ export const CONFIG = {
     openTime: 2,
     reach: 1.8,
     life: 60,
-    weapons: ['sniper', 'lmg', 'flamer', 'rifle', 'shotgun'] as const,
+    weapons: ['sniper', 'lmg', 'flamer', 'rifle', 'shotgun', 'drone'] as const,
   },
   streak: {
     radarAt: 3,

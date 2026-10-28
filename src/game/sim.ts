@@ -998,7 +998,7 @@ export class Sim {
     actor.shieldUsed = false;
     actor.piloting = -1;
     if (actor.cls === 'engineer') {
-      actor.drones = Math.max(actor.drones, 1);
+      actor.drones = Math.max(actor.drones, 3);
       actor.mines = Math.max(actor.mines, CONFIG.mine.perEngineer);
     }
     if (actor.cls === 'scout') actor.flares = Math.max(actor.flares, 1);
@@ -2814,7 +2814,7 @@ export class Sim {
       }
       return;
     }
-    const limitHit = this.mode === 'dm' && leader && leader.score.kills >= CONFIG.dm.fragLimit;
+    const limitHit = (this.mode === 'dm' || this.mode === 'duel') && leader && leader.score.kills >= (this.mode === 'duel' ? 10 : CONFIG.dm.fragLimit);
     if (limitHit || this.timeLeft <= 0) {
       this.finishMatch(leader?.id, leader ? `${leader.name} — ${leader.score.kills} фрагов` : 'Ничья');
     }
@@ -3518,8 +3518,11 @@ export class Sim {
     // Gun game hands out guns by the ladder only.
     if (this.mode !== 'gun') {
       weapon = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)];
-      this.equip(actor, weapon);
-      actor.ammo = WEAPONS[weapon].mag;
+      if (weapon) {
+        this.equip(actor, weapon);
+        actor.ammo = WEAPONS[weapon].mag;
+        if (weapon === 'drone') actor.drones = Math.min(6, actor.drones + 2);
+      }
     }
     let given = 0;
     for (let tries = 0; tries < 12 && given < 2; tries++) if (this.applyPowerup(actor, pickPowerup(this.rng.next()))) given++;

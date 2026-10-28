@@ -4,7 +4,7 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb';
+export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb';
 
 export interface StaticBody {
   cx: number;
