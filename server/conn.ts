@@ -17,6 +17,10 @@ type Dc = ReturnType<Pc['createDataChannel']>;
 let nextConnId = 1;
 
 /** Numbers to 3 decimals on the wire: snapshots shrink by about a third. */
+export function encode(msg: HostMessage): string {
+  return JSON.stringify(msg, compact);
+}
+
 function compact(_key: string, v: unknown): unknown {
   return typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v;
 }
@@ -50,15 +54,15 @@ export class PlayerConn {
   }
 
   /** Must arrive: the WebSocket. */
-  send(msg: HostMessage): void {
+  send(msg: HostMessage | string): void {
     if (this.closed || this.ws.readyState !== this.ws.OPEN) return;
-    this.ws.send(JSON.stringify(msg, compact));
+    this.ws.send(typeof msg === 'string' ? msg : encode(msg));
   }
 
   /** Latest-wins traffic: the data channel when it is up, otherwise the WebSocket. */
-  sendFast(msg: HostMessage): void {
+  sendFast(msg: HostMessage | string): void {
     if (this.closed) return;
-    const text = JSON.stringify(msg, compact);
+    const text = typeof msg === 'string' ? msg : encode(msg);
     if (this.dc?.isOpen() && text.length < this.dc.maxMessageSize()) {
       try {
         if (this.dc.sendMessage(text)) return;

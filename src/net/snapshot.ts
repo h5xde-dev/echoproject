@@ -3,7 +3,28 @@ import type { Sim } from '../game/sim';
 import type { ActorState, RoundState, SnapshotMsg, WaveState } from './protocol';
 
 // What an authority (a hosting browser or the dedicated server) sends its
-// clients: the whole visible state of the match.
+// clients: the whole visible state of the match. Kept small, 20 times a
+// second per client: coordinates to the millimetre, and props only once they
+// differ from the map (clients start from the map they were welcomed with).
+
+const r3 = (v: number) => Math.round(v * 1000) / 1000;
+
+/** Per match: props that have moved, been hit or placed — sent from then on. */
+const touched = new WeakMap<Sim, { defs: Map<number, { x: number; z: number; hp: number }>; ids: Set<number> }>();
+
+function changedProps(sim: Sim): Set<number> {
+  let t = touched.get(sim);
+  if (!t) {
+    t = { defs: new Map(sim.map.props.map((p) => [p.id, { x: p.x, z: p.z, hp: p.hp }])), ids: new Set() };
+    touched.set(sim, t);
+  }
+  for (const p of sim.props) {
+    if (t.ids.has(p.id)) continue;
+    const d = t.defs.get(p.id);
+    if (!d || p.deployed || !p.alive || Math.abs(p.x - d.x) > 0.005 || Math.abs(p.z - d.z) > 0.005 || Math.round(p.hp) !== Math.round(d.hp)) t.ids.add(p.id);
+  }
+  return t.ids;
+}
 
 export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number>): SnapshotMsg {
   const actors: ActorState[] = [];
@@ -13,10 +34,10 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
       kind: a.kind,
       peerId: a.peerId,
       name: a.name,
-      x: a.x,
-      z: a.z,
-      ang: a.ang,
-      hp: a.hp,
+      x: r3(a.x),
+      z: r3(a.z),
+      ang: r3(a.ang),
+      hp: Math.round(a.hp * 10) / 10,
       maxHp: a.maxHp,
       armor: a.armor,
       alive: a.alive,
@@ -59,11 +80,12 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
       hold: a.holdT > 0 ? a.holdT : undefined,
     });
   }
-  const bullets = sim.bullets.map((b) => ({ id: b.id, x: b.x, z: b.z, vx: b.vx, vz: b.vz, color: b.color }));
-  const props = sim.props.map((p) => ({
+  const bullets = sim.bullets.map((b) => ({ id: b.id, x: r3(b.x), z: r3(b.z), vx: r3(b.vx), vz: r3(b.vz), color: b.color }));
+  const changed = changedProps(sim);
+  const props = sim.props.filter((p) => changed.has(p.id)).map((p) => ({
     id: p.id,
-    x: p.x,
-    z: p.z,
+    x: r3(p.x),
+    z: r3(p.z),
     alive: p.alive,
     hp: Math.round(p.hp),
     ...(p.deployed ? { kind: p.kind, hw: p.hw, hh: p.hh, owner: p.ownerId } : {}),

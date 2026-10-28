@@ -3518,11 +3518,15 @@ export class Sim {
     let weapon: WeaponId | undefined;
     // Gun game hands out guns by the ladder only.
     if (this.mode !== 'gun') {
-      weapon = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)] as WeaponId;
-      if (weapon) {
+      const item = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)];
+      // A drone is not a gun: it goes with the drones carried (equipping it threw
+      // inside the tick and froze the match for everyone).
+      if (item === 'drone') {
+        actor.drones = Math.min(6, actor.drones + 2);
+      } else if (item) {
+        weapon = item;
         this.equip(actor, weapon);
         actor.ammo = WEAPONS[weapon].mag;
-        if ((weapon as string) === 'drone') actor.drones = Math.min(6, actor.drones + 2);
       }
     }
     let given = 0;

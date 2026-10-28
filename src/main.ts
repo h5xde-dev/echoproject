@@ -235,6 +235,25 @@ setStats.addEventListener('change', () => {
 });
 applySettings();
 
+// Lags on a weak machine: first fewer pixels, then no shadows. Each step is
+// remembered (the shadows one through the quality setting) and said once.
+let lightened = false;
+game.onSlowFrames = () => {
+  if (!lightened && game.renderer.capPixelRatio(1)) {
+    lightened = true;
+    hud.message('Игра тормозит — снижено разрешение отрисовки', 'warn');
+    return;
+  }
+  lightened = true;
+  if (settings.quality === 'high') {
+    settings.quality = 'low';
+    setQuality.value = 'low';
+    game.renderer.setQuality('low');
+    saveSettings(settings);
+    hud.message('Игра тормозит — тени выключены (вернуть: пауза → Графика)', 'warn');
+  }
+};
+
 // Bot difficulty (menu), remembered with the other settings.
 const diffButtons = document.querySelectorAll<HTMLButtonElement>('.diff-btn[data-difficulty]');
 const showDifficulty = () => diffButtons.forEach((b) => b.classList.toggle('active', b.dataset.difficulty === settings.difficulty));

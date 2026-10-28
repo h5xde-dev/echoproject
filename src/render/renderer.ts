@@ -94,7 +94,8 @@ export class Renderer {
   };
   /** Lights on the burning patches nearest the camera (a fixed pool, see the constructor). */
   private fireLights: THREE.PointLight[] = [];
-  private flareLights: THREE.PointLight[] = [];
+  /** Flares burning, for the shared fire/flare light pool. */
+  private flaresLit: Flare[] = [];
   private flareGlows = new Map<number, THREE.Mesh>();
   private interactVisuals = new Map<number, { group: THREE.Group; led: THREE.Mesh; pad: THREE.Mesh; kind: InteractDef['kind'] }>();
   private dropVisuals = new Map<number, THREE.Group>();
@@ -200,12 +201,6 @@ export class Renderer {
       this.scene.add(light);
       this.boomLights.push({ light, life: 0, max: 0.45, peak: 260 });
     }
-    // Flares: red light that stays as long as the flare burns.
-    for (let i = 0; i < 2; i++) {
-      const light = new THREE.PointLight(0xff4a3a, 0, 24, 1.6);
-      this.scene.add(light);
-      this.flareLights.push(light);
-    }
     for (let i = 0; i < 3; i++) {
       const light = new THREE.PointLight(COLORS.lamp, 0, 22, 2);
       this.scene.add(light);
@@ -247,6 +242,9 @@ export class Renderer {
     this.tracerMesh = new THREE.InstancedMesh(tracerGeo, tracerMat, 256);
     this.tracerMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.tracerMesh.frustumCulled = false;
+    // Per-instance colour exists from the start: created at the first shot it
+    // would switch the shader variant and compile it mid-fight.
+    this.tracerMesh.setColorAt(0, new THREE.Color(0xffffff));
     this.tracerMesh.count = 0;
     this.overlay.add(this.tracerMesh);
 
@@ -291,7 +289,19 @@ export class Renderer {
     window.addEventListener('resize', () => this.resize());
   }
 
+  /**
+   * Where the canvas is on the page. Read from the DOM only after a resize:
+   * reading it every frame forced a layout of the whole HUD each time (it
+   * changes every frame), up to tens of milliseconds when it changed a lot.
+   */
+  private rectCache: DOMRect | null = null;
+  private canvasRect(): DOMRect {
+    this.rectCache ??= this.renderer.domElement.getBoundingClientRect();
+    return this.rectCache;
+  }
+
   resize(): void {
+    this.rectCache = null;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.renderer.setSize(w, h);
@@ -521,7 +531,6 @@ export class Renderer {
       led.position.set(0, 1.68, 0);
       group.add(stand, cab, a, b, led);
     }
-    group.traverse((m) => ((m as THREE.Mesh).castShadow = true));
     this.mapGroup.add(group);
     this.interactVisuals.set(o.id, { group, led, pad, kind: o.kind });
   }
@@ -607,20 +616,13 @@ export class Renderer {
       if (liveShells.has(id)) continue;
       this.overlay.remove(m);
       m.geometry.dispose();
-      (m.material as THREE.Material).dispose();
+      // Material not disposed: releasing a program's last user deletes it, and the next one compiles it again mid-fight.
       this.shellVisuals.delete(id);
     }
 
     const F = CONFIG.flare;
-    const cx = this.camTarget.x;
-    const cz = this.camTarget.z;
-    const near = [...flares].sort((a, b) => Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz));
-    this.flareLights.forEach((light, i) => {
-      const f = near[i];
-      const fade = f ? Math.min(1, f.life / 1.5) : 0;
-      light.intensity = f ? (80 + Math.random() * 25) * fade : 0;
-      if (f) light.position.set(f.x, 2.4, f.z);
-    });
+    // Lit by setFires' light pool (every extra light costs every pixel).
+    this.flaresLit = flares;
     const liveFlares = new Set<number>();
     for (const f of flares) {
       liveFlares.add(f.id);
@@ -645,7 +647,7 @@ export class Renderer {
       if (liveFlares.has(id)) continue;
       this.scene.remove(glow);
       glow.geometry.dispose();
-      (glow.material as THREE.Material).dispose();
+      // Material not disposed: releasing a program's last user deletes it, and the next one compiles it again mid-fight.
       this.flareGlows.delete(id);
     }
   }
@@ -666,11 +668,22 @@ export class Renderer {
       this.scene.add(v.group);
       temps.push(v);
     });
-    // Things that appear mid-game: a beam, a grenade with its ring, a pickup.
+    // Things that appear mid-game: a beam, a grenade with its ring, a pickup,
+    // burning ground, a flare, a supply crate, a mortar ring, a drone, a mine.
     this.updateBeams([{ x: 0, z: 0, ang: 0 }]);
     this.syncGrenades([{ x: 0, y: 1, z: 0, vx: 0, vy: 0, vz: 0, fuse: 1 }], 0);
     const pickup = weaponPickupVisual('smg');
     this.scene.add(pickup);
+    this.setFires([{ id: -1, x: 0, z: 0, age: 1, ownerId: -1 }], 0);
+    this.syncWorldExtras(
+      [{ id: -1, x: 0, z: 0, landT: 1, progress: 0, openerId: -1 }],
+      [{ id: -1, x: 0, z: 0, t: 1, ownerId: -1 }],
+      [{ id: -1, x: 0, z: 0, life: 5 }],
+      0,
+    );
+    this.syncDrones([{ id: -1, x: 0, y: 1.6, z: 0, vx: 0, vz: 0, ang: 0, down: false }], 0);
+    const mineId = -9999;
+    this.addPropVisual({ id: mineId, kind: 'mine', x: 0, z: 0, hw: 0.3, hh: 0.3, fixed: false, hp: 10 });
     const hidden: THREE.Object3D[] = [];
     for (const root of [this.scene, this.overlay, this.maskScene]) {
       root.traverse((o) => {
@@ -683,10 +696,31 @@ export class Renderer {
     this.renderer.compile(this.scene, this.camera);
     this.renderer.compile(this.overlay, this.camera);
     this.renderer.compile(this.maskScene, this.camera);
+    // compile() builds the variants for the screen; the scene is drawn into
+    // the post-processing target, which needs others (colour space, tone
+    // mapping). One real frame through the whole chain builds those too.
+    // Everything is drawn: nothing is culled away from the camera.
+    const culled: THREE.Object3D[] = [];
+    this.scene.traverse((o) => {
+      if (o.frustumCulled) {
+        culled.push(o);
+        o.frustumCulled = false;
+      }
+    });
+    this.render();
+    for (const o of culled) o.frustumCulled = true;
     for (const o of hidden) o.visible = false;
     this.updateBeams([]);
     this.syncGrenades([], 0);
     this.scene.remove(pickup);
+    this.setFires([], 0);
+    this.syncWorldExtras([], [], [], 0);
+    this.syncDrones([], 0);
+    const mine = this.propVisuals.findIndex((v) => v.id === mineId);
+    if (mine >= 0) {
+      this.mapGroup.remove(this.propVisuals[mine].group);
+      this.propVisuals.splice(mine, 1);
+    }
     // Not disposed on purpose: releasing the last user of a program deletes
     // it, and the next enemy would compile it again mid-game.
     for (const v of temps) this.scene.remove(v.group);
@@ -786,7 +820,7 @@ export class Renderer {
     this.shellVisuals.clear();
     for (const m of this.flareGlows.values()) this.scene.remove(m);
     this.flareGlows.clear();
-    for (const l of this.flareLights) l.intensity = 0;
+    this.flaresLit = [];
     for (const v of this.pickupVisuals.values()) this.scene.remove(v);
     this.pickupVisuals.clear();
     for (const v of this.powerupVisuals.values()) this.scene.remove(v);
@@ -1051,7 +1085,7 @@ export class Renderer {
     for (const [id, c] of this.smokeClouds) {
       if (c.seen) continue;
       this.scene.remove(c.group);
-      for (const child of c.group.children) (child as THREE.Sprite).material.dispose();
+      // Material not disposed: releasing a program's last user deletes it, and the next one compiles it again mid-fight.
       this.smokeClouds.delete(id);
     }
   }
@@ -1065,11 +1099,19 @@ export class Renderer {
     const strength = (f: FireZone) => Math.max(0, Math.min(1, f.age / 0.25, (F.life - f.age) / F.fade));
     const cx = this.camTarget.x;
     const cz = this.camTarget.z;
-    const near = [...fires].sort((a, b) => Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz));
+    // One pool for burning ground and flares, nearest to the camera first.
+    const glows = [
+      ...fires.map((f) => ({ x: f.x, z: f.z, y: 1.3, color: 0xff7a2a, power: (55 + Math.random() * 12) * strength(f) })),
+      ...this.flaresLit.map((f) => ({ x: f.x, z: f.z, y: 2.4, color: 0xff4a3a, power: (80 + Math.random() * 25) * Math.min(1, f.life / 1.5) })),
+    ].sort((a, b) => Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz));
     this.fireLights.forEach((light, i) => {
-      const f = near[i];
-      light.intensity = f ? (55 + Math.sin(this.time * 23 + i * 7) * 10 + Math.random() * 12) * strength(f) : 0;
-      if (f) light.position.set(f.x, 1.3, f.z);
+      const f = glows[i];
+      light.intensity = f ? f.power + Math.sin(this.time * 23 + i * 7) * 10 * (f.power > 0 ? 1 : 0) : 0;
+      if (f) {
+        light.position.set(f.x, f.y, f.z);
+        light.color.setHex(f.color);
+        light.distance = f.color === 0xff4a3a ? 24 : 13;
+      }
     });
     const live = new Set<number>();
     for (const f of fires) {
@@ -1110,7 +1152,7 @@ export class Renderer {
       if (live.has(id)) continue;
       this.scene.remove(glow);
       glow.geometry.dispose();
-      (glow.material as THREE.Material).dispose();
+      // Material not disposed: releasing a program's last user deletes it, and the next one compiles it again mid-fight.
       this.fireGlows.delete(id);
     }
   }
@@ -1577,6 +1619,16 @@ export class Renderer {
    * Graphics quality. Low drops the pixel density to 1 and turns shadows off.
    * Switching rebuilds every shader once, so it is a settings-menu action.
    */
+  /** Cheaper pixels without touching shaders: render at most `cap` device pixels per CSS pixel. */
+  capPixelRatio(cap: number): boolean {
+    const want = Math.min(this.renderer.getPixelRatio(), cap);
+    if (want >= this.renderer.getPixelRatio()) return false;
+    this.renderer.setPixelRatio(want);
+    this.composer.setPixelRatio(want);
+    this.resize();
+    return true;
+  }
+
   setQuality(quality: 'high' | 'low'): void {
     const high = quality === 'high';
     this.renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 1.75) : 1);
@@ -1597,7 +1649,7 @@ export class Renderer {
   // --------------------------------------------------------------- camera
 
   viewRect(): DOMRect {
-    return this.renderer.domElement.getBoundingClientRect();
+    return this.canvasRect();
   }
 
   /** Off while flying a drone: the view stays centred on it. */
@@ -1611,7 +1663,7 @@ export class Renderer {
 
   /** Cursor position in client pixels; drives the look-ahead. */
   setPointer(clientX: number, clientY: number): void {
-    const rect = this.renderer.domElement.getBoundingClientRect();
+    const rect = this.canvasRect();
     this.pointer.set(
       ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
       ((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1,
@@ -1619,7 +1671,7 @@ export class Renderer {
   }
 
   screenToGround(clientX: number, clientY: number): { x: number; z: number } {
-    const rect = this.renderer.domElement.getBoundingClientRect();
+    const rect = this.canvasRect();
     const ndc = new THREE.Vector2(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
@@ -1635,7 +1687,7 @@ export class Renderer {
   /** World point -> client pixels; `visible` false when behind the camera. */
   project(x: number, y: number, z: number): { x: number; y: number; visible: boolean } {
     this.tmpVec.set(x, y, z).project(this.camera);
-    const rect = this.renderer.domElement.getBoundingClientRect();
+    const rect = this.canvasRect();
     return {
       x: rect.left + ((this.tmpVec.x + 1) / 2) * rect.width,
       y: rect.top + ((1 - this.tmpVec.y) / 2) * rect.height,
@@ -2208,7 +2260,7 @@ function powerupVisual(kind: PowerupKind): THREE.Group {
     icon.add(t, new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), white));
   }
   icon.position.y = 0.8;
-  icon.traverse((o) => ((o as THREE.Mesh).castShadow = true));
+  // Small and glowing: not worth a place in the two shadow passes.
   g.add(icon);
   return g;
 }
@@ -2303,7 +2355,7 @@ function craterMesh(c: CraterDef): THREE.Group {
   );
   bowl.position.set(c.x, 0.02, c.z);
   // A low, uneven lip of thrown-up earth.
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(c.r * 1.02, 0.16, 5, 18), new THREE.MeshStandardMaterial({ color: 0x6a5236, roughness: 1, flatShading: true }));
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(c.r * 1.02, 0.16, 5, 18), CRATER_RIM_MAT);
   rim.rotation.x = Math.PI / 2;
   rim.rotation.z = c.x * 1.7;
   rim.scale.set(1, 1.08, 0.3);
@@ -2329,26 +2381,34 @@ function craterTex(): THREE.Texture {
   return craterTexture;
 }
 
-/** Barbed wire: stakes and coils along the longer side. */
-function wireVisual(hw: number, hh: number): THREE.Group {
-  const g = new THREE.Group();
+/** Barbed wire: stakes and coils along the longer side, one merged mesh. */
+const WIRE_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.6 });
+const CRATER_RIM_MAT = new THREE.MeshStandardMaterial({ color: 0x6a5236, roughness: 1 });
+function wireVisual(hw: number, hh: number): THREE.Mesh {
   const along = hw >= hh;
   const len = (along ? hw : hh) * 2;
-  const metal = new THREE.MeshStandardMaterial({ color: 0x8a8e92, roughness: 0.4, metalness: 0.8 });
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3622, roughness: 0.9 });
+  const parts: THREE.BufferGeometry[] = [];
+  const paint = (geo: THREE.BufferGeometry, color: number) => {
+    const c = new THREE.Color(color);
+    const cols = new Float32Array(geo.attributes.position.count * 3);
+    for (let i = 0; i < geo.attributes.position.count; i++) c.toArray(cols, i * 3);
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    geo.deleteAttribute('uv');
+    parts.push(geo);
+  };
   const coils = Math.max(2, Math.round(len / 0.5));
   for (let i = 0; i < coils; i++) {
     const t = -len / 2 + (i + 0.5) * (len / coils);
-    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.018, 4, 14), metal);
-    coil.position.set(along ? t : 0, 0.34, along ? 0 : t);
-    coil.rotation.y = along ? Math.PI / 2 : 0;
-    coil.rotation.x = (i % 2) * 0.35;
-    g.add(coil);
+    const coil = new THREE.TorusGeometry(0.32, 0.018, 4, 14);
+    coil.rotateX((i % 2) * 0.35);
+    if (along) coil.rotateY(Math.PI / 2);
+    coil.translate(along ? t : 0, 0.34, along ? 0 : t);
+    paint(coil, 0x8a8e92);
   }
   for (const end of [-1, 1]) {
-    const stake = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.8, 0.08), wood);
-    stake.position.set(along ? (end * len) / 2 : 0, 0.4, along ? 0 : (end * len) / 2);
-    g.add(stake);
+    const stake = new THREE.BoxGeometry(0.08, 0.8, 0.08);
+    stake.translate(along ? (end * len) / 2 : 0, 0.4, along ? 0 : (end * len) / 2);
+    paint(stake, 0x4a3622);
   }
-  return g;
+  return new THREE.Mesh(mergeGeometries(parts), WIRE_MAT);
 }

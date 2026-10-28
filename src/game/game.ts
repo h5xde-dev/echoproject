@@ -1130,8 +1130,10 @@ export class Game {
       return;
     }
 
-    const dt = Math.min(0.1, (now - this.lastTime) / 1000);
+    const raw = (now - this.lastTime) / 1000;
+    const dt = Math.min(0.1, raw);
     this.lastTime = now;
+    this.watchFrameRate(raw);
 
     // While paused the world is frozen: the player reads the menu instead of
     // dying in it. The frame is still drawn.
@@ -1141,7 +1143,7 @@ export class Game {
       let steps = 0;
       while (this.accumulator >= CONFIG.tickDt && steps < 5) {
         this.accumulator -= CONFIG.tickDt;
-        this.fixedStep(CONFIG.tickDt);
+        this.safeStep();
         steps++;
       }
       if (steps === 5) this.accumulator = 0;
@@ -1157,6 +1159,47 @@ export class Game {
     this.hud.tick(dt);
     this.input.endFrame();
   };
+
+  /** Too slow for too long: told once per stage (see main.ts, which lowers quality). */
+  onSlowFrames: (() => void) | null = null;
+  private slowWindow: number[] = [];
+  private slowCooldown = 0;
+
+  /**
+   * Average frame time over the last two seconds of play. Tab switches and
+   * pauses are not counted; after a report it waits before judging again, so
+   * the new settings get a fair try.
+   */
+  private watchFrameRate(raw: number): void {
+    if (!this.running || this.paused || document.visibilityState !== 'visible' || raw > 0.25) {
+      this.slowWindow.length = 0;
+      return;
+    }
+    this.slowCooldown = Math.max(0, this.slowCooldown - raw);
+    this.slowWindow.push(raw);
+    if (this.slowWindow.length > 120) this.slowWindow.shift();
+    if (this.slowWindow.length < 120 || this.slowCooldown > 0) return;
+    const avg = this.slowWindow.reduce((a, b) => a + b, 0) / this.slowWindow.length;
+    if (avg > 1 / 42) {
+      this.slowWindow.length = 0;
+      this.slowCooldown = 6;
+      this.onSlowFrames?.();
+    }
+  }
+
+  private tickErrors = 0;
+
+  /**
+   * One tick, fenced: a bug in one corner of the simulation must cost that
+   * tick, not the match (an exception here used to stop every tick after it).
+   */
+  private safeStep(): void {
+    try {
+      this.fixedStep(CONFIG.tickDt);
+    } catch (err) {
+      if (this.tickErrors++ < 5) console.error('tick failed', err);
+    }
+  }
 
   private sampleInput(): void {
     const move = this.input.moveVector();
@@ -1777,7 +1820,8 @@ export class Game {
     } else if (event.id === 'opened') {
       if (event.ownerId === this.localId) {
         this.audio.powerup();
-        this.hud.message(`Сброс вскрыт${event.weapon ? `: ${WEAPONS[event.weapon].name}` : ''} и бонусы`, 'good');
+        const gun = event.weapon ? WEAPONS[event.weapon]?.name : undefined;
+        this.hud.message(`Сброс вскрыт${gun ? `: ${gun}` : ''} и бонусы`, 'good');
       } else {
         const who = this.display.get(event.ownerId ?? -1)?.name ?? 'кто-то';
         this.hud.message(`${who} забрал сброс`, 'info');

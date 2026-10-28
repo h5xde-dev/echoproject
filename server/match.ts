@@ -6,7 +6,7 @@ import type { PlayerClass } from '../src/game/types';
 import type { ClientMessage, HostMessage, RankedMsg } from '../src/net/protocol';
 import { buildSnapshot } from '../src/net/snapshot';
 import { SERVER } from './config';
-import type { PlayerConn } from './conn';
+import { encode, type PlayerConn } from './conn';
 import { saveMatch, userById, type UserRow } from './db';
 import { eloUpdate } from './rating';
 
@@ -65,6 +65,7 @@ export class RankedMatch {
   private last = performance.now();
   private acc = 0;
   private aloneSince = 0;
+  private tickErrors = 0;
 
   constructor(
     entrants: Entrant[],
@@ -162,7 +163,12 @@ export class RankedMatch {
     this.last = now;
     while (this.acc >= CONFIG.tickDt && !this.finished) {
       this.acc -= CONFIG.tickDt;
-      this.step();
+      // A throw here would take the whole server (every match) down with it.
+      try {
+        this.step();
+      } catch (err) {
+        if (this.tickErrors++ < 5) console.error(`match ${this.id}: tick failed`, err);
+      }
     }
   }
 
@@ -186,7 +192,8 @@ export class RankedMatch {
     for (const event of this.sim.drainEvents()) this.broadcast({ t: 'evt', event });
 
     if (this.tick % Math.round(1 / CONFIG.snapshotRate / dt) === 0) {
-      const snap = this.snapshot();
+      // Encoded once for everyone.
+      const snap = encode(this.snapshot());
       for (const seat of this.seats.values()) seat.conn?.sendFast(snap);
     }
 
@@ -280,7 +287,8 @@ export class RankedMatch {
   }
 
   private broadcast(msg: HostMessage): void {
-    for (const seat of this.seats.values()) seat.conn?.send(msg);
+    const text = encode(msg);
+    for (const seat of this.seats.values()) seat.conn?.send(text);
   }
 
   /** Server shutdown: end without rating. */
