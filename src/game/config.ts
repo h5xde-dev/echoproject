@@ -32,17 +32,17 @@ export const CONFIG = {
     /** Drag per second under stick; with the stick released it levels and brakes harder. */
     drag: 1.45,
     brakeDrag: 2.6,
-    maxSpeed: 17,
+    maxSpeed: 18,
     /** Radians per second the nose can turn. */
     yawRate: 4.2,
     /** Hitting a wall faster than this (m/s lost in the impact) breaks it. */
     crashSpeed: 9,
     /** Seconds of flight. */
-    battery: 14,
-    hp: 30,
+    battery: 20,
+    hp: 50,
     radius: 0.4,
     blastRadius: 4.5,
-    blastDamage: 120,
+    blastDamage: 200,
     /** The buzz: how far guards hear it. */
     noise: 14,
     /** A click this soon after launch does not count (the launch key may still be down). */
