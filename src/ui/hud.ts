@@ -260,6 +260,7 @@ export class Hud {
       if (btn && !btn.classList.contains('locked')) this.onBuy(btn.dataset.item as ShopItem);
     });
     must(root, '.gameover-again').addEventListener('click', () => location.reload());
+    must(root, '.gameover-menu').addEventListener('click', () => this.onPauseMenu());
     this.pauseEl = must(root, '.pause');
     must(root, '.pause-resume').addEventListener('click', () => this.onPauseResume());
     must(root, '.pause-menu').addEventListener('click', () => this.onPauseMenu());
