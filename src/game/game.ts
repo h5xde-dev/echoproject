@@ -26,6 +26,8 @@ export interface MatchOptions {
   /** Arena head count including humans (bots fill the rest). */
   fighters?: number;
   difficulty?: Difficulty;
+  /** Network room: bots fill the arena (once two or more players are in). Default on. */
+  bots?: boolean;
 }
 
 export interface DisplayActor {
@@ -378,7 +380,7 @@ export class Game {
     if (opts.difficulty) this.sim.difficulty = opts.difficulty;
     this.sim.addPlayer('local', this.localName, this.localId, this.playerClass, this.playerColor);
     this.tally = { kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 };
-    this.sim.fillBots();
+    this.topUpBots();
     this.setupWorld();
     this.startLoop();
   }
@@ -425,11 +427,23 @@ export class Game {
 
   // ------------------------------------------------------------------ host
 
+  /**
+   * Arena bots. Solo: always. A network room: only if the host left them on,
+   * and only once at least two players are in — a host waiting alone for
+   * friends does not get a bot match started under them.
+   */
+  private topUpBots(): void {
+    let humans = 0;
+    for (const a of this.sim.actors.values()) if (a.kind === 'player') humans++;
+    this.sim.botsAllowed = this.mode !== 'host' || (this.matchOpts.bots !== false && humans >= 2);
+    this.sim.fillBots();
+  }
+
   private onClientHello(name: string, playerId: number, cls: PlayerClass | null, color: number): void {
     this.clientClasses.set(playerId, cls);
     this.clientColors.set(playerId, color);
     this.sim.addPlayer(`c${playerId}`, name, playerId, cls, color);
-    this.sim.fillBots();
+    this.topUpBots();
     this.clientNames.set(playerId, name);
     this.clientInputs.set(String(playerId), {
       input: {
@@ -521,7 +535,7 @@ export class Game {
     for (const [id, name] of this.clientNames) {
       this.sim.addPlayer(`c${id}`, name, id, this.clientClasses.get(id) ?? null, this.clientColors.get(id) ?? -1);
     }
-    this.sim.fillBots();
+    this.topUpBots();
     for (const [id, name] of this.clientNames) this.sendWelcome(id, name);
     this.broadcastLobby();
     this.hud.banner('МАТЧ НАЧАЛСЯ', '');
@@ -529,7 +543,7 @@ export class Game {
 
   private onClientLeave(playerId: number): void {
     this.sim.removeActor(playerId);
-    this.sim.fillBots();
+    this.topUpBots();
     this.clientNames.delete(playerId);
     this.lobby?.ready.delete(playerId);
     this.broadcastLobby();

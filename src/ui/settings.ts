@@ -19,11 +19,13 @@ export interface Settings {
   cls: PlayerClass;
   /** Ring colour picked from the unlocked ones (-1: default). */
   color: number;
+  /** Rooms you host: bots on the arena (with two or more players). */
+  roomBots: boolean;
 }
 
 const KEY = 'echo.settings';
 
-export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault', color: -1 };
+export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault', color: -1, roomBots: true };
 
 export function loadSettings(): Settings {
   try {
@@ -38,6 +40,7 @@ export function loadSettings(): Settings {
       difficulty: s.difficulty === 'easy' || s.difficulty === 'hard' ? s.difficulty : 'normal',
       cls: s.cls === 'scout' || s.cls === 'medic' || s.cls === 'engineer' ? s.cls : 'assault',
       color: typeof s.color === 'number' ? s.color : -1,
+      roomBots: typeof s.roomBots === 'boolean' ? s.roomBots : true,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

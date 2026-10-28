@@ -240,6 +240,8 @@ export class Sim {
   bulletSeq = 0;
   /** Arena head count; bots fill the places humans leave free. */
   fighters: number = CONFIG.dm.fighters;
+  /** Off: no bots at all (a network room waiting for a second player, or bots switched off). */
+  botsAllowed = true;
   /** Competitive rounds. */
   round = 0;
   roundPhase: RoundPhase = 'freeze';
@@ -521,7 +523,7 @@ export class Sim {
       if (a.kind === 'player') humans++;
       else bots++;
     }
-    const want = Math.max(0, this.fighters - humans);
+    const want = this.botsAllowed ? Math.max(0, this.fighters - humans) : 0;
     while (bots < want) {
       const id = this.nextActorId++;
       const team = this.teams ? this.teamFor(false) : -1;

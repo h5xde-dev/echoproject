@@ -1709,6 +1709,25 @@ for (const info of ARENAS) {
     `labirint: ${map.trenches?.length} trench strips, ${map.craters?.length} craters, everything reachable`);
 }
 
+// Network rooms: bots only when allowed (the host allows them from two players on).
+{
+  const s = new Sim(buildArena('sklad', 6161, 'dm'));
+  s.fighters = 6;
+  s.addPlayer('local', 'хост', 1);
+  s.botsAllowed = false;
+  s.fillBots();
+  const bots = () => [...s.actors.values()].filter((a) => a.kind === 'enemy').length;
+  check(bots() === 0, 'a room with bots held back: none');
+  s.addPlayer('c2', 'гость', 2);
+  s.botsAllowed = true;
+  s.fillBots();
+  check(bots() === 4, `two players in: bots fill to six (${bots()})`);
+  s.removeActor(2);
+  s.botsAllowed = false;
+  s.fillBots();
+  check(bots() === 0, 'back to one player: the bots leave');
+}
+
 // Progress between matches.
 {
   check(levelOf(0).level === 1 && levelOf(399).level === 1 && levelOf(400).level === 2 && levelOf(1000).level === 3, 'levels: 400 xp for the first, 200 more each after');

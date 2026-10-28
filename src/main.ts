@@ -81,6 +81,7 @@ function selectMode(mode: GameMode): void {
   arenaBox.classList.toggle('hidden', !info.arena);
   // Waves bring their own guards: the head count does not apply.
   fightersRange.closest('.fighters')?.classList.toggle('hidden', mode === 'waves');
+  document.querySelector('.room-bots')?.classList.toggle('hidden', mode === 'waves');
   btnSolo.querySelector('.btn-desc')!.textContent = SOLO_DESC[mode];
   if (info.arena) drawPreview();
 }
@@ -283,6 +284,14 @@ clsButtons.forEach((b) =>
 );
 showClass();
 
+// Rooms you host: bots on or off (on: they join once a second player is in).
+const roomBotsInput = must<HTMLInputElement>('.room-bots-input');
+roomBotsInput.checked = settings.roomBots;
+roomBotsInput.addEventListener('change', () => {
+  settings.roomBots = roomBotsInput.checked;
+  saveSettings(settings);
+});
+
 // Rank and ring colours: level from banked experience, colours it unlocks.
 const ringBox = must<HTMLElement>('.ring-colors');
 function refreshRank(): void {
@@ -332,7 +341,7 @@ btnHost.addEventListener('click', async () => {
   btnHost.disabled = true;
   btnHost.querySelector('.btn-title')!.textContent = 'СОЗДАЁМ...';
   try {
-    const code = await game.startHost(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty });
+    const code = await game.startHost(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty, bots: settings.roomBots });
     roomCodeValue.textContent = code;
     roomResult.classList.remove('hidden');
     hud.showRoomCode(code);
