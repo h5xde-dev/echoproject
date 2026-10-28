@@ -66,7 +66,9 @@ export class PlayerConn {
         /* fall through */
       }
     }
-    if (this.ws.readyState === this.ws.OPEN) this.ws.send(text);
+    // Snapshots are latest-wins. Do not let a slow VPN client build an
+    // unbounded TCP queue of obsolete frames behind the current one.
+    if (this.ws.readyState === this.ws.OPEN && this.ws.bufferedAmount < 128 * 1024) this.ws.send(text);
   }
 
   close(): void {

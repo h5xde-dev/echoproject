@@ -24,6 +24,8 @@ export class ServerLink implements DataChannelLike {
   private ws: WebSocket;
   private pc: RTCPeerConnection | null = null;
   private fast: RTCDataChannel | null = null;
+  private fallbackInput: string | null = null;
+  private fallbackInputTimer: number | null = null;
   private handlers: Record<string, Handler[]> = {};
 
   constructor(url: string) {
@@ -68,11 +70,31 @@ export class ServerLink implements DataChannelLike {
         /* fall back to the WebSocket */
       }
     }
+    if (msg.t === 'input' && !hasOneShot(msg)) {
+      // VPNs and restrictive networks often stay on WebSocket. Coalesce
+      // steady movement updates so TCP cannot queue stale inputs behind them.
+      this.fallbackInput = text;
+      if (this.fallbackInputTimer === null) {
+        this.fallbackInputTimer = window.setInterval(() => this.flushFallbackInput(), 33);
+      }
+      return;
+    }
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(text);
+  }
+
+  private flushFallbackInput(): void {
+    if (!this.fallbackInput) return;
+    if (this.ws.readyState === WebSocket.OPEN && this.ws.bufferedAmount < 128 * 1024) {
+      this.ws.send(this.fallbackInput);
+      this.fallbackInput = null;
+    }
   }
 
   close(): void {
     this.open = false;
+    if (this.fallbackInputTimer !== null) window.clearInterval(this.fallbackInputTimer);
+    this.fallbackInputTimer = null;
+    this.fallbackInput = null;
     this.closeRtc();
     this.ws.close();
   }
