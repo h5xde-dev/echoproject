@@ -43,6 +43,11 @@ export interface ArenaInfo {
   name: string;
   theme: RoomTheme;
   rows: string[];
+  /**
+   * false: `rows` are the whole map as drawn (small duel arenas), not the
+   * left half plus centre to be mirrored.
+   */
+  mirror?: boolean;
 }
 
 export const ARENAS: ArenaInfo[] = [
@@ -50,27 +55,29 @@ export const ARENAS: ArenaInfo[] = [
     id: 'duel-yard',
     name: 'Дуэльный двор',
     theme: 'yard',
+    // Drawn whole: a compact arena for one on one.
+    mirror: false,
     rows: [
       '#####################',
       '#S....#.....#....S..#',
-      '#.....#.....#.......#',
+      '#.....#..z..#.......#',
       '#..Y..#..K..#..Y....#',
       '#.....#.....#.......#',
       '#..####.....####....#',
-      '#...................#',
+      '#...i...........i...#',
       '#...Y...==...Y......#',
       '#.......==..........#',
       '#..K....==....K.....#',
-      '#...................#',
+      '#..g......+......g..#',
       '#......Y....Y.......#',
       '#....####.....####..#',
-      '#.....#.....#.......#',
+      '#.....#..u..#.......#',
       '#..Y..#..K..#..Y....#',
       '#.....#.....#.......#',
       '#S....#.....#....S..#',
-      '#...................#',
+      '#....a.........a....#',
       '#..O.......O........#',
-      '#........L..........#',
+      '#....G...L..........#',
       '#####################',
     ],
   },
@@ -78,27 +85,29 @@ export const ARENAS: ArenaInfo[] = [
     id: 'duel-trenches',
     name: 'Траншея 1v1',
     theme: 'field',
+    // Drawn whole: a compact arena for one on one.
+    mirror: false,
     rows: [
       '#####################',
       '#S..=......=.....S..#',
       '#...=..K...=..K.....#',
       '#...======.=........#',
-      '#..........=........#',
+      '#..a.......=...z....#',
       '#..Y.......=....Y...#',
       '#..Y...o...=....Y...#',
       '#......=====........#',
-      '#...................#',
+      '#..i......+......i..#',
       '#..K......O......K..#',
-      '#...................#',
+      '#...g...........g...#',
       '#......=====........#',
       '#..Y...o...=....Y...#',
       '#..Y.......=....Y...#',
-      '#..........=........#',
+      '#..a.......=...u....#',
       '#...======.=........#',
       '#...=..K...=..K.....#',
       '#S..=......=.....S..#',
-      '#...................#',
-      '#........L..........#',
+      '#........WWW........#',
+      '#.....G..L..........#',
       '#####################',
     ],
   },
@@ -423,6 +432,7 @@ const INTERACT_CHARS: Record<string, InteractKind> = { G: 'switch', O: 'ammo', '
 export function arenaGrid(info: ArenaInfo): string[] {
   return info.rows.map((r) => {
     if (r.length !== 21) throw new Error(`arena ${info.id}: row must be 21 chars: "${r}"`);
+    if (info.mirror === false) return r;
     const left = r.slice(0, 20);
     return left + r[20] + [...left].reverse().join('');
   });

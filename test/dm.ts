@@ -27,7 +27,8 @@ for (const info of ARENAS) {
   const unreachable = targets.filter((t) => !sim.nav.find(from.x, from.z, t.x, t.z));
   check(unreachable.length === 0, `${info.id}: ${targets.length} spawns/items reachable` + (unreachable.length ? ` — unreachable ${JSON.stringify(unreachable.map((t) => [t.x, t.z]))}` : ''));
   if (unreachable.length) console.log(info.id + '\n' + sim.nav.dump());
-  check(map.spawns.length >= 6, `${info.id}: ${map.spawns.length} spawn points`);
+  // Duel arenas are drawn whole and small: four spawns are plenty for one on one.
+  check(map.spawns.length >= (info.mirror === false ? 4 : 6), `${info.id}: ${map.spawns.length} spawn points`);
 
   for (const mode of ['dm', 'gun', 'comp', 'tdm', 'ctf', 'bomb'] as GameMode[]) {
     const tag = `${info.id}/${mode}`;
@@ -1473,7 +1474,7 @@ for (const info of ARENAS) {
   const sim = new Sim(map);
   const from = map.spawns[0];
   const lost = objs.filter((o) => !sim.nav.find(from.x, from.z, o.x, o.z));
-  check(fresh >= 2 && objs.length >= 4 && lost.length === 0, `${info.id}: ${fresh} new powerups, ${objs.length} objects, all reachable`);
+  check(fresh >= 2 && objs.length >= (info.mirror === false ? 3 : 4) && lost.length === 0, `${info.id}: ${fresh} new powerups, ${objs.length} objects, all reachable`);
 }
 
 // Objects used with E.
