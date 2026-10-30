@@ -160,6 +160,8 @@ export class Game {
   /** Client: the room code joined, reused to reconnect. */
   private joinCode = '';
   private reconnecting = false;
+  /** Resolves only after the client has received a map and initialized its renderer. */
+  private welcomeWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null;
   private clientNames = new Map<number, string>();
   private frameMove = { x: 0, z: 0 };
   /** Shift walks, C crouches (crouch wins when both are held). */
@@ -275,7 +277,18 @@ export class Game {
     this.ranked = false;
     this.localName = name;
     this.joinCode = code;
-    await this.connectToHost();
+    const welcome = new Promise<void>((resolve, reject) => {
+      this.welcomeWaiter = { resolve, reject };
+    });
+    try {
+      await this.connectToHost();
+      await Promise.race([
+        welcome,
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('Хост не прислал карту комнаты.')), 12000)),
+      ]);
+    } finally {
+      this.welcomeWaiter = null;
+    }
   }
 
   /**
@@ -596,6 +609,7 @@ export class Game {
     this.onSnapshot(msg.snapshot);
     this.hud.message(this.ranked ? 'Рейтинговый бой: боты отключены' : 'Соединение установлено', 'good');
     this.onMatchStart?.();
+    this.welcomeWaiter?.resolve();
   }
 
   private onSnapshot(msg: SnapshotMsg): void {
