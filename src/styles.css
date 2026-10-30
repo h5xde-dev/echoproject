@@ -903,6 +903,106 @@ body {
   .gameover-scores { max-height: 28vh; overflow: auto; }
 }
 
+/* Readability pass: keep the tactical HUD legible over both dark floors and bright FX. */
+.crosshair {
+  z-index: 20;
+  pointer-events: none;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 1)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.95));
+}
+
+.crosshair::before {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  border: 1px solid rgba(4, 8, 12, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 246, 230, 0.45), 0 0 8px rgba(0, 0, 0, 0.8);
+}
+
+.crosshair i {
+  background: #fff8eb;
+  box-shadow: 0 0 0 1px rgba(5, 8, 12, 0.95), 0 0 7px rgba(255, 248, 235, 0.55);
+}
+
+.crosshair i:nth-child(1),
+.crosshair i:nth-child(2) {
+  width: 2px;
+  height: 10px;
+}
+
+.crosshair i:nth-child(3),
+.crosshair i:nth-child(4) {
+  width: 10px;
+  height: 2px;
+}
+
+.crosshair b {
+  width: 5px;
+  height: 5px;
+  background: #ffd19b;
+  border: 1px solid #111820;
+  box-shadow: 0 0 0 1px rgba(255, 209, 155, 0.75), 0 0 8px rgba(255, 176, 102, 0.9);
+}
+
+.panel {
+  padding: 12px 15px;
+}
+
+.panel-title,
+.field-label,
+.field span {
+  font-size: 11px;
+}
+
+.squad-row,
+.feed-line {
+  font-size: 13px;
+}
+
+.objective-room {
+  font-size: 19px;
+}
+
+.objective-text {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.panel-hints {
+  font-size: 12px;
+  padding: 9px 16px;
+}
+
+.btn,
+.mode-btn,
+.arena-btn,
+.diff-btn {
+  min-height: 48px;
+}
+
+.btn-title {
+  font-size: 15px;
+}
+
+.btn-desc,
+.mode-btn .btn-desc {
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .panel-topleft,
+  .panel-topright,
+  .panel-bottomleft,
+  .panel-bottomright {
+    transform: scale(0.92);
+    transform-origin: top left;
+  }
+
+  .panel-bottomright {
+    transform-origin: bottom right;
+  }
+}
+
 /* ---------------------------------------------------------- mode select */
 .mode-select { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
 .mode-btn, .arena-btn, .diff-btn {
