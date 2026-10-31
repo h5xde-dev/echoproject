@@ -211,6 +211,8 @@ export const CONFIG = {
   respawnDelay: 5.0,
 
   powerups: {
+    /** Drones carried at most (powerups and supply drops). */
+    maxDrones: 6,
     medkitHeal: 50,
     armorAmount: 50,
     maxArmor: 100,

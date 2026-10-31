@@ -7,7 +7,7 @@
   --accent: #3fd6c8;
   --accent-warm: #ffb066;
   --danger: #e05268;
-  --font: 'Rajdhani', 'Eurostile', 'Bahnschrift', 'Segoe UI', system-ui, sans-serif;
+  --font: 'Oswald', 'Bahnschrift', 'Segoe UI', system-ui, sans-serif;
   --mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 }
 
@@ -28,8 +28,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* The system pointer hides only while aiming over the game; menus, pause,
+   results, help, lobby and the shop keep it. */
 body {
+  cursor: default;
+}
+body:has(.hud:not(.hidden)) #viewport,
+.hud {
   cursor: none;
+}
+.hud .pause,
+.hud .gameover,
+.hud .panel-lobby,
+.hud .panel-room,
+.hud .shop,
+.help {
+  cursor: default;
 }
 
 #app {
@@ -42,16 +56,6 @@ body {
   overflow: hidden;
 }
 
-/* Keep the game surface locked to the browser viewport on desktop displays. */
-@media (min-width: 700px) {
-  #app,
-  #viewport,
-  #viewport canvas,
-  .hud,
-  .menu {
-    min-width: 960px;
-  }
-}
 
 #viewport {
   position: absolute;
@@ -259,6 +263,8 @@ body {
 
 .minimap {
   display: block;
+  width: 184px;
+  height: 184px;
   border: 1px solid rgba(120, 190, 220, 0.1);
   image-rendering: crisp-edges;
 }
@@ -412,49 +418,58 @@ body {
 
 /* Crosshair */
 .crosshair {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   width: 26px;
   height: 26px;
+  z-index: 40;
+  pointer-events: none;
   will-change: transform;
+}
+/* Only while aiming: not in the menu, the pause, the results or the shop. */
+.hud.hidden ~ .crosshair,
+.hud.shopping ~ .crosshair,
+.hud:has(.pause.visible, .gameover.visible) ~ .crosshair,
+body:has(.help:not(.hidden)) .crosshair {
+  display: none;
 }
 
 .crosshair i {
   position: absolute;
-  background: rgba(255, 240, 220, 0.85);
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+  background: rgba(255, 240, 220, 0.95);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.9);
 }
 
 .crosshair i:nth-child(1) {
   top: 0;
   left: 50%;
-  width: 1px;
-  height: 8px;
+  width: 2px;
+  height: 9px;
   transform: translateX(-50%);
 }
 
 .crosshair i:nth-child(2) {
   bottom: 0;
   left: 50%;
-  width: 1px;
-  height: 8px;
+  width: 2px;
+  height: 9px;
   transform: translateX(-50%);
 }
 
 .crosshair i:nth-child(3) {
   left: 0;
   top: 50%;
-  height: 1px;
-  width: 8px;
+  height: 2px;
+  width: 9px;
   transform: translateY(-50%);
 }
 
 .crosshair i:nth-child(4) {
   right: 0;
   top: 50%;
-  height: 1px;
-  width: 8px;
+  height: 2px;
+  width: 9px;
   transform: translateY(-50%);
 }
 
@@ -462,8 +477,9 @@ body {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 2px;
-  height: 2px;
+  width: 3px;
+  height: 3px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85);
   background: var(--accent-warm);
   transform: translate(-50%, -50%);
   border-radius: 50%;
@@ -1121,7 +1137,6 @@ kbd {
 .shop-item.locked { opacity: 0.35; cursor: not-allowed; }
 .shop-item.locked em { color: var(--danger); }
 .shop-foot { margin-top: 10px; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.06em; }
-.hud.shopping .crosshair { opacity: 0; }
 
 .hint-comp { display: none; }
 .hud.mode-comp .hint-comp { display: inline; }
@@ -1264,3 +1279,70 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
 .room-bots input { margin-top: 3px; accent-color: var(--accent); }
 .room-bots small { display: block; color: var(--ink-dim); font-size: 11px; letter-spacing: 0.02em; }
 .room-bots.hidden { display: none; }
+
+/* ============================================================ UI scale */
+/* One scale for the HUD and the menus (main.ts sets --ui): 1 at 1600x900,
+   larger on big monitors, smaller on small laptops. Full-screen layers
+   (plates, damage arcs, overlays) stay unscaled; what they hold is scaled. */
+:root { --ui: 1; }
+.hud > .panel,
+.hud > .feed,
+.hud > .killfeed,
+.hud > .respawn-banner,
+.hud > .banner,
+.hud > .ladder,
+.hud > .shop,
+.hud > .scoreboard,
+.hud > .status-line,
+.hud > .spectate,
+.hud .gameover > *,
+.hud .pause > *,
+.menu-card,
+.help-card {
+  zoom: var(--ui);
+}
+.menu-card { max-height: calc((100vh - 40px) / var(--ui)); }
+.menu-card.wide { width: min(980px, calc((100vw - 32px) / var(--ui))); }
+.help-card { max-height: min(calc(86vh / var(--ui)), 900px); width: min(980px, calc((100vw - 32px) / var(--ui))); }
+
+/* The left column (squad, room code, lobby) stacks instead of overlapping as
+   the squad grows; the feed sits under the minimap, not on it. */
+.hud > .panel-room { top: auto; }
+.hud > .panel-lobby { top: auto; }
+.hud .left-stack {
+  position: absolute; top: 18px; left: 18px;
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  pointer-events: none; zoom: var(--ui);
+}
+.hud .left-stack > .panel { position: static; zoom: 1; }
+.hud .left-stack > .panel-room,
+.hud .left-stack > .panel-lobby { pointer-events: auto; }
+.hud > .feed { top: auto; }
+.hud .right-stack {
+  position: absolute; top: 18px; right: 18px;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  pointer-events: none; zoom: var(--ui);
+}
+.hud .right-stack > .panel,
+.hud .right-stack > .feed { position: static; zoom: 1; }
+/* Two lines of status under the objective panel, not one on top of the other. */
+.hud > .ladder { top: 126px; }
+.panel-hints { white-space: normal; flex-wrap: wrap; justify-content: center; max-width: min(760px, calc(100vw / var(--ui) - 640px)); }
+@media (max-width: 1280px) { .panel-hints { display: none; } }
+
+/* A powerup just taken: name and effect, in the powerup's colour. */
+.pickup-toast {
+  position: absolute; left: 50%; top: 68%; transform: translate(-50%, 8px);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 16px; background: rgba(6, 9, 14, 0.72); border-bottom: 2px solid var(--c, var(--accent));
+  opacity: 0; transition: opacity 180ms, transform 180ms; pointer-events: none; zoom: var(--ui);
+}
+.pickup-toast.visible { opacity: 1; transform: translate(-50%, 0); }
+.pickup-toast b { color: var(--c, var(--accent)); font-size: 20px; letter-spacing: 0.16em; text-transform: uppercase; text-shadow: 0 0 14px rgba(0, 0, 0, 0.9); }
+.pickup-toast span { color: var(--ink); font-size: 12px; letter-spacing: 0.06em; }
+
+/* Powerups on the floor: what lies there, in its colour. */
+.plate.item { gap: 0; }
+.plate.item .plate-bar { display: none; }
+.plate.item .plate-name { display: block; color: var(--c); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 1px 6px; background: rgba(4, 6, 10, 0.6); border-left: 2px solid var(--c); }
+.plate, .plate.item .plate-name { font-size: calc(11px * var(--ui)); }

@@ -157,7 +157,7 @@ export class Renderer {
     this.shadowsEnabled = opts.shadows !== false;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    this.renderer.setPixelRatio(this.pixelRatio(container.clientWidth, container.clientHeight));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = this.shadowsEnabled;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -300,10 +300,28 @@ export class Renderer {
     return this.rectCache;
   }
 
+  /** Device pixels per CSS pixel the quality setting and the slow-frame fallback allow. */
+  private prCap = 1.75;
+
+  /**
+   * The density to render at: the screen's own (it changes when the window moves
+   * between monitors), capped, and never more than ~4 MP in all, so a 4K or
+   * ultrawide screen costs about what a 1440p one does.
+   */
+  private pixelRatio(w: number, h: number): number {
+    const budget = Math.sqrt(4.2e6 / Math.max(1, w * h));
+    return Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.prCap, budget));
+  }
+
   resize(): void {
     this.rectCache = null;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
+    const want = this.pixelRatio(w, h);
+    if (want !== this.renderer.getPixelRatio()) {
+      this.renderer.setPixelRatio(want);
+      this.composer.setPixelRatio(want);
+    }
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
     const pr = this.renderer.getPixelRatio();
@@ -823,7 +841,10 @@ export class Renderer {
     this.flaresLit = [];
     for (const v of this.pickupVisuals.values()) this.scene.remove(v);
     this.pickupVisuals.clear();
-    for (const v of this.powerupVisuals.values()) this.scene.remove(v);
+    for (const v of this.powerupVisuals.values()) {
+      this.scene.remove(v);
+      disposeVisual(v);
+    }
     this.powerupVisuals.clear();
     this.lamps = [];
     this.bushVisuals = [];
@@ -910,6 +931,7 @@ export class Renderer {
     for (const [id, v] of this.powerupVisuals) {
       if (seen.has(id)) continue;
       this.scene.remove(v);
+      disposeVisual(v);
       this.powerupVisuals.delete(id);
     }
   }
@@ -1621,17 +1643,15 @@ export class Renderer {
    */
   /** Cheaper pixels without touching shaders: render at most `cap` device pixels per CSS pixel. */
   capPixelRatio(cap: number): boolean {
-    const want = Math.min(this.renderer.getPixelRatio(), cap);
-    if (want >= this.renderer.getPixelRatio()) return false;
-    this.renderer.setPixelRatio(want);
-    this.composer.setPixelRatio(want);
+    const before = this.renderer.getPixelRatio();
+    this.prCap = Math.min(this.prCap, cap);
     this.resize();
-    return true;
+    return this.renderer.getPixelRatio() < before;
   }
 
   setQuality(quality: 'high' | 'low'): void {
     const high = quality === 'high';
-    this.renderer.setPixelRatio(high ? Math.min(window.devicePixelRatio, 1.75) : 1);
+    this.prCap = high ? 1.75 : 1;
     if (this.shadowsEnabled !== high) {
       this.shadowsEnabled = high;
       this.renderer.shadowMap.enabled = high;
@@ -1642,7 +1662,6 @@ export class Renderer {
         for (const mat of Array.isArray(m) ? m : [m]) mat.needsUpdate = true;
       });
     }
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.resize();
   }
 
@@ -1980,18 +1999,20 @@ const FLOOR_STYLE: Record<RoomTheme, { tile: number; color: number; tex: 'asphal
   bunker: { tile: 3, color: 0x6c7670, tex: 'concrete' },
 };
 
+/** Far apart in hue and lightness, so two kinds never read as one at a glance. */
 export const POWERUP_COLOR: Record<PowerupKind, number> = {
-  medkit: 0x5dff8a,
-  armor: 0x52a8ff,
-  damage: 0xff4a4a,
-  speed: 0xffe04a,
-  rapid: 0xff9a2a,
-  nv: 0x7dff6a,
-  ammo: 0xd8c27a,
-  regen: 0x3fffc8,
-  overshield: 0x8fd8ff,
-  stealth: 0xb48aff,
-  radar: 0x4affe0,
+  medkit: 0x4dff7a,
+  armor: 0x3a6bff,
+  damage: 0xff2a4a,
+  speed: 0xffd21a,
+  rapid: 0xff6a1a,
+  nv: 0xd8ff4a,
+  ammo: 0xc8a060,
+  regen: 0x2affd4,
+  overshield: 0xe2f4ff,
+  stealth: 0xb06aff,
+  radar: 0x3ac8ff,
+  drone: 0xff4ad8,
 };
 
 /** Painted lines: warehouse lanes, parking bays in yards, hazard edges in bunkers. */
@@ -2197,6 +2218,20 @@ function makeTileTexture(): THREE.Texture {
   return tileTex;
 }
 
+/** One glow texture for every powerup pad (it is the same picture, tinted by the material). */
+let powerupGlow: THREE.Texture | null = null;
+const POWERUP_GLOW = (): THREE.Texture => (powerupGlow ??= makeGlowTexture());
+
+/** Frees what powerupVisual made (the shared glow texture stays). */
+function disposeVisual(g: THREE.Object3D): void {
+  g.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.geometry.dispose();
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.dispose();
+  });
+}
+
 /** A powerup: glowing pad plus a spinning symbol in its colour. */
 function powerupVisual(kind: PowerupKind): THREE.Group {
   const color = POWERUP_COLOR[kind];
@@ -2204,7 +2239,7 @@ function powerupVisual(kind: PowerupKind): THREE.Group {
   const pad = new THREE.Mesh(
     new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({
-      map: makeGlowTexture(),
+      map: POWERUP_GLOW(),
       color,
       transparent: true,
       opacity: 0.7,
@@ -2254,6 +2289,35 @@ function powerupVisual(kind: PowerupKind): THREE.Group {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 6), white);
     mast.position.y = -0.2;
     icon.add(dish, mast);
+  } else if (kind === 'rapid') {
+    // Two chevrons pointing ahead: faster.
+    for (const off of [-0.12, 0.12]) {
+      const c = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.2, 3), mat);
+      c.rotation.z = -Math.PI / 2;
+      c.position.x = off;
+      icon.add(c);
+    }
+  } else if (kind === 'nv') {
+    // Goggles: two tubes side by side.
+    for (const off of [-0.13, 0.13]) {
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.3, 12), mat);
+      tube.rotation.x = Math.PI / 2;
+      tube.position.x = off;
+      icon.add(tube);
+    }
+    icon.add(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.08, 0.12), white));
+  } else if (kind === 'drone') {
+    // A quadcopter from above: an X frame and four rotors.
+    for (const r of [Math.PI / 4, -Math.PI / 4]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.05, 0.07), white);
+      arm.rotation.y = r;
+      icon.add(arm);
+    }
+    for (const [x, z] of [[0.22, 0.22], [-0.22, 0.22], [0.22, -0.22], [-0.22, -0.22]]) {
+      const rotor = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.03, 14), mat);
+      rotor.position.set(x, 0.04, z);
+      icon.add(rotor);
+    }
   } else {
     const t = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.08, 8, 20), mat);
     t.rotation.x = Math.PI / 2;

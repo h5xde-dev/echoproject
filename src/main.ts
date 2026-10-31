@@ -145,6 +145,16 @@ const game = new Game(viewport, hud);
 
 window.addEventListener('mousemove', (e) => hud.moveCrosshair(e.clientX, e.clientY));
 
+// One UI scale for the HUD and the menus: 1 at 1600x900, up to 2.2 on 4K, down
+// to 0.8 on small laptops. CSS reads --ui (styles.css, "UI scale").
+function applyUiScale(): void {
+  const scale = Math.min(2.2, Math.max(0.8, Math.min(innerWidth / 1600, innerHeight / 900)));
+  document.documentElement.style.setProperty('--ui', scale.toFixed(3));
+  hud.uiScale = scale;
+}
+applyUiScale();
+window.addEventListener('resize', applyUiScale);
+
 // The browser only allows audio to start after a user gesture.
 const unlockAudio = () => game.audio.init();
 window.addEventListener('pointerdown', unlockAudio, { once: true });
@@ -240,7 +250,8 @@ applySettings();
 // remembered (the shadows one through the quality setting) and said once.
 let lightened = false;
 game.onSlowFrames = () => {
-  if (!lightened && game.renderer.capPixelRatio(1)) {
+  // At density 1 already (a big screen), go below it: still sharper than no shadows.
+  if (!lightened && (game.renderer.capPixelRatio(1) || game.renderer.capPixelRatio(0.75))) {
     lightened = true;
     hud.message('Игра тормозит — снижено разрешение отрисовки', 'warn');
     return;
@@ -430,7 +441,7 @@ game.onQueue = (msg) => {
   if (msg.state === 'queue') {
     showQueue(`${msg.players ?? 1} / ${msg.need ?? 2}`, msg.startIn !== undefined && msg.startIn >= 0 ? `Бой начнётся через ${msg.startIn} с — ждём ещё соперников.` : 'Ждём соперников. Deathmatch на сервере: без ботов, итог меняет рейтинг.');
   } else if (msg.state === 'found') {
-    showQueue('БОЙ НАЙДЕН', `${msg.players ?? 2} игрок�� · загружаем арену…`);
+    showQueue('БОЙ НАЙДЕН', `${msg.players ?? 2} игроков · загружаем арену…`);
   } else {
     showError(msg.text ?? 'Очередь прервана');
     game.returnToMenu();

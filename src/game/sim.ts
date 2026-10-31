@@ -1433,6 +1433,11 @@ export class Sim {
       case 'radar':
         actor.buffs.radar = P.radarTime;
         return true;
+      case 'drone':
+        // Anyone can fly one (X), not only the engineer.
+        if (actor.drones >= P.maxDrones) return false;
+        actor.drones++;
+        return true;
     }
   }
 
@@ -3524,7 +3529,7 @@ export class Sim {
       // A drone is not a gun: it goes with the drones carried (equipping it threw
       // inside the tick and froze the match for everyone).
       if (item === 'drone') {
-        actor.drones = Math.min(6, actor.drones + 2);
+        actor.drones = Math.min(CONFIG.powerups.maxDrones, actor.drones + 2);
       } else if (item) {
         weapon = item;
         this.equip(actor, weapon);
@@ -3534,7 +3539,7 @@ export class Sim {
     let given = 0;
     for (let tries = 0; tries < 12 && given < 2; tries++) if (this.applyPowerup(actor, pickPowerup(this.rng.next()))) given++;
     actor.grenades = Math.min(CONFIG.grenade.max, actor.grenades + 1);
-    this.events.push({ type: 'drop', id: 'opened', ownerId: actor.id, x: d.x, z: d.z, weapon });
+    this.events.push({ type: 'drop', id: 'opened', ownerId: actor.id, x: d.x, z: d.z, weapon, text: weapon ? undefined : 'drones' });
   }
 
   /** Kills in a row: a radar sweep at 3, a mortar strike at 5 (and every 5 after). */

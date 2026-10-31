@@ -4,8 +4,9 @@ import { clamp } from '../core/math';
 import { Net, type NetClientHandlers } from '../net/net';
 import { buildSnapshot, roundStateOf, scoreRows, waveStateOf } from '../net/snapshot';
 import type { ActorState, EventMsg, HostMessage, LobbyMsg, MatchmakingMsg, RankedMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '../net/protocol';
-import { Renderer } from '../render/renderer';
+import { POWERUP_COLOR, Renderer } from '../render/renderer';
 import { buildArena } from './arenas';
+import { POWERUP_INFO } from './info';
 import { updateBullets, type BulletActor, type BulletCtx } from './bullets';
 import { CONFIG, COLORS } from './config';
 import { generateMap } from './levelgen';
@@ -110,6 +111,7 @@ const POWERUP_TEXT: Record<PowerupKind, string> = {
   overshield: 'Сверхщит +' + CONFIG.powerups.overshield,
   stealth: 'Маскировка',
   radar: 'Радар: враги на карте',
+  drone: 'FPV-дрон +1 — запуск на X',
 };
 
 /** Error below this is smoothed out; above it the player snaps (teleport). */
@@ -481,7 +483,8 @@ export class Game {
       seed: this.map.seed,
       map: this.map,
       snapshot: this.buildSnapshot(),
-      colors: { [String(playerId)]: PLAYER_COLORS[(playerId - 1) % PLAYER_COLORS.length] },
+      // The ring colour the player picked, not a slot colour.
+      colors: { [String(playerId)]: this.clientColors.get(playerId) ?? PLAYER_COLORS[(playerId - 1) % PLAYER_COLORS.length] },
     };
     this.net.sendTo(playerId, welcome);
   }
@@ -584,11 +587,13 @@ export class Game {
     this.matchMode = msg.map.mode ?? 'coop';
     this.localId = msg.playerId;
     this.sim = new Sim(this.map);
-    const actor = this.sim.addPlayer('local', this.localName, msg.playerId);
     const me = msg.snapshot.actors.find((a) => a.id === msg.playerId);
+    // The class changes the predicted speed (scout crouch), so the mirror needs it.
+    const actor = this.sim.addPlayer('local', this.localName, msg.playerId, me?.cls ?? null);
     if (me) {
       actor.x = me.x;
       actor.z = me.z;
+      actor.weapon = me.weapon;
     }
     this.mirrorPrev = { x: actor.x, z: actor.z };
     this.setupWorld();
@@ -665,6 +670,9 @@ export class Game {
       // Carrying a flag or crawling downed slows you: prediction has to know.
       mirror.carrying = local.carrying ?? -1;
       mirror.downed = local.downed ?? false;
+      // So does the gun in hand (knife faster, flamer slower) and the class.
+      mirror.weapon = local.weapon;
+      if (local.cls !== undefined) mirror.cls = local.cls;
       this.sim.applySpeed(mirror);
       const flying = (local.piloting ?? -1) >= 0;
       for (const p of this.pendingInputs) {
@@ -871,7 +879,10 @@ export class Game {
         this.renderer.powerupTaken(event.x ?? 0, event.z ?? 0, event.powerup ?? 'medkit');
         if (event.ownerId === this.localId) {
           this.audio.powerup();
-          this.hud.message(POWERUP_TEXT[event.powerup ?? 'medkit'], 'good');
+          const kind = event.powerup ?? 'medkit';
+          this.hud.message(POWERUP_TEXT[kind], 'good');
+          // Hard to miss: the name in the middle of the screen for a moment.
+          this.hud.pickupToast(POWERUP_INFO[kind].name, POWERUP_INFO[kind].desc, POWERUP_COLOR[kind]);
         }
         break;
       case 'roomClear':
@@ -1834,7 +1845,7 @@ export class Game {
     } else if (event.id === 'opened') {
       if (event.ownerId === this.localId) {
         this.audio.powerup();
-        const gun = event.weapon ? WEAPONS[event.weapon]?.name : undefined;
+        const gun = event.weapon ? WEAPONS[event.weapon]?.name : event.text === 'drones' ? '+2 FPV-дрона (X)' : undefined;
         this.hud.message(`Сброс вскрыт${gun ? `: ${gun}` : ''} и бонусы`, 'good');
       } else {
         const who = this.display.get(event.ownerId ?? -1)?.name ?? 'кто-то';
@@ -2102,6 +2113,16 @@ export class Game {
         armorRatio: d.armor / CONFIG.powerups.maxArmor,
         kind: d.isLocal ? 'self' : hostile ? 'enemy' : 'ally',
       });
+    }
+    // Powerups near the player: what lies there, before walking over it.
+    const me = this.display.get(this.localId);
+    if (me?.alive) {
+      for (const pu of this.sim.powerups) {
+        if (!pu.active || Math.hypot(pu.x - me.x, pu.z - me.z) > 11) continue;
+        const p = this.renderer.project(pu.x, 1.45, pu.z);
+        if (!p.visible) continue;
+        plates.push({ id: -1 - pu.id, x: p.x, y: p.y, name: POWERUP_INFO[pu.kind].name, hpRatio: 0, armorRatio: 0, kind: 'item', color: POWERUP_COLOR[pu.kind] });
+      }
     }
     this.hud.updatePlates(plates);
   }

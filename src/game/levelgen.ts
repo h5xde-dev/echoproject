@@ -85,8 +85,8 @@ export const THEME_LAMP: Record<RoomTheme, number> = {
 };
 
 const POWERUP_WEIGHTS: [PowerupKind, number][] = [
-  ['medkit', 0.22],
-  ['armor', 0.15],
+  ['medkit', 0.2],
+  ['armor', 0.13],
   ['ammo', 0.12],
   ['damage', 0.09],
   ['rapid', 0.08],
@@ -96,6 +96,7 @@ const POWERUP_WEIGHTS: [PowerupKind, number][] = [
   ['overshield', 0.05],
   ['stealth', 0.05],
   ['radar', 0.04],
+  ['drone', 0.04],
 ];
 
 export function pickPowerup(roll: number): PowerupKind {

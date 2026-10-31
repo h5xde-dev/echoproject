@@ -170,7 +170,7 @@ export interface PickupDef {
   room: number;
 }
 
-export type PowerupKind = 'medkit' | 'armor' | 'damage' | 'speed' | 'rapid' | 'nv' | 'ammo' | 'regen' | 'overshield' | 'stealth' | 'radar';
+export type PowerupKind = 'medkit' | 'armor' | 'damage' | 'speed' | 'rapid' | 'nv' | 'ammo' | 'regen' | 'overshield' | 'stealth' | 'radar' | 'drone';
 
 export interface PowerupDef {
   id: number;

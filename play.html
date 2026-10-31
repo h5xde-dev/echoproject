@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Rajdhani:wght@500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Oswald:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
   </head>
@@ -27,30 +27,38 @@
         <div class="vignette"></div>
         <div class="plates"></div>
         <div class="dmg-dirs"></div>
-        <div class="crosshair"><i></i><i></i><i></i><i></i><b></b><u></u><s></s><s></s><s></s><s></s></div>
 
-        <div class="panel panel-topleft">
-          <div class="panel-title">ОПЕРАТОРЫ</div>
-          <div class="squad"></div>
-          <div class="latency">— мс</div>
+        <div class="left-stack">
+          <div class="panel panel-topleft">
+            <div class="panel-title">ОПЕРАТОРЫ</div>
+            <div class="squad"></div>
+            <div class="latency">— мс</div>
+          </div>
+          <div class="panel panel-room hidden">
+            <div class="panel-title">КОД КОМНАТЫ</div>
+            <div class="room-code-inline">-----</div>
+            <div class="room-hint">Нажмите, чтобы скопировать</div>
+          </div>
+          <div class="panel panel-lobby hidden">
+            <div class="panel-title">ЛОББИ · РАЗМИНКА</div>
+            <div class="lobby-list"></div>
+            <button class="btn lobby-action"><span class="btn-title">ГОТОВ</span></button>
+            <div class="lobby-hint"></div>
+          </div>
+        </div>
+        <div class="right-stack">
+          <div class="panel panel-topright">
+            <canvas class="minimap" width="184" height="184"></canvas>
+            <div class="flashlight-tag">ФОНАРЬ ВКЛ</div>
+            <div class="stats-tag hidden"></div>
+            <div class="gait-tag">БЕГ · СЛЫШНО</div>
+          </div>
+          <div class="feed"></div>
         </div>
 
         <div class="panel panel-topcenter">
           <div class="objective-room">КОМНАТА 1 / 1</div>
           <div class="objective-text">ЗАЧИСТИТЕ КОМНАТУ</div>
-        </div>
-
-        <div class="panel panel-topright">
-          <canvas class="minimap" width="184" height="184"></canvas>
-          <div class="flashlight-tag">ФОНАРЬ ВКЛ</div>
-          <div class="stats-tag hidden"></div>
-          <div class="gait-tag">БЕГ · СЛЫШНО</div>
-        </div>
-
-        <div class="panel panel-room hidden">
-          <div class="panel-title">КОД КОМНАТЫ</div>
-          <div class="room-code-inline">-----</div>
-          <div class="room-hint">Нажмите, чтобы скопировать</div>
         </div>
 
         <div class="panel panel-bottomleft">
@@ -72,7 +80,6 @@
           <div class="reload-bar"><i></i></div>
         </div>
 
-        <div class="feed"></div>
         <div class="killfeed"></div>
         <div class="respawn-banner"></div>
         <div class="banner"></div>
@@ -101,12 +108,6 @@
         <div class="status-line"></div>
 
         <div class="spectate"></div>
-        <div class="panel panel-lobby hidden">
-          <div class="panel-title">ЛОББИ · РАЗМИНКА</div>
-          <div class="lobby-list"></div>
-          <button class="btn lobby-action"><span class="btn-title">ГОТОВ</span></button>
-          <div class="lobby-hint"></div>
-        </div>
         <div class="gameover">
           <div class="gameover-title">ОБЪЕКТ ЗАЧИЩЕН</div>
           <div class="gameover-text"></div>
@@ -148,6 +149,8 @@
           </div>
         </div>
       </div>
+      <!-- Outside the HUD so the UI scale does not shift it off the mouse, and above every panel. -->
+      <div class="crosshair"><i></i><i></i><i></i><i></i><b></b><u></u><s></s><s></s><s></s><s></s></div>
 
       <div id="menu" class="menu">
         <div class="menu-bg"></div>
@@ -283,11 +286,11 @@
                 <span class="btn-desc">Пройти объект в одиночку</span>
               </button>
               <button id="btn-host" class="btn" disabled>
-                <span class="btn-title">С��ЗДАТЬ КОМНАТУ</span>
+                <span class="btn-title">СОЗДАТЬ КОМНАТУ</span>
                 <span class="btn-desc">Позвать друзей по коду</span>
               </button>
               <button id="btn-ranked" class="btn ranked" disabled>
-                <span class="btn-title">РЕЙ��ИНГОВЫЙ БОЙ</span>
+                <span class="btn-title">РЕЙТИНГОВЫЙ БОЙ</span>
                 <span class="btn-desc">Онлайн-арена, только люди, рейтинг Эло</span>
               </button>
             </div>

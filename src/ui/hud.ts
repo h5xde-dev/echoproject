@@ -103,7 +103,9 @@ export interface HudPlate {
   name: string;
   hpRatio: number;
   armorRatio: number;
-  kind: 'self' | 'ally' | 'enemy';
+  kind: 'self' | 'ally' | 'enemy' | 'item';
+  /** Item plates: the name's colour. */
+  color?: number;
 }
 
 interface FeedEntry {
@@ -219,7 +221,9 @@ export class Hud {
     this.feedEl = must(root, '.feed');
     this.minimap = must(root, '.minimap') as HTMLCanvasElement;
     this.minimapCtx = this.minimap.getContext('2d')!;
-    this.crosshair = must(root, '.crosshair');
+    // A sibling of the HUD (see play.html): above every panel, unscaled.
+    this.crosshair = must(document.body, '.crosshair');
+    this.moveCrosshair(innerWidth / 2, innerHeight / 2);
     this.vignette = must(root, '.vignette');
     this.statusEl = must(root, '.status-line');
     this.overEl = must(root, '.gameover');
@@ -274,6 +278,26 @@ export class Hud {
     // Modes with a shop (B): rounds, and waves between waves.
     root.classList.toggle('mode-comp', isRoundMode(mode) || mode === 'waves');
     if (isArena(mode)) this.roomEl.textContent = `${(title || mode).toUpperCase()} · ${arenaName.toUpperCase()}`;
+  }
+
+  private toastEl: HTMLElement | null = null;
+  private toastTimer = 0;
+
+  /** A powerup just taken: its name and effect under the crosshair area, in its colour. */
+  pickupToast(name: string, desc: string, color: number): void {
+    if (!this.toastEl) {
+      this.toastEl = document.createElement('div');
+      this.toastEl.className = 'pickup-toast';
+      this.root.appendChild(this.toastEl);
+    }
+    const el = this.toastEl;
+    el.style.setProperty('--c', `#${color.toString(16).padStart(6, '0')}`);
+    el.innerHTML = `<b>${escapeHtml(name)}</b><span>${escapeHtml(desc)}</span>`;
+    el.classList.remove('visible');
+    void el.offsetWidth;
+    el.classList.add('visible');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => el.classList.remove('visible'), 1800);
   }
 
   /** Big centre message (round start, new gun...). */
@@ -372,6 +396,7 @@ export class Hud {
       }
       p.seen = true;
       p.el.className = `plate ${it.kind}`;
+      if (it.color !== undefined) p.el.style.setProperty('--c', `#${it.color.toString(16).padStart(6, '0')}`);
       p.el.style.transform = `translate(${it.x.toFixed(1)}px, ${it.y.toFixed(1)}px) translate(-50%, -100%)`;
       p.fill.style.width = `${Math.max(0, Math.min(1, it.hpRatio)) * 100}%`;
       p.armor.style.width = `${Math.max(0, Math.min(1, it.armorRatio)) * 100}%`;
@@ -734,7 +759,7 @@ export class Hud {
     this.crosshair.classList.toggle('hit', this.hitT > 0);
     this.crosshair.classList.toggle('kill', this.killT > 0);
     this.spread = Math.max(0, this.spread - dt * 3.5);
-    const size = 30 * clamp(this.baseSpread, 0.5, 2.4) + this.spread * 26;
+    const size = (30 * clamp(this.baseSpread, 0.5, 2.4) + this.spread * 26) * this.uiScale;
     this.crosshair.style.width = `${size}px`;
     this.crosshair.style.height = `${size}px`;
 
@@ -755,6 +780,9 @@ export class Hud {
       this.vignette.style.opacity = '0';
     }
   }
+
+  /** The UI scale (main.ts): the crosshair lives outside the scaled HUD, so it scales itself. */
+  uiScale = 1;
 
   moveCrosshair(x: number, y: number): void {
     this.crosshair.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
@@ -805,8 +833,17 @@ export class Hud {
     blips: { noise: { x: number; z: number; life: number }[]; marks: { x: number; z: number; life: number }[] } = { noise: [], marks: [] },
   ): void {
     const ctx = this.minimapCtx;
-    const w = this.minimap.width;
-    const h = this.minimap.height;
+    // Drawn in 184 CSS px; the backing store follows the screen density and
+    // the UI scale so it stays sharp on HiDPI and big monitors.
+    const w = 184;
+    const h = 184;
+    const k = Math.min(4, (window.devicePixelRatio || 1) * this.uiScale);
+    const backing = Math.round(w * k);
+    if (this.minimap.width !== backing) {
+      this.minimap.width = backing;
+      this.minimap.height = backing;
+    }
+    ctx.setTransform(backing / w, 0, 0, backing / h, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#080a0f';
     ctx.fillRect(0, 0, w, h);

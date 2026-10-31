@@ -6,7 +6,7 @@
   --ink-dim: #8094a5;
   --accent: #3fd6c8;
   --warm: #ffb066;
-  --font: 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
+  --font: 'Oswald', 'Bahnschrift', 'Segoe UI', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 * { box-sizing: border-box; }

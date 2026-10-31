@@ -424,7 +424,7 @@ const PROP_CHARS: Record<string, PropKind> = {
 const WEAPON_CHARS: Record<string, WeaponId> = { '1': 'smg', '2': 'shotgun', '3': 'rifle', '4': 'sniper', '5': 'lmg', '6': 'flamer' };
 const POWERUP_CHARS: Record<string, PowerupKind> = {
   h: 'medkit', r: 'armor', x: 'damage', s: 'speed', f: 'rapid', n: 'nv',
-  a: 'ammo', g: 'regen', i: 'overshield', u: 'stealth', z: 'radar',
+  a: 'ammo', g: 'regen', i: 'overshield', u: 'stealth', z: 'radar', q: 'drone',
 };
 const INTERACT_CHARS: Record<string, InteractKind> = { G: 'switch', O: 'ammo', '+': 'med' };
 

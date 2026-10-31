@@ -57,6 +57,7 @@ export const POWERUP_INFO: Record<PowerupKind, { name: string; desc: string }> =
   overshield: { name: 'Сверхщит', desc: `+${P.overshield} защиты поверх брони, тает за 15 с` },
   stealth: { name: 'Маскировка', desc: `${P.stealthTime} с не видно, пока не бежишь и не стреляешь` },
   radar: { name: 'Радар', desc: `${P.radarTime} с враги на миникарте` },
+  drone: { name: 'FPV-дрон', desc: `+1 дрон-камикадзе (X), до ${P.maxDrones}` },
 };
 
 export const OBJECT_INFO: { name: string; key: string; desc: string }[] = [
