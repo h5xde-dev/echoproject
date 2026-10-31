@@ -4,6 +4,7 @@
  * kills, bots keep moving, grenades get thrown, the match ends; gun game
  * climbs the ladder, competitive plays rounds and bots buy gear.
  */
+import { aimRelativeMove } from '@echo/shared/core/math';
 import { ARENAS, buildArena } from '@echo/shared/game/arenas';
 import { CONFIG } from '@echo/shared/game/config';
 import { generateMap, pickPowerup } from '@echo/shared/game/levelgen';
@@ -1763,6 +1764,17 @@ for (const info of ARENAS) {
   } catch {
     /* no storage */
   }
+}
+
+// Controls «по прицелу»: W toward the cursor, S away, A/D sideways.
+{
+  const near = (v: { x: number; z: number }, x: number, z: number) => Math.abs(v.x - x) < 1e-9 && Math.abs(v.z - z) < 1e-9;
+  check(near(aimRelativeMove(0, -1, 0), 1, 0), 'aim east: W runs east');
+  check(near(aimRelativeMove(0, -1, Math.PI / 2), 0, 1), 'aim south (down): W runs down');
+  check(near(aimRelativeMove(0, 1, 0), -1, 0), 'S backs away from the cursor');
+  check(near(aimRelativeMove(1, 0, -Math.PI / 2), 1, 0), 'aim north (up): D strafes right, as on the screen');
+  const d = aimRelativeMove(Math.SQRT1_2, -Math.SQRT1_2, 1.234);
+  check(Math.abs(Math.hypot(d.x, d.z) - 1) < 1e-9, 'a diagonal keeps its length');
 }
 
 out.push(`${failures} failures`);

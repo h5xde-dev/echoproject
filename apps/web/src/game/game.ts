@@ -1,6 +1,6 @@
 import { GameAudio } from '../core/audio';
 import { Input } from '../core/input';
-import { clamp } from '@echo/shared/core/math';
+import { aimRelativeMove, clamp } from '@echo/shared/core/math';
 import { gameUrl, MetaLink, type MetaRequest } from '../net/meta';
 import { Net } from '../net/net';
 import { roundStateOf, scoreRows, waveStateOf } from '@echo/shared/net/snapshot';
@@ -115,6 +115,9 @@ const POWERUP_TEXT: Record<PowerupKind, string> = {
   radar: 'Радар: враги на карте',
   drone: 'FPV-дрон +1 — запуск на X',
 };
+
+/** Metres: a cursor closer than this to the soldier does not turn WASD. */
+const AIM_DEADZONE = 1.2;
 
 /** Error below this is smoothed out; above it the player snaps (teleport). */
 const SNAP_DISTANCE = 2.5;
@@ -1172,6 +1175,11 @@ export class Game {
     }
   }
 
+  /** WASD follows the aim (default) or the screen axes (pause → Управление). */
+  controls: 'aim' | 'screen' = 'aim';
+  /** Last heading WASD followed: kept while the cursor sits on the soldier. */
+  private moveHeading = -Math.PI / 2;
+
   private sampleInput(): void {
     const move = this.input.moveVector();
     this.frameMove.x = move.x;
@@ -1230,6 +1238,14 @@ export class Game {
         this.frameAim = Math.atan2(ground.z - self.z, ground.x - self.x);
       }
       this.frameThrow = Math.hypot(ground.z - self.z, ground.x - self.x);
+      if (this.controls === 'aim' && !drone) {
+        // A cursor right on the soldier has no clear direction: keep the last one,
+        // or the soldier would spin on the spot.
+        if (this.frameThrow > AIM_DEADZONE) this.moveHeading = this.frameAim;
+        const m = aimRelativeMove(this.frameMove.x, this.frameMove.z, this.moveHeading);
+        this.frameMove.x = m.x;
+        this.frameMove.z = m.z;
+      }
     }
   }
 

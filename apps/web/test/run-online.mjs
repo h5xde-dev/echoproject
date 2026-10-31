@@ -111,6 +111,30 @@ try {
   });
   check(gap < 0.5, `prediction agrees with the server (gap ${gap.toFixed(2)} m)`);
 
+  // Controls «по прицелу» (the default): W runs toward the cursor. Tried in four
+  // directions, since a wall may stand on one side of the spawn. The camera leads
+  // toward the cursor, so the heading drifts a little as the soldier runs.
+  const me = () => b.page.evaluate(() => {
+    const g = window.echo.game;
+    const a = g.latestActors.get(g.localId);
+    return { x: a.x, z: a.z, controls: g.controls, screen: g.renderer.project(a.x, 0, a.z) };
+  });
+  let best = { along: 0, across: 0, dir: '' };
+  for (const [name, ux, uz] of [['right', 1, 0], ['down', 0, 1], ['left', -1, 0], ['up', 0, -1]]) {
+    const p0 = await me();
+    await b.page.mouse.move(p0.screen.x + ux * 220, p0.screen.y + uz * 220);
+    await b.page.keyboard.down('KeyW');
+    await b.page.waitForTimeout(700);
+    await b.page.keyboard.up('KeyW');
+    await b.page.waitForTimeout(300);
+    const p1 = await me();
+    const along = (p1.x - p0.x) * ux + (p1.z - p0.z) * uz;
+    const across = Math.abs((p1.x - p0.x) * -uz + (p1.z - p0.z) * ux);
+    if (along > best.along) best = { along, across, dir: name };
+    if (along > 1) break;
+  }
+  check(best.along > 1 && best.across < best.along, `controls by the aim: W runs toward the cursor (${best.dir}: ${best.along.toFixed(1)} m along, ${best.across.toFixed(1)} m across)`);
+
   // Only the host starts the match.
   const seed0 = await b.page.evaluate(() => window.echo.game.map.seed);
   await b.page.evaluate(() => window.echo.game.net.send({ t: 'start' }));

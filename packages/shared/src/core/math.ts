@@ -97,3 +97,18 @@ export function formatTime(sec: number): string {
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
+
+/**
+ * WASD turned to follow the aim ("по прицелу"): W runs toward `aim`, S away
+ * from it, A/D sideways. `mx`/`mz` are the keys on screen axes (W is z = -1);
+ * the result is a world vector of the same length.
+ */
+export function aimRelativeMove(mx: number, mz: number, aim: number): { x: number; z: number } {
+  const fx = Math.cos(aim);
+  const fz = Math.sin(aim);
+  // Right of the facing direction on a screen whose z points down.
+  const rx = -fz;
+  const rz = fx;
+  const forward = -mz;
+  return { x: fx * forward + rx * mx, z: fz * forward + rz * mx };
+}

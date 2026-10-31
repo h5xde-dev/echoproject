@@ -212,16 +212,25 @@ hud.onLobbyAction = () => (game.isHost ? game.startMatch() : game.toggleReady())
 const settings = loadSettings();
 const setVolume = must<HTMLInputElement>('.set-volume');
 const setQuality = must<HTMLSelectElement>('.set-quality');
+const setControls = must<HTMLSelectElement>('.set-controls');
 const setShake = must<HTMLInputElement>('.set-shake');
 const setStats = must<HTMLInputElement>('.set-stats');
 function applySettings(): void {
   game.audio.setVolume(settings.volume);
   game.renderer.setQuality(settings.quality);
   game.renderer.shakeScale = settings.shake ? 1 : 0;
+  game.controls = settings.controls;
   hud.showStats(settings.stats);
 }
 setVolume.value = String(Math.round(settings.volume * 100));
 setQuality.value = settings.quality;
+setControls.value = settings.controls;
+setControls.addEventListener('change', () => {
+  settings.controls = setControls.value === 'screen' ? 'screen' : 'aim';
+  game.controls = settings.controls;
+  saveSettings(settings);
+  syncProfile();
+});
 setShake.checked = settings.shake;
 setStats.checked = settings.stats;
 setVolume.addEventListener('input', () => {
@@ -573,6 +582,11 @@ function applyProfile(a: Account): void {
   if (typeof p.color === 'number') settings.color = p.color;
   if (p.difficulty) settings.difficulty = p.difficulty;
   if (typeof p.roomBots === 'boolean') settings.roomBots = p.roomBots;
+  if (p.controls === 'aim' || p.controls === 'screen') {
+    settings.controls = p.controls;
+    setControls.value = p.controls;
+    game.controls = p.controls;
+  }
   saveSettings(settings);
   roomBotsInput.checked = settings.roomBots;
   showClass();
@@ -585,6 +599,6 @@ function syncProfile(): void {
   if (!account) return;
   window.clearTimeout(profileTimer);
   profileTimer = window.setTimeout(() => {
-    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots });
+    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls });
   }, 600);
 }

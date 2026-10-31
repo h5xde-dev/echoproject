@@ -41,6 +41,7 @@ interface ProfileSettings {
   color?: number;
   difficulty?: string;
   roomBots?: boolean;
+  controls?: string;
 }
 
 const CLASSES = ['assault', 'scout', 'medic', 'engineer'];
@@ -60,6 +61,7 @@ function cleanSettings(raw: Record<string, unknown>, xp: number): ProfileSetting
   if (typeof raw.cls === 'string' && CLASSES.includes(raw.cls)) out.cls = raw.cls;
   if (typeof raw.difficulty === 'string' && DIFFICULTIES.includes(raw.difficulty)) out.difficulty = raw.difficulty;
   if (typeof raw.roomBots === 'boolean') out.roomBots = raw.roomBots;
+  if (raw.controls === 'aim' || raw.controls === 'screen') out.controls = raw.controls;
   if (typeof raw.color === 'number') {
     const ring = RING_COLORS.find((c) => c.color === raw.color);
     if (raw.color === -1 || (ring && ring.level <= levelOf(xp).level)) out.color = raw.color;

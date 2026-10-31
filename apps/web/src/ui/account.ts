@@ -14,7 +14,7 @@ export interface Account {
   level: number;
   /** The guest progress of some browser was already added (once per account). */
   imported?: boolean;
-  settings?: { cls?: 'assault' | 'scout' | 'medic' | 'engineer'; color?: number; difficulty?: 'easy' | 'normal' | 'hard'; roomBots?: boolean };
+  settings?: { cls?: 'assault' | 'scout' | 'medic' | 'engineer'; color?: number; difficulty?: 'easy' | 'normal' | 'hard'; roomBots?: boolean; controls?: 'aim' | 'screen' };
 }
 
 export async function fetchAccount(): Promise<{ user: Account | null; available: boolean }> {

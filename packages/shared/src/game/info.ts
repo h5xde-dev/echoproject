@@ -77,7 +77,7 @@ export const OBJECT_INFO: { name: string; key: string; desc: string }[] = [
 export const INTERACT_LABEL: Record<InteractKind, string> = { switch: 'Рубильник', ammo: 'Ящик патронов', med: 'Медпункт' };
 
 export const CONTROLS: [string, string][] = [
-  ['W A S D', 'движение'],
+  ['W A S D', 'движение: W — к прицелу, S — назад, A/D — боком (в паузе можно «по экрану»)'],
   ['Мышь', 'прицел'],
   ['ЛКМ', 'огонь (нож — удар)'],
   ['Shift', 'шаг: тише, точнее'],
