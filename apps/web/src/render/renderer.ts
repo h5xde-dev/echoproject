@@ -1225,6 +1225,9 @@ export class Renderer {
     this.shockwaves.spawn(x, z, 5, 0xffffff, 0.25);
   }
 
+  /** Map event that changes the picture (rain), set by the game each frame. */
+  weather = '';
+
   /** New modes' marks: extraction point, cargo, VIP goal; and the zone. */
   private modeMarks: THREE.Object3D[] = [];
   private zoneRing: THREE.Mesh | null = null;
@@ -1918,6 +1921,9 @@ export class Renderer {
       // Flashlight on: long sight; off: eyes adjust, but you see less.
       // Night vision gives the long sight without the giveaway beam.
       v.range = p.flashOn || p.nv ? CONFIG.flashlight.visionOn : CONFIG.flashlight.visionOff;
+      // Night (a mutator) and rain (a map event) cut how far you see.
+      if (map.mutators?.includes('night')) v.range *= CONFIG.mutators.nightSight;
+      if (this.weather === 'rain') v.range *= CONFIG.world.rainSight;
       // Flashed: sight shrinks to a few metres and opens up as it wears off.
       v.range *= 1 - 0.8 * Math.min(1, p.blind ?? 0);
       // Only walls (and closed doors) that can intersect the sight radius.

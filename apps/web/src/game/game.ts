@@ -244,9 +244,9 @@ export class Game {
     return this.roomCode;
   }
 
-  /** Quick play: a public room of this mode with a free seat (or a new one). */
-  async quickPlay(name: string, mode: MatchMode): Promise<void> {
-    await this.goOnline(name, { t: 'quick', mode });
+  /** Quick play: a public room of this mode (and mutators) with a free seat, or a new one. */
+  async quickPlay(name: string, mode: MatchMode, mutators: Mutator[] = []): Promise<void> {
+    await this.goOnline(name, { t: 'quick', mode, mutators });
   }
 
   /** Join a friend's room by its code. */
@@ -583,6 +583,7 @@ export class Game {
     this.droneSyncAt = performance.now();
     if (msg.flags) this.sim.syncFlags(msg.flags);
     this.sim.syncModeState(msg.modeState);
+    this.sim.syncWorld(msg.world);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
     if (msg.attackTeam !== undefined) this.sim.sidesSwapped = msg.attackTeam === 1;
@@ -891,6 +892,20 @@ export class Game {
           this.renderer.shake(0.25);
         }
         break;
+      case 'world': {
+        const lines: Record<string, [string, string]> = {
+          blackout: ['БЛЭКАУТ', 'Свет погас по всей карте — фонарь выдаёт'],
+          rain: ['ЛИВЕНЬ', 'Видно хуже, шагов почти не слышно'],
+          armored: ['БРОНИРОВАННЫЙ СБРОС', 'Броня и пулемёт — кто первым вскроет'],
+          intercept: ['РАДИОПЕРЕХВАТ', 'Враги на миникарте несколько секунд'],
+        };
+        if (event.text === 'start') {
+          const [title, sub] = lines[event.id ?? ''] ?? ['', ''];
+          if (title) this.hud.banner(title, sub);
+        } else if (event.id === 'blackout') this.hud.message('Свет вернулся', 'info');
+        else if (event.id === 'rain') this.hud.message('Ливень закончился', 'info');
+        break;
+      }
       case 'flare':
         this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.hiss(d));
         break;
@@ -1544,6 +1559,9 @@ export class Game {
     this.renderer.syncFlags(flags, this.sim.bases);
     // New modes: marks on the ground and the zone; cargo being carried is not drawn on the floor.
     this.renderer.syncModeMarks(this.sim.modeState.text ? this.sim.modeState : null);
+    // Rain: a darker, shorter view and streaks over the screen.
+    this.renderer.weather = this.sim.worldEvent.kind;
+    this.hud.setWeather(this.sim.worldEvent.kind === 'rain');
     // The bomb: shown lying or planted; carried, only to the carrier's side.
     const bomb = this.sim.bomb;
     const carrier = bomb && bomb.carrier >= 0 ? this.display.get(bomb.carrier) : undefined;

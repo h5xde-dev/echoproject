@@ -384,6 +384,27 @@ export const CONFIG = {
     zombie: { base: 0, perLevel: 0, max: 0, hp: 1.5, armor: 0, speed: 1.2 },
   },
 
+  /** Match mutators (the host picks them, or the week's playlist). */
+  mutators: {
+    /** night: sight and AI detection shrink by this. */
+    nightSight: 0.8,
+    doubleDamage: 2,
+    fastSpeed: 1.2,
+  },
+
+  /** Events on the map during a match. */
+  world: {
+    /** Seconds between events (random in this range). */
+    every: [90, 150] as [number, number],
+    first: 75,
+    blackout: 30,
+    rain: 45,
+    /** Rain: AI sight and step noise scale. */
+    rainSight: 0.75,
+    rainSteps: 0.6,
+    intercept: 6,
+  },
+
   /** «Заражение»: people against the infected. */
   infect: {
     /** Seconds before the first infection. */

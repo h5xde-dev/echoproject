@@ -33,6 +33,7 @@ export interface PublicRoom {
   players: number;
   max: number;
   phase: string;
+  mutators: Mutator[];
 }
 
 /** Only known mutators, each once. */
@@ -63,6 +64,8 @@ export interface MetaJoinMsg {
 export interface MetaQuickMsg {
   t: 'quick';
   mode: GameMode;
+  /** The week's playlist plays with its mutators. */
+  mutators?: Mutator[];
 }
 
 /** Ranked queue: join or leave. */

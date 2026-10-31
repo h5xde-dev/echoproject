@@ -818,6 +818,19 @@ export class Hud {
     this.overEl.classList.add('visible');
   }
 
+  private rainEl: HTMLElement | null = null;
+
+  /** Rain over the screen during the map event. */
+  setWeather(rain: boolean): void {
+    if (!rain && !this.rainEl) return;
+    if (!this.rainEl) {
+      this.rainEl = document.createElement('div');
+      this.rainEl.className = 'rain';
+      this.root.insertBefore(this.rainEl, this.root.firstChild);
+    }
+    this.rainEl.classList.toggle('on', rain);
+  }
+
   /** Quests and achievements this match completed (signed-in players). */
   setGameOverQuests(lines: string[]): void {
     must(this.overEl, '.gameover-quests').innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');

@@ -12,7 +12,8 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
-await page.goto(URL);
+// The checks run while the page loads: wait for their result, not for 'load'.
+await page.goto(URL, { waitUntil: 'commit', timeout: 120000 });
 await page.waitForFunction(() => window.__result, null, { timeout: 280000 });
 const result = await page.evaluate(() => window.__result);
 await browser.close();

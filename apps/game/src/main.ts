@@ -49,6 +49,7 @@ function status() {
       phase: r.phase,
       mode: r.opts.mode,
       arena: r.opts.arena,
+      mutators: r.opts.mutators ?? [],
       public: r.opts.public === true,
       max: MAX_SEATS,
       ranked: r.ranked,

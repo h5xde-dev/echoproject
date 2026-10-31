@@ -20,6 +20,7 @@ export interface RoomInfo {
   public?: boolean;
   arena?: string;
   max?: number;
+  mutators?: string[];
 }
 
 interface Instance {
@@ -117,6 +118,7 @@ export async function createRoom(opts: RoomOptions | null, ranked: boolean, subs
         public: opts?.public === true,
         arena: opts?.arena ?? '',
         max: 8,
+        mutators: opts?.mutators ?? [],
       };
       pending.set(code, { instance: instance.id, at: Date.now(), info });
       return { code, url: instance.url };

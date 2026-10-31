@@ -1,4 +1,4 @@
-import type { GameMode } from './game/types';
+import type { GameMode, Mutator } from './game/types';
 import type { MatchStats } from './progress';
 
 // Daily and weekly quests, achievements and the cosmetics they unlock. The
@@ -167,3 +167,40 @@ export function questsFor(period: QuestPeriod, userId: number, now = Date.now())
 
 export const camoById = (id: string | undefined) => CAMOS.find((c) => c.id === id);
 export const badgeById = (id: string | undefined) => BADGES.find((b) => b.id === id);
+
+// ---------------------------------------------------------------- week's playlist
+
+/** A featured combination of the week: a mode with mutators, with bonus experience. */
+export interface Playlist {
+  id: string;
+  title: string;
+  desc: string;
+  mode: GameMode;
+  mutators: Mutator[];
+}
+
+export const PLAYLISTS: Playlist[] = [
+  { id: 'night_knives', title: 'Ночь ножей', desc: 'Deathmatch: лампы погашены, у всех только ножи', mode: 'dm', mutators: ['night', 'knives'] },
+  { id: 'double_infect', title: 'Злая зараза', desc: 'Заражение с двойным уроном', mode: 'infect', mutators: ['double'] },
+  { id: 'fast_zone', title: 'Быстрая зона', desc: 'Сужающаяся зона: все бегают на 20% быстрее', mode: 'zone', mutators: ['fast'] },
+  { id: 'dark_extract', title: 'Эвакуация во тьме', desc: 'Эвакуация ночью: лампы погашены', mode: 'extract', mutators: ['night'] },
+  { id: 'blind_vip', title: 'VIP без фонарей', desc: 'Сопровождение VIP: фонари не работают', mode: 'vip', mutators: ['noflash'] },
+  { id: 'rush_tdm', title: 'Штурм', desc: 'Командный бой: двойной урон и скорость', mode: 'tdm', mutators: ['double', 'fast'] },
+];
+
+/** Experience for a match of the week's playlist. */
+export const WEEKLY_XP_BONUS = 1.5;
+
+/** This week's playlist (Moscow time, changes on Monday). */
+export function weeklyPlaylist(now = Date.now()): Playlist {
+  const key = periodKey('weekly', now);
+  const [year, week] = key.split('-W').map(Number);
+  return PLAYLISTS[(year * 53 + week) % PLAYLISTS.length];
+}
+
+/** Is this the week's playlist: same mode, same mutators. */
+export function isWeekly(mode: string, mutators: readonly string[] | undefined, now = Date.now()): boolean {
+  const p = weeklyPlaylist(now);
+  const m = [...(mutators ?? [])].sort().join(',');
+  return p.mode === mode && [...p.mutators].sort().join(',') === m;
+}

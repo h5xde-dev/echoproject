@@ -613,7 +613,9 @@ export interface GameEvent {
     | 'strike'
     | 'mine'
     | 'wire'
-    | 'flare';
+    | 'flare'
+    /** Map event: id = blackout | rain | armored | intercept; text = 'start' | 'end'. */
+    | 'world';
   x?: number;
   z?: number;
   y?: number;

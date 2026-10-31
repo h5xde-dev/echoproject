@@ -161,9 +161,11 @@ class Client implements Waiting {
       case 'quick': {
         if (!MODE_IDS.includes(msg.mode)) return this.send({ t: 'error', text: 'Неизвестный режим' });
         // A public room of this mode with a free seat, busiest first; else a new one.
-        const room = publicRooms().find((r) => r.mode === msg.mode && !r.full && r.players < (r.max ?? 8));
+        const mutators = cleanMutators(msg.mutators);
+        const same = (m: string[] | undefined) => [...(m ?? [])].sort().join() === [...mutators].sort().join();
+        const room = publicRooms().find((r) => r.mode === msg.mode && same(r.mutators) && !r.full && r.players < (r.max ?? 8));
         if (room) return this.ticket(room.code, room.url, false, false);
-        const opts = roomOptions({ mode: msg.mode, arena: ARENAS[randomInt(ARENAS.length)].id, bots: true, public: true });
+        const opts = roomOptions({ mode: msg.mode, arena: ARENAS[randomInt(ARENAS.length)].id, bots: true, public: true, mutators });
         try {
           const { code, url } = await createRoom(opts, false);
           return this.ticket(code, url, false, false);
@@ -198,7 +200,7 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promi
     return json(res, 200, { queued: queued(), matches: s.instances.reduce((n, i) => n + i.rooms, 0), playing: s.instances.reduce((n, i) => n + i.players, 0), online: s.instances.some((i) => !i.draining) });
   }
   if (req.method === 'GET' && path === '/meta/rooms') {
-    const rooms: PublicRoom[] = publicRooms().map((r) => ({ code: r.code, mode: r.mode as GameMode, arena: r.arena ?? '', players: r.players, max: r.max ?? 8, phase: r.phase }));
+    const rooms: PublicRoom[] = publicRooms().map((r) => ({ code: r.code, mode: r.mode as GameMode, arena: r.arena ?? '', players: r.players, max: r.max ?? 8, phase: r.phase, mutators: cleanMutators(r.mutators) }));
     return json(res, 200, { rooms });
   }
   if (!path.startsWith('/internal/') || !isService(req, META.secret)) throw new HttpError(404, 'not found');

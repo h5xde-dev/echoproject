@@ -217,6 +217,11 @@ export class Sim {
   private vipPhase: 'live' | 'end' = 'live';
   private zone = { x: 0, z: 0, r: 0, nextR: 0, stage: 0, shrinking: false, from: 0 };
   private zonePulse = 0;
+  /** Map event under way ('' none) and its clock; the next one's countdown. */
+  worldEvent: { kind: string; t: number } = { kind: '', t: 0 };
+  private worldT: number = CONFIG.world.first;
+  private lampsBeforeBlackout: boolean[] | null = null;
+  private armoredDrop = false;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
   /** Bot and guard sharpness (host setting). */
@@ -284,7 +289,8 @@ export class Sim {
   constructor(map: MapData) {
     this.map = map;
     this.mut = new Set(map.mutators ?? []);
-    this.lampAlive = map.lamps.map(() => true);
+    // Night (a mutator): every lamp starts out.
+    this.lampAlive = map.lamps.map(() => !this.mut.has('night'));
     this.lampBroken = map.lamps.map(() => false);
     this.interactables = (map.interactables ?? []).map((d) => ({ ...d, on: true, charge: CONFIG.interact.medCharge, cd: 0 }));
     this.mode = map.mode;
@@ -720,7 +726,7 @@ export class Sim {
     }
 
     // The infected have no light at all.
-    if (input.flashlight && actor.role !== 'zombie') actor.flashOn = !actor.flashOn;
+    if (input.flashlight && actor.role !== 'zombie' && !this.mut.has('noflash')) actor.flashOn = !actor.flashOn;
     if (input.drone) this.launchDrone(actor);
     if (input.interact) this.interact(actor);
     if (input.strike) this.callStrike(actor, input.aim, input.throwDist ?? 15);
@@ -853,6 +859,8 @@ export class Sim {
         }
         continue;
       }
+      // Knives only / no light: whatever spawned or picked up, the rule holds.
+      if ((this.mut.has('knives') && actor.weapon !== 'knife' && actor.role !== 'zombie') || (this.mut.has('noflash') && actor.flashOn)) this.mutatorKit(actor);
       if (actor.kind === 'enemy' && !this.frozen) this.updateAi(actor, dt);
       this.updateActorCommon(actor, dt);
       this.updateFootsteps(actor, dt);
@@ -884,6 +892,7 @@ export class Sim {
     this.updateShells(dt);
     this.updateFlares(dt);
     this.updateHazards(dt);
+    this.updateWorld(dt);
     this.noises = this.noises.filter((n) => this.time - n.time < 0.5);
   }
 
@@ -1323,7 +1332,8 @@ export class Sim {
     actor.stepDist += v * dt;
     if (actor.stepDist < CONFIG.gait.stepLength) return;
     actor.stepDist = 0;
-    const radius = CONFIG.gait.stepNoise[actor.gait] * (actor.cls === 'scout' ? CONFIG.classes.scout.stepNoiseMul : 1);
+    const radius =
+      CONFIG.gait.stepNoise[actor.gait] * (actor.cls === 'scout' ? CONFIG.classes.scout.stepNoiseMul : 1) * (this.worldEvent.kind === 'rain' ? CONFIG.world.rainSteps : 1);
     if (radius <= 0) return;
     this.noises.push({ x: actor.x, z: actor.z, radius, time: this.time, ownerId: actor.id, step: true });
     this.events.push({ type: 'step', ownerId: actor.id, x: actor.x, z: actor.z });
@@ -1346,7 +1356,7 @@ export class Sim {
     const base = actor.kind === 'player' ? CONFIG.player.maxSpeed : this.arena ? CONFIG.player.maxSpeed * 0.92 : CONFIG.enemy.maxSpeed;
     const role = actor.role === 'grunt' ? 1 : CONFIG.roles[actor.role].speed;
     const gun = WEAPONS[actor.weapon].moveMul ?? 1;
-    actor.speed = base * role * gun * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1);
+    actor.speed = base * role * gun * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1) * (this.mut.has('fast') ? CONFIG.mutators.fastSpeed : 1);
   }
 
   /**
@@ -1429,7 +1439,7 @@ export class Sim {
     const pickupsAllowed = actor.kind === 'player' || this.arena;
     if (!pickupsAllowed) return;
     // The infected fight with their hands; the VIP keeps the pistol.
-    const noGuns = actor.role === 'zombie' || actor.id === this.vipId;
+    const noGuns = actor.role === 'zombie' || actor.id === this.vipId || this.mut.has('knives');
     if (this.mode === 'extract' && actor.kind === 'player' && actor.alive && !actor.downed && actor.carrying < 0) {
       const i = this.cargo.findIndex((c) => !c.delivered && c.carrier < 0 && dist(actor.x, actor.z, c.x, c.z) < 1.3);
       if (i >= 0) {
@@ -1607,6 +1617,7 @@ export class Sim {
    */
   damageActor(actor: Actor, amount: number, sourceId: number, weapon?: WeaponId, critical = false, cause: string = weapon ?? ''): void {
     if (!actor.alive || actor.shield > 0) return;
+    if (this.mut.has('double')) amount *= CONFIG.mutators.doubleDamage;
     this.lastHurt.set(actor.id, this.time);
     // A hit makes you let go of a crate or the wire cutters.
     for (const d of this.drops) if (d.openerId === actor.id) d.progress = 0;
@@ -1932,6 +1943,8 @@ export class Sim {
       if (nearest.flashOn) detectRange = P.flashRange;
       if (lit) detectRange = Math.max(detectRange, P.litRange);
       detectRange *= CONFIG.difficulty[this.difficulty].range;
+      if (this.mut.has('night')) detectRange *= CONFIG.mutators.nightSight;
+      if (this.worldEvent.kind === 'rain') detectRange *= CONFIG.world.rainSight;
       const toTarget = Math.atan2(nearest.z - actor.z, nearest.x - actor.x);
       const facing = Math.cos(toTarget - actor.ang);
       const inFov = facing > Math.cos(P.fovHalf) || d < P.nearSense;
@@ -2419,6 +2432,7 @@ export class Sim {
     if (!this.canBuy || !actor.alive) return false;
     const entry = SHOP.find((e) => e.item === item);
     if (!entry || actor.money < entry.price) return false;
+    if (this.mut.has('knives') && item in WEAPONS) return false;
     if (item === 'armor') {
       if (actor.armor >= CONFIG.powerups.maxArmor) return false;
       actor.armor = CONFIG.powerups.maxArmor;
@@ -3434,6 +3448,74 @@ export class Sim {
     this.modeState = state ?? { t: 0, text: '' };
   }
 
+  // ------------------------------------------------- mutators and map events
+
+  /** Mutators on an actor's kit: knives only, no light. Run after every (re)spawn. */
+  mutatorKit(actor: Actor): void {
+    if (this.mut.has('knives') && actor.role !== 'zombie') {
+      actor.weapons = ['knife'];
+      this.equip(actor, 'knife');
+    }
+    if (this.mut.has('noflash')) {
+      actor.flashOn = false;
+      if (actor.ai) actor.ai.hasLight = false;
+    }
+    this.applySpeed(actor);
+  }
+
+  /**
+   * Now and then something happens to the whole map: the lights go out, it
+   * rains, an armoured drop comes down, or the radio catches the enemy.
+   */
+  private updateWorld(dt: number): void {
+    const W = CONFIG.world;
+    // Not in rounds (they have their own rhythm), duels or ranked-like short modes.
+    if (this.rounds || this.mode === 'duel' || this.mode === 'vip' || this.matchOver) return;
+    const ev = this.worldEvent;
+    if (ev.kind) {
+      ev.t -= dt;
+      if (ev.t <= 0) this.endWorldEvent();
+      return;
+    }
+    this.worldT -= dt;
+    if (this.worldT > 0) return;
+    this.worldT = this.rng.range(W.every[0], W.every[1]);
+    const kinds = ['blackout', 'rain', 'armored', 'intercept'].filter((k) => !(k === 'blackout' && (this.map.lamps.length === 0 || this.mut.has('night'))));
+    const kind = kinds[this.rng.int(0, kinds.length - 1)];
+    if (kind === 'blackout') {
+      this.lampsBeforeBlackout = [...this.lampAlive];
+      this.lampAlive = this.lampAlive.map(() => false);
+      ev.t = W.blackout;
+    } else if (kind === 'rain') {
+      ev.t = W.rain;
+    } else if (kind === 'armored') {
+      this.armoredDrop = true;
+      this.dropTimer = 0;
+      ev.t = 0.01;
+    } else {
+      for (const a of this.actors.values()) if (a.kind === 'player' && a.alive) a.buffs.radar = Math.max(a.buffs.radar, W.intercept);
+      ev.t = W.intercept;
+    }
+    ev.kind = kind;
+    this.events.push({ type: 'world', id: kind, text: 'start' });
+  }
+
+  private endWorldEvent(): void {
+    const kind = this.worldEvent.kind;
+    if (kind === 'blackout' && this.lampsBeforeBlackout) {
+      // Lamps shot out during the blackout stay dark.
+      this.lampAlive = this.lampsBeforeBlackout.map((on, i) => on && !this.lampBroken[i]);
+      this.lampsBeforeBlackout = null;
+    }
+    this.worldEvent = { kind: '', t: 0 };
+    if (kind === 'blackout' || kind === 'rain') this.events.push({ type: 'world', id: kind, text: 'end' });
+  }
+
+  /** Client: the map event from a snapshot. */
+  syncWorld(world: { kind: string; t: number } | undefined): void {
+    this.worldEvent = world ?? { kind: '', t: 0 };
+  }
+
   private finishTeamMatch(team: number | undefined, text: string): void {
     if (this.matchOver) return;
     this.matchOver = true;
@@ -3963,7 +4045,15 @@ export class Sim {
     this.drops = this.drops.filter((x) => x !== d);
     let weapon: WeaponId | undefined;
     // Gun game hands out guns by the ladder only.
-    if (this.mode !== 'gun') {
+    if (this.armoredDrop) {
+      // The armoured drop of a map event: full armour and the machine gun.
+      this.armoredDrop = false;
+      actor.armor = CONFIG.powerups.maxArmor;
+      if (!this.mut.has('knives') && actor.role !== 'zombie') {
+        weapon = 'lmg';
+        this.equip(actor, weapon);
+      }
+    } else if (this.mode !== 'gun' && !this.mut.has('knives') && actor.role !== 'zombie') {
       const item = CONFIG.drop.weapons[Math.floor(this.rng.next() * CONFIG.drop.weapons.length)];
       // A drone is not a gun: it goes with the drones carried (equipping it threw
       // inside the tick and froze the match for everyone).

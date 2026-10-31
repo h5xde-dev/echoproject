@@ -122,6 +122,7 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
     wave: waveStateOf(sim) ?? undefined,
     flags: sim.flags.length > 0 ? sim.flags : undefined,
     modeState: sim.modeState.text ? sim.modeState : undefined,
+    world: sim.worldEvent.kind ? sim.worldEvent : undefined,
     bases: sim.bases.length > 0 ? sim.bases : undefined,
     bomb: sim.mode === 'bomb' ? sim.bomb : undefined,
     attackTeam: sim.mode === 'bomb' ? sim.attackTeam : undefined,

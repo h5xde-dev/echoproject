@@ -158,6 +158,8 @@ export interface SnapshotMsg {
   flags?: FlagState[];
   /** The new modes (infect, extract, vip, zone): status, marks, zone. */
   modeState?: ModeState;
+  /** A map event under way: blackout, rain… and seconds left. */
+  world?: { kind: string; t: number };
   bases?: { x: number; z: number }[];
   /** Co-op room tasks. */
   objectives?: RoomObjective[];

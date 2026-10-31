@@ -1,5 +1,5 @@
 import { CONFIG } from './config';
-import type { InteractKind, PlayerClass, PowerupKind } from './types';
+import type { InteractKind, Mutator, PlayerClass, PowerupKind } from './types';
 
 // Player-facing descriptions for the menu's help panel and class card. The
 // numbers come from CONFIG, so the text follows the balance.
@@ -58,6 +58,14 @@ export const POWERUP_INFO: Record<PowerupKind, { name: string; desc: string }> =
   stealth: { name: 'Маскировка', desc: `${P.stealthTime} с не видно, пока не бежишь и не стреляешь` },
   radar: { name: 'Радар', desc: `${P.radarTime} с враги на миникарте` },
   drone: { name: 'FPV-дрон', desc: `+1 дрон-камикадзе (X), до ${P.maxDrones}` },
+};
+
+export const MUTATOR_INFO: Record<Mutator, { name: string; desc: string }> = {
+  night: { name: 'Ночь', desc: 'лампы погашены, видно и слышно меньше' },
+  knives: { name: 'Только ножи', desc: 'никакого огнестрела' },
+  double: { name: 'Двойной урон', desc: 'всё бьёт вдвое сильнее' },
+  noflash: { name: 'Без фонарей', desc: 'фонари не включаются' },
+  fast: { name: 'Быстрые', desc: 'все бегают на 20% быстрее' },
 };
 
 export const OBJECT_INFO: { name: string; key: string; desc: string }[] = [

@@ -6,6 +6,9 @@ import { levelOf, loadProgress, RING_COLORS } from './ui/progress';
 import { assets } from './render/assets';
 import { ARENAS, arenaGrid } from '@echo/shared/game/arenas';
 import { modeInfo } from '@echo/shared/game/modes';
+import { MUTATOR_INFO } from '@echo/shared/game/info';
+import { MUTATORS, type Mutator } from '@echo/shared/game/types';
+import { weeklyPlaylist } from '@echo/shared/quests';
 import type { GameMode } from '@echo/shared/game/types';
 import { fetchAccount, importProgress, logout, rename, saveProfile, type Account } from './ui/account';
 import { fetchPublicRooms, inviteLink } from './net/meta';
@@ -377,7 +380,7 @@ function showError(message: string): void {
 
 btnSolo.addEventListener('click', () => {
   game.audio.init();
-  game.startSolo(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty });
+  game.startSolo(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty, mutators: [...mutators] });
   enterGame();
 });
 
@@ -386,7 +389,7 @@ btnHost.addEventListener('click', async () => {
   btnHost.disabled = true;
   btnHost.querySelector('.btn-title')!.textContent = 'СОЗДАЁМ...';
   try {
-    const code = await game.createRoom(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty, bots: settings.roomBots });
+    const code = await game.createRoom(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty, bots: settings.roomBots, mutators: [...mutators] });
     roomCodeValue.textContent = code;
     roomResult.classList.remove('hidden');
     hud.showRoomCode(code);
@@ -597,7 +600,8 @@ async function refreshOpenRooms(): Promise<void> {
     row.className = 'open-room';
     row.disabled = r.players >= r.max || !assetsReady;
     const arenaName = ARENAS.find((a) => a.id === r.arena)?.name ?? '';
-    row.innerHTML = `<b>${modeInfo(r.mode).title}</b><span>${r.mode === 'coop' || r.mode === 'waves' ? 'объект' : arenaName}</span><em>${r.players}/${r.max}</em>`;
+    const muts = (r.mutators ?? []).map((m) => MUTATOR_INFO[m]?.name).filter(Boolean).join(', ');
+    row.innerHTML = `<b>${modeInfo(r.mode).title}${muts ? ` <small>${muts}</small>` : ''}</b><span>${r.mode === 'coop' || r.mode === 'waves' ? 'объект' : arenaName}</span><em>${r.players}/${r.max}</em>`;
     row.addEventListener('click', () => {
       codeInput.value = r.code;
       btnJoin.click();
@@ -704,3 +708,42 @@ questsPanel.onPick = (kind, id) => {
   void saveProfile({ ...account.settings, cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls });
   questsPanel.render(quests, cosmetics);
 };
+
+// ---------------------------------------------------------------- mutators and the week's playlist
+
+/** Mutators for solo games and rooms you create (not remembered: a choice per game). */
+const mutators = new Set<Mutator>();
+const mutatorBox = must<HTMLElement>('.mutators');
+for (const m of MUTATORS) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'mutator';
+  b.textContent = MUTATOR_INFO[m].name;
+  b.title = MUTATOR_INFO[m].desc;
+  b.addEventListener('click', () => {
+    if (mutators.has(m)) mutators.delete(m);
+    else mutators.add(m);
+    b.classList.toggle('on', mutators.has(m));
+  });
+  mutatorBox.appendChild(b);
+}
+
+const weekly = weeklyPlaylist();
+const weeklyBtn = must<HTMLButtonElement>('.weekly');
+weeklyBtn.hidden = false;
+weeklyBtn.querySelector('.weekly-title')!.textContent = `${weekly.title} · ${modeInfo(weekly.mode).title}`;
+weeklyBtn.querySelector('.weekly-desc')!.textContent = `${weekly.desc}. Быстрая игра онлайн.`;
+weeklyBtn.addEventListener('click', async () => {
+  if (!assetsReady) return;
+  game.audio.init();
+  weeklyBtn.disabled = true;
+  try {
+    await game.quickPlay(playerName(), weekly.mode, weekly.mutators);
+    hud.showRoomCode(game.roomCode);
+  } catch (err) {
+    game.returnToMenu();
+    showError(err instanceof Error ? err.message : 'Сервер недоступен');
+  } finally {
+    weeklyBtn.disabled = false;
+  }
+});

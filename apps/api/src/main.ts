@@ -5,7 +5,7 @@ import { handle, HttpError, isService, json, readJson } from '@echo/node-kit/htt
 import { onShutdown } from '@echo/node-kit/lifecycle';
 import { CONFIG } from '@echo/shared/game/config';
 import { cleanStats, levelOf, matchXp, RING_COLORS, type MatchStats, type MatchTally } from '@echo/shared/progress';
-import { ACHIEVEMENTS, BADGES, badgeById, CAMOS, camoById, matchStatsFor, periodEndsIn, periodKey, questsFor } from '@echo/shared/quests';
+import { ACHIEVEMENTS, BADGES, badgeById, CAMOS, camoById, isWeekly, matchStatsFor, periodEndsIn, periodKey, questsFor, WEEKLY_XP_BONUS } from '@echo/shared/quests';
 import type { GameMode } from '@echo/shared/game/types';
 import { beginYandex, cleanName, currentUser, devLogin, logout, yandexCallback } from './auth';
 import { API } from './config';
@@ -142,6 +142,7 @@ function recordMatch(report: MatchReport) {
     .filter((x): x is { p: MatchReport['players'][number]; user: UserRow } => x.user !== null);
   if (players.length === 0) return { rows: [] };
   const rated = report.rated === true && players.length >= 2;
+  const weekly = isWeekly(String(report.mode), Array.isArray(report.mutators) ? report.mutators.map(String) : []);
   const before = players.map((x) => x.user.rating);
   const after = rated ? eloUpdate(players.map((x, i) => ({ rating: before[i], place: num(x.p.place, 64) || 1 }))) : before;
   const rows = players.map((x, i) => {
@@ -157,8 +158,8 @@ function recordMatch(report: MatchReport) {
       win,
       before: before[i],
       after: after[i],
-      // Walking out of a match earns nothing.
-      xp: x.p.left ? 0 : matchXp(tally, win),
+      // Walking out of a match earns nothing; the week's playlist earns more.
+      xp: x.p.left ? 0 : Math.round(matchXp(tally, win) * (weekly ? WEEKLY_XP_BONUS : 1)),
     };
   });
   const mode = String(report.mode).slice(0, 16) as GameMode;

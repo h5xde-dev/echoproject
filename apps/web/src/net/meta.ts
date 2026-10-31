@@ -1,4 +1,4 @@
-import type { GameMode, PlayerClass } from '@echo/shared/game/types';
+import type { GameMode, Mutator, PlayerClass } from '@echo/shared/game/types';
 import type { MetaClientMsg, MetaServerMsg, MetaTicketMsg, PublicRoom, RoomOptions } from '@echo/shared/net/meta';
 import type { MatchmakingMsg } from '@echo/shared/net/protocol';
 
@@ -42,7 +42,7 @@ export function gameUrl(t: MetaTicketMsg): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${t.url}?ticket=${encodeURIComponent(t.ticket)}`;
 }
 
-export type MetaRequest = { t: 'create'; opts: RoomOptions } | { t: 'join'; code: string } | { t: 'quick'; mode: GameMode } | { t: 'queue' };
+export type MetaRequest = { t: 'create'; opts: RoomOptions } | { t: 'join'; code: string } | { t: 'quick'; mode: GameMode; mutators?: Mutator[] } | { t: 'queue' };
 
 /**
  * One request to the meta server: resolves with the ticket. Ranked queue
