@@ -215,6 +215,22 @@ export class ActorVisual {
   /** 0 standing … 1 fully crouched, eased. */
   private crouch = 0;
 
+  /** Camouflage colours laid over the uniform part by part (null: the plain one). */
+  private camoKey = '';
+  private plainColors: THREE.Color[] | null = null;
+
+  setCamo(colors: number[] | null): void {
+    const key = colors ? colors.join(',') : '';
+    if (key === this.camoKey) return;
+    this.camoKey = key;
+    this.plainColors ??= this.baseColors.map((c) => c.clone());
+    for (let i = 0; i < this.baseColors.length; i++) {
+      const plain = this.plainColors[i];
+      if (!colors) this.baseColors[i].copy(plain);
+      else this.baseColors[i].copy(plain).lerp(new THREE.Color(colors[i % colors.length]), 0.55);
+    }
+  }
+
   update(actor: ActorView, dt: number): void {
     const low = !actor.alive ? 0 : actor.downed ? 2.5 : actor.crouched ? 1 : 0;
     this.crouch += (low - this.crouch) * Math.min(1, dt * 10);

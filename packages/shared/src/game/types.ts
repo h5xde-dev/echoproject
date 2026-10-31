@@ -413,6 +413,9 @@ export interface Actor {
   shieldUsed: boolean;
   /** Player's chosen ring colour (-1: the default palette). */
   color: number;
+  /** Signed-in players: camouflage and badge they picked (see quests.ts). */
+  camo?: string;
+  badge?: string;
   /** FPV drones carried, and the one being flown (-1: none). */
   drones: number;
   piloting: number;

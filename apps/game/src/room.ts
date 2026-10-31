@@ -8,7 +8,7 @@ import { NO_ONCE, mergeOnce, type OnceInput } from '@echo/shared/game/once';
 import { Sim, type PlayerInput } from '@echo/shared/game/sim';
 import type { GameEvent, MapData, PlayerClass } from '@echo/shared/game/types';
 import type { RoomOptions } from '@echo/shared/net/meta';
-import type { ClientMessage, HostMessage, LobbyMsg, RankedMsg } from '@echo/shared/net/protocol';
+import type { AwardsMsg, ClientMessage, HostMessage, LobbyMsg, RankedMsg } from '@echo/shared/net/protocol';
 import { sanitizeInput } from '@echo/shared/net/sanitize';
 import { buildSnapshot } from '@echo/shared/net/snapshot';
 import { newTally, outcomeFor, statEvent, tallyEvent, type MatchStats, type MatchTally } from '@echo/shared/progress';
@@ -41,6 +41,8 @@ interface Seat {
   name: string;
   cls: PlayerClass | null;
   color: number;
+  camo?: string;
+  badge?: string;
   playerId: number;
   conn: PlayerConn | null;
   input: PlayerInput;
@@ -132,7 +134,7 @@ export class Room {
       }
       seat = this.newSeat(t);
       this.seats.set(t.sub, seat);
-      this.sim.addPlayer(`p${seat.playerId}`, seat.name, seat.playerId, seat.cls, seat.color);
+      this.seatActor(seat);
       this.topUpBots();
     }
     // The creator hosts (again, after a reconnect); otherwise the first one in.
@@ -148,6 +150,8 @@ export class Room {
       name: t.name,
       cls: t.cls,
       color: t.color,
+      camo: t.camo,
+      badge: t.badge,
       playerId: this.freePlayerId(),
       conn: null,
       input: { ...IDLE },
@@ -161,6 +165,13 @@ export class Room {
       stats: {},
       win: null,
     };
+  }
+
+  /** The seat's soldier in the current simulation, with its cosmetics. */
+  private seatActor(seat: Seat): void {
+    const actor = this.sim.addPlayer(`p${seat.playerId}`, seat.name, seat.playerId, seat.cls, seat.color);
+    actor.camo = seat.camo;
+    actor.badge = seat.badge;
   }
 
   /** Player ids stay under 1000 (co-op guards start there): the smallest free one. */
@@ -256,7 +267,7 @@ export class Room {
       seat.stats = {};
       seat.win = null;
       seat.final = null;
-      this.sim.addPlayer(`p${seat.playerId}`, seat.name, seat.playerId, seat.cls, seat.color);
+      this.seatActor(seat);
     }
     this.topUpBots();
     this.tick = 0;
@@ -476,10 +487,23 @@ export class Room {
       const won = rows.some((r) => r.seat.win);
       this.broadcast({ t: 'over', win: won, text: '' });
     }
+    const awards = this.awards();
+    if (awards.length) this.broadcast({ t: 'awards', awards });
 
     const signedIn = rows.filter((r) => r.seat.userId !== null);
     if (signedIn.length === 0) return;
-    type Row = { userId: number; before: number; after: number; gained: number; xp: number; levelBefore: number; levelAfter: number; unlocked: string[] };
+    type Row = {
+      userId: number;
+      before: number;
+      after: number;
+      gained: number;
+      xp: number;
+      levelBefore: number;
+      levelAfter: number;
+      unlocked: string[];
+      quests?: { text: string; xp: number }[];
+      achievements?: { title: string; xp: number; unlock: string }[];
+    };
     let result: { rows: Row[] } = { rows: [] };
     try {
       result = await callService<{ rows: Row[] }>(GAME.apiUrl, '/internal/match', GAME.secret, {
@@ -498,7 +522,18 @@ export class Room {
     const byUser = new Map(result.rows.map((r) => [r.userId, r]));
     for (const r of signedIn) {
       const got = byUser.get(r.seat.userId!);
-      if (got) r.seat.conn?.send({ t: 'progress', gained: got.gained, xp: got.xp, before: got.levelBefore, after: got.levelAfter, unlocked: got.unlocked });
+      if (got) {
+        r.seat.conn?.send({
+          t: 'progress',
+          gained: got.gained,
+          xp: got.xp,
+          before: got.levelBefore,
+          after: got.levelAfter,
+          unlocked: got.unlocked,
+          quests: got.quests ?? [],
+          achievements: got.achievements ?? [],
+        });
+      }
     }
     if (this.ranked) {
       const msg: RankedMsg = {
@@ -513,6 +548,24 @@ export class Room {
       this.broadcast(msg);
       console.log(`room ${this.code} rated: ${msg.rows.map((r) => `${r.name} #${r.place} ${Math.round(r.before)}→${Math.round(r.after)}`).join(', ')}`);
     }
+  }
+
+  /** Who stood out this match (people only, at least two of them, something to show). */
+  private awards(): AwardsMsg['awards'] {
+    const people = [...this.seats.values()].filter((s) => !s.left);
+    if (people.length < 2) return [];
+    const best = (key: string, title: string, unit: (n: number) => string) => {
+      const top = people.reduce<Seat | null>((b, s) => ((s.stats[key] ?? 0) > (b?.stats[key] ?? 0) ? s : b), null);
+      const n = top?.stats[key] ?? 0;
+      return top && n > 0 ? [{ title, playerId: top.playerId, name: top.name, value: unit(n) }] : [];
+    };
+    return [
+      ...best('kills', 'MVP', (n) => `${n} убийств`),
+      ...best('revives', 'АНГЕЛ-ХРАНИТЕЛЬ', (n) => `поднял ${n}`),
+      ...best('objectives_any', 'ТАКТИК', (n) => `${n} целей`),
+      ...best('backstabs', 'ТИХИЙ КЛИНОК', (n) => `${n} в спину`),
+      ...best('powerups', 'СБОРЩИК', (n) => `${n} бонусов`),
+    ].slice(0, 4);
   }
 
   private broadcast(msg: HostMessage): void {

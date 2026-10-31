@@ -13,6 +13,9 @@ export interface Ticket {
   name: string;
   cls: PlayerClass | null;
   color: number;
+  /** Signed-in: camouflage and badge from the profile (owned ones only). */
+  camo?: string;
+  badge?: string;
   room: string;
   host: boolean;
   /** Unix ms after which the ticket no longer opens a seat. */

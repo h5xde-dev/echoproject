@@ -119,6 +119,13 @@ const bump = (s: MatchStats, key: string, n = 1) => {
   s[key] = (s[key] ?? 0) + n;
 };
 
+/** Objectives of any kind (flag, bomb, terminal, cargo, VIP) also add up here, for awards. */
+const OBJECTIVE_KEYS = new Set(['objectives', 'captures', 'plants', 'defuses', 'cargo', 'vip_escaped']);
+const bumpStat = (s: MatchStats, key: string) => {
+  bump(s, key);
+  if (OBJECTIVE_KEYS.has(key)) bump(s, 'objectives_any');
+};
+
 /** Counts one game event into a player's stats (same `hostile` rule as tallyEvent). */
 export function statEvent(s: MatchStats, e: GameEvent, playerId: number, hostile: (id: number) => boolean): void {
   switch (e.type) {
@@ -137,14 +144,14 @@ export function statEvent(s: MatchStats, e: GameEvent, playerId: number, hostile
       if (e.by === playerId) bump(s, 'revives');
       break;
     case 'objective':
-      if ((e.text === 'hacked' || e.text === 'defused') && e.ownerId === playerId) bump(s, 'objectives');
+      if ((e.text === 'hacked' || e.text === 'defused') && e.ownerId === playerId) bumpStat(s, 'objectives');
       break;
     case 'bomb':
-      if (e.ownerId === playerId && e.text === 'planted') bump(s, 'plants');
-      if (e.ownerId === playerId && e.text === 'defused') bump(s, 'defuses');
+      if (e.ownerId === playerId && e.text === 'planted') bumpStat(s, 'plants');
+      if (e.ownerId === playerId && e.text === 'defused') bumpStat(s, 'defuses');
       break;
     case 'flag':
-      if (e.text === 'captured' && e.ownerId === playerId) bump(s, 'captures');
+      if (e.text === 'captured' && e.ownerId === playerId) bumpStat(s, 'captures');
       break;
     case 'roomClear':
       bump(s, 'rooms');

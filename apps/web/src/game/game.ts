@@ -9,6 +9,7 @@ import type { ActorState, EventMsg, LobbyMsg, MatchmakingMsg, ProgressMsg, Ranke
 import { POWERUP_COLOR, Renderer } from '../render/renderer';
 import { buildArena } from '@echo/shared/game/arenas';
 import { POWERUP_INFO } from '@echo/shared/game/info';
+import { badgeById, camoById } from '@echo/shared/quests';
 import { updateBullets, type BulletActor, type BulletCtx } from '@echo/shared/game/bullets';
 import { CONFIG, COLORS } from '@echo/shared/game/config';
 import { generateMap } from '@echo/shared/game/levelgen';
@@ -85,6 +86,8 @@ export interface DisplayActor {
   hold: number;
   isLocal: boolean;
   moving: boolean;
+  camo?: string;
+  badge?: string;
 }
 
 interface PendingInput {
@@ -336,6 +339,7 @@ export class Game {
       onLobby: (msg) => this.showLobby(msg),
       onRanked: (msg) => this.onRanked(msg),
       onProgress: (msg) => this.onServerProgress(msg),
+      onAwards: (msg) => this.hud.showAwards(msg.awards.map((a) => ({ ...a, isLocal: a.playerId === this.localId }))),
       onBye: (msg) => {
         if (!msg.text) return;
         if (this.running && !this.gameOver) this.endGame(false, msg.text, 'СВЯЗЬ ЗАКРЫТА');
@@ -652,7 +656,8 @@ export class Game {
     if (id === undefined) return '';
     if (id === this.localId) return 'вы';
     const d = this.display.get(id) ?? this.sim.actors.get(id);
-    return d?.name ?? '';
+    const glyph = badgeById(d?.badge)?.glyph;
+    return d ? `${glyph ? `${glyph} ` : ''}${d.name}` : '';
   }
 
   private applyEvent(event: GameEvent): void {
@@ -1036,6 +1041,12 @@ export class Game {
   /** A signed-in player's experience, as the server counted it. */
   private onServerProgress(msg: ProgressMsg): void {
     this.hud.setGameOverProgress(progressLine(msg.gained, msg.xp, msg.before, msg.after, msg.unlocked));
+    const lines = [
+      ...(msg.quests ?? []).map((q) => `ЗАДАНИЕ ВЫПОЛНЕНО: ${q.text} (+${q.xp})`),
+      ...(msg.achievements ?? []).map((a) => `ДОСТИЖЕНИЕ «${a.title}» (+${a.xp})${a.unlock ? ` · открыт ${a.unlock}` : ''}`),
+    ];
+    this.hud.setGameOverQuests(lines);
+    for (const a of msg.achievements ?? []) this.hud.pickupToast(`Достижение: ${a.title}`, a.unlock ? `Открыт ${a.unlock}` : `+${a.xp} опыта`, 0xffd23a);
     this.onProgressSaved?.(msg.xp);
   }
 
@@ -1440,6 +1451,8 @@ export class Game {
           piloting: a.piloting,
           isLocal,
           moving: a.moving,
+          camo: a.camo,
+          badge: a.badge,
         });
       }
       for (const id of this.prevTick.keys()) if (!this.sim.actors.has(id)) this.prevTick.delete(id);
@@ -1449,6 +1462,7 @@ export class Game {
 
     for (const d of this.display.values()) {
       const visual = this.renderer.ensureActor(d.id, this.colorFor(d.id), d.kind === 'player');
+      visual.setCamo(camoById(d.camo)?.colors ?? null);
       visual.concealed = d.concealed;
       visual.update(d, dt);
       if (d.burning && d.alive) this.renderer.burnOn(d.id, d.x, d.z, dt);
@@ -1595,6 +1609,8 @@ export class Game {
         piloting: b.piloting ?? -1,
         isLocal: id === this.localId,
         moving: false,
+        camo: b.camo,
+        badge: b.badge,
       };
       if (d.isLocal) {
         const mirror = this.sim.actors.get(this.localId);
@@ -2058,8 +2074,8 @@ export class Game {
         id: d.id,
         x: p.x,
         y: p.y,
-        // Arena bots and players have names worth showing.
-        name: d.kind === 'enemy' && this.matchMode === 'coop' ? '' : d.name,
+        // Arena bots and players have names worth showing; a badge goes before the name.
+        name: d.kind === 'enemy' && this.matchMode === 'coop' ? '' : `${badgeById(d.badge)?.glyph ?? ''}${badgeById(d.badge) ? ' ' : ''}${d.name}`,
         hpRatio: d.hp / d.maxHp,
         armorRatio: d.armor / CONFIG.powerups.maxArmor,
         kind: d.isLocal ? 'self' : hostile ? 'enemy' : 'ally',

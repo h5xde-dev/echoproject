@@ -1364,3 +1364,43 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
 .open-room span { color: var(--ink-dim); font-size: 12px; }
 .open-room em { font-style: normal; font-family: var(--mono); color: var(--accent); }
 .room-link { margin-top: 8px; }
+
+/* Quests in the menu and the quests window. */
+.quests-box { margin-top: 12px; }
+.quests-head { display: flex; justify-content: space-between; font-size: 11px; letter-spacing: 0.18em; color: var(--ink-dim); margin-bottom: 6px; }
+.quests-head em { font-style: normal; letter-spacing: 0.04em; }
+.quests-guest { font-size: 12px; color: var(--ink-dim); }
+.quest { position: relative; display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 5px 8px; margin-bottom: 4px; background: rgba(255, 255, 255, 0.03); font-size: 12px; overflow: hidden; }
+.quest i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); }
+.quest em { font-style: normal; font-family: var(--mono); color: var(--ink-dim); }
+.quest small { color: var(--accent-warm); }
+.quest.done span { color: var(--ink-dim); text-decoration: line-through; }
+.quest.done em { color: var(--accent); }
+.quests-open { margin-top: 4px; width: 100%; background: none; border: 1px solid var(--panel-line); color: var(--ink-dim); font: 11px var(--font); letter-spacing: 0.12em; padding: 6px; cursor: pointer; }
+.quests-open:hover { color: var(--ink); border-color: rgba(63, 214, 200, 0.45); }
+.quests-body h3 { font-size: 13px; letter-spacing: 0.16em; color: var(--accent); margin: 14px 0 8px; }
+.quests-body h3 small { color: var(--ink-dim); letter-spacing: 0.04em; font-weight: 400; }
+.quests-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 760px) { .quests-cols { grid-template-columns: 1fr; } }
+.picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.pick { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: rgba(255, 255, 255, 0.03); border: 1px solid transparent; color: var(--ink); font: 12px var(--font); cursor: pointer; }
+.pick.active { border-color: var(--accent); }
+.pick.locked { opacity: 0.35; cursor: default; }
+.swatch { display: inline-flex; }
+.swatch i { width: 10px; height: 14px; }
+.glyph { font-size: 16px; width: 16px; text-align: center; }
+.achs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+.ach { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 6px 8px; background: rgba(255, 255, 255, 0.03); font-size: 12px; }
+.ach b { grid-column: 1; }
+.ach span { grid-column: 1; color: var(--ink-dim); }
+.ach em { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-style: normal; font-family: var(--mono); color: var(--ink-dim); }
+.ach.done b { color: var(--accent); }
+
+/* Results screen: awards and what the match did for quests. */
+.gameover-awards { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.award { padding: 6px 12px; border: 1px solid rgba(255, 210, 58, 0.45); background: rgba(255, 210, 58, 0.06); text-align: center; }
+.award b { display: block; font-size: 11px; letter-spacing: 0.18em; color: #ffd23a; }
+.award span { font-size: 14px; }
+.award em { display: block; font-style: normal; font-size: 11px; color: var(--ink-dim); }
+.gameover-quests { font-size: 13px; color: var(--accent); text-align: center; line-height: 1.6; }
+.plate-badge { margin-right: 4px; }

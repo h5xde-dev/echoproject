@@ -27,13 +27,21 @@ interface Who {
   name: string;
   cls: PlayerClass | null;
   color: number;
+  camo?: string;
+  badge?: string;
 }
 
-async function accountOf(req: IncomingMessage): Promise<{ id: number; name: string } | null> {
+interface Account {
+  id: number;
+  name: string;
+  settings?: { camo?: string; badge?: string };
+}
+
+async function accountOf(req: IncomingMessage): Promise<Account | null> {
   const token = parseCookies(req.headers.cookie).ne_sid;
   if (!token) return null;
   try {
-    const { user } = await callService<{ user: { id: number; name: string } | null }>(META.apiUrl, `/internal/session?token=${encodeURIComponent(token)}`, META.secret);
+    const { user } = await callService<{ user: Account | null }>(META.apiUrl, `/internal/session?token=${encodeURIComponent(token)}`, META.secret);
     return user;
   } catch {
     // API down: play on as a guest rather than not at all.
@@ -62,7 +70,7 @@ class Client implements Waiting {
 
   constructor(
     private ws: WebSocket,
-    private account: { id: number; name: string } | null,
+    private account: Account | null,
   ) {
     ws.on('message', (data, binary) => {
       if (binary) return;
@@ -92,7 +100,7 @@ class Client implements Waiting {
 
   private ticket(code: string, url: string, host: boolean, ranked: boolean): void {
     const who = this.who!;
-    const ticket = signTicket({ sub: who.sub, userId: who.userId, name: who.name, cls: who.cls, color: who.color, room: code, host, exp: Date.now() + META.ticketMs }, META.secret);
+    const ticket = signTicket({ sub: who.sub, userId: who.userId, name: who.name, cls: who.cls, color: who.color, camo: who.camo, badge: who.badge, room: code, host, exp: Date.now() + META.ticketMs }, META.secret);
     this.send({ t: 'ticket', code, ticket, url, ranked });
   }
 
@@ -116,6 +124,9 @@ class Client implements Waiting {
         name: this.account ? this.account.name : cleanName(typeof msg.name === 'string' ? msg.name : ''),
         cls: CLASSES.includes(msg.cls as PlayerClass) ? msg.cls! : null,
         color,
+        // The API saved only cosmetics the player owns.
+        camo: this.account?.settings?.camo || undefined,
+        badge: this.account?.settings?.badge || undefined,
       };
       return this.send({ t: 'me', signedIn: !!this.account, name: this.who.name });
     }

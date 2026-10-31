@@ -268,9 +268,32 @@ try {
   check(prog.gained > 0, `experience counted by the server: +${prog.gained}`);
   const board = await fetch(`http://127.0.0.1:${PORTS.api}/api/leaderboard`).then((r) => r.json());
   check(board.rows[0]?.name === 'Алиса' && board.rows[0].games === 1, 'leaderboard updated');
+  check((prog.achievements ?? []).some((x) => x.title === 'Первая победа' && /Лес/.test(x.unlock)), `achievement on the first win, with a camo (${JSON.stringify(prog.achievements)})`);
+  const api = (path, init = {}) => fetch(`http://127.0.0.1:${PORTS.api}${path}`, { ...init, headers: { cookie: aliceCookie, 'content-type': 'application/json', ...(init.headers ?? {}) } }).then((r) => r.json());
+  const qv = await api('/api/me/quests');
+  check(qv.daily.length === 3 && qv.weekly.length === 3 && qv.camos.find((c) => c.id === 'forest')?.owned, 'quests of the day and week, and the camo is owned');
+  check(qv.daily.some((q) => q.progress > 0) || qv.weekly.some((q) => q.progress > 0), 'the match moved quests along');
+  const notOwned = await api('/api/me/settings', { method: 'PUT', body: JSON.stringify({ camo: 'gold', badge: 'crown' }) });
+  check(!notOwned.settings.camo && !notOwned.settings.badge, 'cosmetics not earned cannot be worn');
+  const good = await api('/api/me/settings', { method: 'PUT', body: JSON.stringify({ camo: 'forest' }) });
+  check(good.settings.camo === 'forest', 'an earned camo can be worn');
   ra.ws.close();
   qa.ws.close();
   qb.ws.close();
+  // The camo travels: meta ticket -> seat -> soldier -> snapshot.
+  const cm = meta(aliceCookie);
+  await cm.ready;
+  cm.send({ t: 'hello', guestId: 'x0000000', name: '' });
+  await cm.next((m) => m.t === 'me');
+  cm.send({ t: 'quick', mode: 'tdm' });
+  const ct = await cm.next((m) => m.t === 'ticket');
+  const cg = game(ct.url, ct.ticket);
+  await cg.ready;
+  const cw = await cg.next((m) => m.t === 'welcome');
+  const cs = await cg.next((m) => m.t === 'snap');
+  check(cs.actors.find((a) => a.id === cw.playerId)?.camo === 'forest', 'others see the camo on the soldier');
+  cg.ws.close();
+  cm.ws.close();
 
   // -------------------------------------------------------------- shutdown
   const gameProc = procs[2];

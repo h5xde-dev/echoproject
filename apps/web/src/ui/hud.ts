@@ -807,6 +807,18 @@ export class Hud {
     this.overEl.classList.add('visible');
   }
 
+  /** Quests and achievements this match completed (signed-in players). */
+  setGameOverQuests(lines: string[]): void {
+    must(this.overEl, '.gameover-quests').innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
+  }
+
+  /** MVP and the other awards of the match. */
+  showAwards(awards: { title: string; name: string; value: string; isLocal: boolean }[]): void {
+    must(this.overEl, '.gameover-awards').innerHTML = awards
+      .map((a) => `<div class="award${a.isLocal ? ' mine' : ''}"><b>${escapeHtml(a.title)}</b><span>${escapeHtml(a.name)}${a.isLocal ? ' (вы)' : ''}</span><em>${escapeHtml(a.value)}</em></div>`)
+      .join('');
+  }
+
   /** The experience line, when the server's count arrives after the screen is up. */
   setGameOverProgress(text: string): void {
     must(this.overEl, '.gameover-progress').textContent = text;
@@ -826,6 +838,8 @@ export class Hud {
 
   hideGameOver(): void {
     this.overEl.querySelector('.gameover-rating')?.remove();
+    must(this.overEl, '.gameover-quests').innerHTML = '';
+    must(this.overEl, '.gameover-awards').innerHTML = '';
     this.overEl.classList.remove('visible');
   }
 

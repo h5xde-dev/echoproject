@@ -9,6 +9,7 @@ import { modeInfo } from '@echo/shared/game/modes';
 import type { GameMode } from '@echo/shared/game/types';
 import { fetchAccount, importProgress, logout, rename, saveProfile, type Account } from './ui/account';
 import { fetchPublicRooms, inviteLink } from './net/meta';
+import { fetchQuests, QuestsPanel, renderQuestBox, type QuestsData } from './ui/quests';
 import { classCard, HelpPanel } from './ui/help';
 
 const viewport = must<HTMLElement>('#viewport');
@@ -198,6 +199,11 @@ window.addEventListener('keydown', (e) => {
   if (help.isOpen) {
     e.preventDefault();
     help.close();
+    return;
+  }
+  if (questsPanel.isOpen) {
+    e.preventDefault();
+    questsPanel.close();
     return;
   }
   if (!menu.classList.contains('hidden')) return;
@@ -448,6 +454,7 @@ async function refreshAccount(): Promise<void> {
   }
   if (account) applyProfile(account);
   refreshRank();
+  void refreshQuests();
   // No game server (a static preview): no login, no ranked play.
   accountBox.classList.toggle('hidden', !available);
   btnRanked.classList.toggle('hidden', !available);
@@ -662,6 +669,32 @@ function syncProfile(): void {
   if (!account) return;
   window.clearTimeout(profileTimer);
   profileTimer = window.setTimeout(() => {
-    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls });
+    // The whole profile goes each time: camouflage and badge too.
+    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls, camo: cosmetics.camo, badge: cosmetics.badge });
   }, 600);
 }
+
+// ---------------------------------------------------------------- quests and cosmetics
+
+const questsBox = must<HTMLElement>('.quests-box');
+const questsPanel = new QuestsPanel();
+let quests: QuestsData | null = null;
+/** The camouflage and badge on the account (the API keeps only owned ones). */
+let cosmetics: { camo?: string; badge?: string } = {};
+
+async function refreshQuests(): Promise<void> {
+  quests = account ? await fetchQuests() : null;
+  cosmetics = { camo: account?.settings?.camo, badge: account?.settings?.badge };
+  renderQuestBox(questsBox, quests, !!account);
+  questsBox.querySelector('.quests-open')?.addEventListener('click', () => {
+    if (quests) questsPanel.open(quests, cosmetics);
+  });
+}
+
+questsPanel.onPick = (kind, id) => {
+  if (!account || !quests) return;
+  cosmetics = { ...cosmetics, [kind]: id };
+  account.settings = { ...account.settings, [kind]: id };
+  void saveProfile({ ...account.settings, cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls });
+  questsPanel.render(quests, cosmetics);
+};

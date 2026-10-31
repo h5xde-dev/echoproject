@@ -112,6 +112,8 @@
           <div class="gameover-title">ОБЪЕКТ ЗАЧИЩЕН</div>
           <div class="gameover-text"></div>
           <div class="gameover-progress"></div>
+          <div class="gameover-quests"></div>
+          <div class="gameover-awards"></div>
           <table class="gameover-scores"></table>
           <div class="gameover-actions">
             <button class="btn primary gameover-again" type="button"><span class="btn-title">ЕЩЁ РАЗ</span></button>
@@ -200,6 +202,8 @@
               <div class="rank-track"><i class="rank-fill"></i></div>
               <div class="ring-colors" role="radiogroup" aria-label="Цвет кольца"></div>
             </div>
+            <!-- Filled from /api/me/quests in main.ts. -->
+            <div class="quests-box"></div>
 
             <span class="field-label">Режим</span>
             <div class="mode-grid" role="radiogroup" aria-label="Режим">

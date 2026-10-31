@@ -63,6 +63,28 @@ const MIGRATIONS: string[] = [
    ALTER TABLE match_players ADD COLUMN win INTEGER NOT NULL DEFAULT 0;
    CREATE INDEX IF NOT EXISTS match_players_user ON match_players (user_id, match_id DESC);
    CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions (expires_at);`,
+  // 2: lifetime stats (achievements), quest progress, unlocked cosmetics.
+  `CREATE TABLE user_stats (
+     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+     key TEXT NOT NULL,
+     value INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (user_id, key)
+   );
+   CREATE TABLE quest_progress (
+     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+     period_key TEXT NOT NULL,
+     quest_id TEXT NOT NULL,
+     progress INTEGER NOT NULL DEFAULT 0,
+     done_at INTEGER,
+     PRIMARY KEY (user_id, period_key, quest_id)
+   );
+   CREATE TABLE unlocks (
+     user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+     kind TEXT NOT NULL,
+     item_id TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     PRIMARY KEY (user_id, kind, item_id)
+   );`,
 ];
 const version = db.pragma('user_version', { simple: true }) as number;
 for (let v = version; v < MIGRATIONS.length; v++) {
@@ -188,3 +210,65 @@ export const saveMatch = db.transaction((mode: string, arena: string, rated: boo
   }
   return Number(lastInsertRowid);
 });
+
+// ---------------------------------------------------------------- quests, achievements, cosmetics
+
+const qx = {
+  stats: db.prepare('SELECT key, value FROM user_stats WHERE user_id = ?'),
+  addStat: db.prepare(`INSERT INTO user_stats (user_id, key, value) VALUES (?, ?, ?)
+    ON CONFLICT (user_id, key) DO UPDATE SET value = value + excluded.value`),
+  quests: db.prepare('SELECT quest_id, progress, done_at FROM quest_progress WHERE user_id = ? AND period_key = ?'),
+  addQuest: db.prepare(`INSERT INTO quest_progress (user_id, period_key, quest_id, progress) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id, period_key, quest_id) DO UPDATE SET progress = progress + excluded.progress`),
+  doneQuest: db.prepare('UPDATE quest_progress SET done_at = ? WHERE user_id = ? AND period_key = ? AND quest_id = ? AND done_at IS NULL'),
+  unlocks: db.prepare('SELECT kind, item_id FROM unlocks WHERE user_id = ?'),
+  unlock: db.prepare('INSERT OR IGNORE INTO unlocks (user_id, kind, item_id, at) VALUES (?, ?, ?, ?)'),
+  giveXp: db.prepare('UPDATE users SET xp = xp + ? WHERE id = ?'),
+};
+
+export function lifetimeStats(userId: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of qx.stats.all(userId) as { key: string; value: number }[]) out[r.key] = r.value;
+  return out;
+}
+
+export function addLifetimeStats(userId: number, stats: Record<string, number>): void {
+  for (const [k, v] of Object.entries(stats)) if (v > 0) qx.addStat.run(userId, k, v);
+}
+
+export function questRows(userId: number, periodKey: string): Map<string, { progress: number; done: boolean }> {
+  const out = new Map<string, { progress: number; done: boolean }>();
+  for (const r of qx.quests.all(userId, periodKey) as { quest_id: string; progress: number; done_at: number | null }[]) {
+    out.set(r.quest_id, { progress: r.progress, done: r.done_at !== null });
+  }
+  return out;
+}
+
+export function addQuestProgress(userId: number, periodKey: string, questId: string, n: number): void {
+  qx.addQuest.run(userId, periodKey, questId, n);
+}
+
+/** Marks a quest done; false if it already was (rewards only once). */
+export function markQuestDone(userId: number, periodKey: string, questId: string): boolean {
+  return qx.doneQuest.run(Date.now(), userId, periodKey, questId).changes > 0;
+}
+
+/** Cosmetics a player owns, and achievements earned (kind 'ach'). */
+export function unlocksOf(userId: number): { camos: string[]; badges: string[]; achievements: string[] } {
+  const out = { camos: [] as string[], badges: [] as string[], achievements: [] as string[] };
+  for (const r of qx.unlocks.all(userId) as { kind: string; item_id: string }[]) {
+    if (r.kind === 'camo') out.camos.push(r.item_id);
+    else if (r.kind === 'badge') out.badges.push(r.item_id);
+    else if (r.kind === 'ach') out.achievements.push(r.item_id);
+  }
+  return out;
+}
+
+/** True when it is new for this player. */
+export function unlock(userId: number, kind: string, itemId: string): boolean {
+  return qx.unlock.run(userId, kind, itemId, Date.now()).changes > 0;
+}
+
+export function giveXp(userId: number, xp: number): void {
+  qx.giveXp.run(xp, userId);
+}

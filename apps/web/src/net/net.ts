@@ -1,4 +1,5 @@
 import type {
+  AwardsMsg,
   ByeMsg,
   ClientMessage,
   EventMsg,
@@ -30,6 +31,7 @@ export interface NetClientHandlers {
   onLobby(msg: LobbyMsg): void;
   onRanked(msg: RankedMsg): void;
   onProgress(msg: ProgressMsg): void;
+  onAwards(msg: AwardsMsg): void;
   /** The server closed our seat on purpose (room closed, update, another tab): no reconnect. */
   onBye(msg: ByeMsg): void;
   onLatency(ms: number): void;
@@ -138,6 +140,9 @@ export class Net {
         break;
       case 'progress':
         h.onProgress(msg);
+        break;
+      case 'awards':
+        h.onAwards(msg);
         break;
       case 'bye':
         this.bye = true;

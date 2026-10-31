@@ -71,6 +71,8 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
       cls: a.cls,
       shieldUsed: a.shieldUsed,
       color: a.color,
+      camo: a.camo,
+      badge: a.badge,
       drones: a.drones,
       piloting: a.piloting,
       streak: a.streak || undefined,

@@ -48,6 +48,8 @@ export interface ActorState {
   cls?: PlayerClass | null;
   shieldUsed?: boolean;
   color?: number;
+  camo?: string;
+  badge?: string;
   /** FPV drones carried; the drone being flown (-1 / absent: none). */
   drones?: number;
   piloting?: number;
@@ -232,6 +234,15 @@ export interface ProgressMsg {
   before: number;
   after: number;
   unlocked: string[];
+  /** Quests finished by this match, and achievements earned (with what they unlock). */
+  quests?: { text: string; xp: number }[];
+  achievements?: { title: string; xp: number; unlock: string }[];
+}
+
+/** Match awards for everyone's results screen: MVP, best medic… */
+export interface AwardsMsg {
+  t: 'awards';
+  awards: { title: string; playerId: number; name: string; value: string }[];
 }
 
 /** The server closes the room (empty, shut down for an update...): why. */
@@ -316,6 +327,7 @@ export type HostMessage =
   | RankedMsg
   | RoomMsg
   | ProgressMsg
+  | AwardsMsg
   | ByeMsg
   | RtcMsg
   | SnapshotMsg
