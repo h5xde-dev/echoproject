@@ -18,9 +18,9 @@
     "check:text": "node tools/check-text.mjs",
     "test": "node --test tests/",
     "test:services": "node tests/run-services.mjs",
-    "test:netcode": "npm run test:netcode -w @echo/web",
     "test:arenas": "npm run test:arenas -w @echo/web",
-    "test:server": "npm run test:server -w @echo/web"
+    "test:server": "npm run test:server -w @echo/web",
+    "test:online": "npm run test:online -w @echo/web"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

@@ -19,7 +19,6 @@ function hasOneShot(m: InputMsg): boolean {
 }
 
 export class ServerLink implements DataChannelLike {
-  peer = 'server';
   open = false;
   private ws: WebSocket;
   private pc: RTCPeerConnection | null = null;
@@ -27,6 +26,10 @@ export class ServerLink implements DataChannelLike {
   private fallbackInput: string | null = null;
   private fallbackInputTimer: number | null = null;
   private handlers: Record<string, Handler[]> = {};
+  /** Signalling is handled one message at a time, in order (see onRtc). */
+  private rtcChain: Promise<void> = Promise.resolve();
+  /** Candidates that came before the offer was applied. */
+  private earlyCandidates: RtcMsg[] = [];
 
   constructor(url: string) {
     this.ws = new WebSocket(url);
@@ -37,15 +40,16 @@ export class ServerLink implements DataChannelLike {
     this.ws.onmessage = (e) => {
       const msg = parse(e.data);
       if (!msg) return;
-      if (msg.t === 'rtc') void this.onRtc(msg as RtcMsg);
+      if (msg.t === 'rtc') this.rtcChain = this.rtcChain.then(() => this.onRtc(msg as RtcMsg));
       else this.emit('data', msg);
     };
-    this.ws.onclose = () => {
+    this.ws.onclose = (e) => {
       const was = this.open;
       this.open = false;
+      this.stopFallback();
       this.closeRtc();
-      if (was) this.emit('close');
-      else this.emit('error', { type: 'network', message: 'Игровой сервер недоступен.' });
+      if (was) this.emit('close', e.code);
+      else this.emit('error', { type: 'network', message: 'Игровой сервер недоступен или комната закрыта.' });
     };
   }
 
@@ -92,11 +96,15 @@ export class ServerLink implements DataChannelLike {
 
   close(): void {
     this.open = false;
+    this.stopFallback();
+    this.closeRtc();
+    this.ws.close();
+  }
+
+  private stopFallback(): void {
     if (this.fallbackInputTimer !== null) window.clearInterval(this.fallbackInputTimer);
     this.fallbackInputTimer = null;
     this.fallbackInput = null;
-    this.closeRtc();
-    this.ws.close();
   }
 
   private emit(event: string, ...args: unknown[]): void {
@@ -125,11 +133,25 @@ export class ServerLink implements DataChannelLike {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         this.sendWs({ t: 'rtc', type: 'answer', sdp: pc.localDescription?.sdp ?? answer.sdp ?? '' });
-      } else if (msg.candidate && this.pc) {
-        await this.pc.addIceCandidate({ candidate: msg.candidate, sdpMid: msg.mid ?? '0' });
+        // Candidates the server sent while the offer was being applied:
+        // adding them earlier throws, and the UDP path silently never came up.
+        const early = this.earlyCandidates;
+        this.earlyCandidates = [];
+        for (const c of early) await this.addCandidate(c);
+      } else if (msg.candidate) {
+        if (this.pc?.remoteDescription) await this.addCandidate(msg);
+        else this.earlyCandidates.push(msg);
       }
     } catch {
       /* no UDP path: the WebSocket carries everything */
+    }
+  }
+
+  private async addCandidate(msg: RtcMsg): Promise<void> {
+    try {
+      await this.pc?.addIceCandidate({ candidate: msg.candidate!, sdpMid: msg.mid ?? '0' });
+    } catch {
+      /* one bad candidate: the others may still connect */
     }
   }
 
@@ -138,6 +160,7 @@ export class ServerLink implements DataChannelLike {
   }
 
   private closeRtc(): void {
+    this.earlyCandidates = [];
     this.fast?.close();
     this.pc?.close();
     this.fast = null;
@@ -153,11 +176,4 @@ function parse(data: unknown): { t?: string } | null {
   } catch {
     return null;
   }
-}
-
-/** The game server's WebSocket on this site. */
-export function serverUrl(): string {
-  const override = new URLSearchParams(location.search).get('server');
-  if (override) return override;
-  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 }

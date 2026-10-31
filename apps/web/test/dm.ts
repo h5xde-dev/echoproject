@@ -1263,9 +1263,10 @@ for (const info of ARENAS) {
     s.events.length = 0;
   };
   reset();
-  check(p.drones === 1, 'an engineer carries a drone');
+  const carried = p.drones;
+  check(carried === 3, `an engineer carries three drones (${carried})`);
   s.applyInput(p, { ...input, drone: true });
-  check(p.piloting >= 0 && s.drones.length === 1 && p.drones === 0, 'X launches it');
+  check(p.piloting >= 0 && s.drones.length === 1 && p.drones === carried - 1, 'X launches one');
   for (let i = 0; i < 60; i++) {
     p.shield = 0;
     s.applyInput(p, { ...input, moveZ: -1 });
@@ -1303,12 +1304,16 @@ for (const info of ARENAS) {
   d2.x = 25;
   d2.z = 15;
   s.events.length = 0;
-  s.bullets.push({
-    id: 'drone-shot', ownerId: foe.id, ownerKind: 'player', x: 28, z: 15, vx: -40, vz: 0, speed: 40,
-    damage: WEAPONS.rifle.damage, damageMul: 1, life: 1, weapon: 'rifle', color: 0xffffff, range: 0,
-  });
-  for (let i = 0; i < 10; i++) s.step(dt);
-  check(d2.down && p.piloting === -1, 'a rifle round knocks it out of the air');
+  // As many rounds as its armour takes (the balance moves; the rule does not).
+  const rounds = Math.ceil(CONFIG.drone.hp / WEAPONS.rifle.damage);
+  for (let r = 0; r < rounds; r++) {
+    s.bullets.push({
+      id: `drone-shot-${r}`, ownerId: foe.id, ownerKind: 'player', x: 28, z: 15, vx: -40, vz: 0, speed: 40,
+      damage: WEAPONS.rifle.damage, damageMul: 1, life: 1, weapon: 'rifle', color: 0xffffff, range: 0,
+    });
+    for (let i = 0; i < 10; i++) s.step(dt);
+  }
+  check(d2.down && p.piloting === -1, `rifle rounds knock it out of the air (${rounds})`);
   for (let i = 0; i < 90; i++) s.step(dt);
   check(s.drones.length === 0 && s.events.some((e) => e.type === 'explosion'), 'and it goes off where it falls');
 
@@ -1399,7 +1404,8 @@ for (const info of ARENAS) {
     dr.x = 24;
     dr.z = 15;
     let downAt = -1;
-    for (let i = 0; i < 300 && downAt < 0; i++) {
+    // 50 hp since the drone was made tougher: a few rifle rounds, not one.
+    for (let i = 0; i < 600 && downAt < 0; i++) {
       pilot.shield = 0;
       bot.shield = 0;
       bot.hp = bot.maxHp;
@@ -1408,7 +1414,7 @@ for (const info of ARENAS) {
       b.step(dt);
       if (dr.down) downAt = i * dt;
     }
-    check(downAt > 0 && downAt < 4, `a bot shoots down a drone hovering 6 m off (${downAt.toFixed(1)} s)`);
+    check(downAt > 0 && downAt < 8, `a bot shoots down a drone hovering 6 m off (${downAt.toFixed(1)} s)`);
   }
 
   // On sale in competitive.
@@ -1433,6 +1439,16 @@ for (const info of ARENAS) {
     s.powerups.push({ id: 900 + s.powerups.length, kind, x: p.x, z: p.z, room: 0, active: true, respawnT: 0, dropped: true });
     s.step(dt);
   };
+  // A drone from the floor: anyone can carry one, up to the limit.
+  p.drones = 0;
+  take('drone');
+  check(p.drones === 1, 'a drone powerup gives a drone to any class');
+  p.drones = CONFIG.powerups.maxDrones;
+  const before = s.powerups.filter((x) => x.active).length;
+  take('drone');
+  check(p.drones === CONFIG.powerups.maxDrones && s.powerups.filter((x) => x.active).length === before + 1, 'at the limit it stays on the floor');
+  p.drones = 0;
+  s.powerups.length = 0;
   p.ammo = 1;
   p.grenades = 0;
   take('ammo');

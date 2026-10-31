@@ -1,16 +1,10 @@
 import type { Game } from '../src/game/game';
+import type { Hud } from '../src/ui/hud';
 
 declare global {
   interface Window {
-    __peaks: { host: number; client: number };
-    __peakTimer: number;
-    __net: {
-      gameA: Game;
-      gameB: Game;
-      code: string;
-      ready: boolean;
-      error: string;
-    };
+    /** Debug handle the game page exposes (main.ts). */
+    echo: { game: Game; hud: Hud };
   }
 }
 

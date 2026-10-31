@@ -1136,19 +1136,33 @@ export class Sim {
       const before = Math.hypot(drone.vx, drone.vz);
       // Over crates and cover, but walls and shut doors stop it.
       const steps = Math.max(1, Math.ceil((Math.hypot(drone.vx, drone.vz) * dt) / 0.2));
+      // Velocity loses only its part into a surface it touches: head-on into a
+      // wall that is all of it (a crash), along a wall almost none. Measured
+      // from the push-back, not from how far the last sub-step got, which
+      // split one head-on impact over two ticks and never reached crashSpeed.
+      let vx = drone.vx;
+      let vz = drone.vz;
       for (let i = 0; i < steps; i++) {
-        const ox = drone.x;
-        const oz = drone.z;
-        drone.x += (drone.vx * dt) / steps;
-        drone.z += (drone.vz * dt) / steps;
+        drone.x += (vx * dt) / steps;
+        drone.z += (vz * dt) / steps;
+        const px = drone.x;
+        const pz = drone.z;
         const r = D.radius;
         for (const b of this.world.query(drone.x - r, drone.z - r, drone.x + r, drone.z + r, this.scratch)) resolveCircleBox(drone, r, b.cx, b.cz, b.hw, b.hh);
         for (const d of this.world.doors) if (!d.open) resolveCircleBox(drone, r, d.cx, d.cz, d.hw, d.hh);
-        if (i === steps - 1) {
-          drone.vx = ((drone.x - ox) * steps) / dt;
-          drone.vz = ((drone.z - oz) * steps) / dt;
+        const cx = drone.x - px;
+        const cz = drone.z - pz;
+        const push = Math.hypot(cx, cz);
+        if (push > 1e-6) {
+          const vn = (vx * cx + vz * cz) / push;
+          if (vn < 0) {
+            vx -= (cx / push) * vn;
+            vz -= (cz / push) * vn;
+          }
         }
       }
+      drone.vx = vx;
+      drone.vz = vz;
       // Into a wall at speed: props shatter, it drops.
       if (before - Math.hypot(drone.vx, drone.vz) > D.crashSpeed) {
         this.downDrone(drone);

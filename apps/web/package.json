@@ -9,13 +9,12 @@
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
     "assets": "node tools/build-assets.mjs",
-    "test:netcode": "node test/run-netcode.mjs",
     "test:arenas": "node test/run-dm.mjs",
-    "test:server": "node test/run-server.mjs"
+    "test:server": "node test/run-server.mjs",
+    "test:online": "node test/run-online.mjs"
   },
   "dependencies": {
     "@echo/shared": "*",
-    "peerjs": "^1.5.5",
     "three": "^0.186.1"
   },
   "devDependencies": {

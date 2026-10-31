@@ -198,6 +198,8 @@ export class Hud {
   onPauseResume: () => void = () => undefined;
   /** The pause overlay asked to leave for the main menu. */
   onPauseMenu: () => void = () => undefined;
+  /** Game over: "play again" (main.ts decides what that means for solo, a room, ranked). */
+  onPlayAgain: () => void = () => undefined;
   /** Lobby button: the host starts the match, a client toggles ready. */
   onLobbyAction: () => void = () => undefined;
   private buffsKey = '';
@@ -263,7 +265,7 @@ export class Hud {
       const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-item]');
       if (btn && !btn.classList.contains('locked')) this.onBuy(btn.dataset.item as ShopItem);
     });
-    must(root, '.gameover-again').addEventListener('click', () => location.reload());
+    must(root, '.gameover-again').addEventListener('click', () => this.onPlayAgain());
     must(root, '.gameover-menu').addEventListener('click', () => this.onPauseMenu());
     this.pauseEl = must(root, '.pause');
     must(root, '.pause-resume').addEventListener('click', () => this.onPauseResume());
@@ -788,14 +790,26 @@ export class Hud {
     this.crosshair.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
   }
 
-  showGameOver(win: boolean, text: string, title?: string, scores: HudScore[] | null = null, progress = ''): void {
+  /**
+   * `again`: what "play again" does here — solo restarts, a room host starts a
+   * new match, a room guest waits for the host, ranked queues again.
+   */
+  showGameOver(win: boolean, text: string, title?: string, scores: HudScore[] | null = null, progress = '', again: 'solo' | 'host' | 'guest' | 'ranked' = 'solo'): void {
     this.overTitle.textContent = title ?? (win ? 'ОБЪЕКТ ЗАЧИЩЕН' : 'ОПЕРАЦИЯ ПРОВАЛЕНА');
+    const btn = must(this.overEl, '.gameover-again') as HTMLButtonElement;
+    btn.disabled = again === 'guest';
+    must(btn, '.btn-title').textContent = { solo: 'ЕЩЁ РАЗ', host: 'НОВЫЙ МАТЧ', guest: 'ЖДЁМ ХОСТА', ranked: 'В ОЧЕРЕДЬ' }[again];
     must(this.overEl, '.gameover-progress').textContent = progress;
     if (scores) this.fillScores(this.overScores, scores);
     this.overScores.style.display = scores ? '' : 'none';
     this.overTitle.classList.toggle('win', win);
     this.overText.textContent = text;
     this.overEl.classList.add('visible');
+  }
+
+  /** The experience line, when the server's count arrives after the screen is up. */
+  setGameOverProgress(text: string): void {
+    must(this.overEl, '.gameover-progress').textContent = text;
   }
 
   /** Ranked: the rating change under the result. */

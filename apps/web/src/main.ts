@@ -7,7 +7,7 @@ import { assets } from './render/assets';
 import { ARENAS, arenaGrid } from '@echo/shared/game/arenas';
 import { modeInfo } from '@echo/shared/game/modes';
 import type { GameMode } from '@echo/shared/game/types';
-import { fetchAccount, logout, rename, type Account } from './ui/account';
+import { fetchAccount, importProgress, logout, rename, saveProfile, type Account } from './ui/account';
 import { classCard, HelpPanel } from './ui/help';
 
 const viewport = must<HTMLElement>('#viewport');
@@ -273,6 +273,7 @@ diffButtons.forEach((b) =>
   b.addEventListener('click', () => {
     settings.difficulty = (b.dataset.difficulty as Settings['difficulty']) ?? 'normal';
     saveSettings(settings);
+    syncProfile();
     showDifficulty();
   }),
 );
@@ -290,6 +291,7 @@ clsButtons.forEach((b) =>
   b.addEventListener('click', () => {
     settings.cls = (b.dataset.cls as Settings['cls']) ?? 'assault';
     saveSettings(settings);
+    syncProfile();
     showClass();
   }),
 );
@@ -301,12 +303,19 @@ roomBotsInput.checked = settings.roomBots;
 roomBotsInput.addEventListener('change', () => {
   settings.roomBots = roomBotsInput.checked;
   saveSettings(settings);
+  syncProfile();
 });
 
-// Rank and ring colours: level from banked experience, colours it unlocks.
+// Rank and ring colours: level from the account's experience when signed in
+// (the server counts it), otherwise from what this browser banked.
 const ringBox = must<HTMLElement>('.ring-colors');
+/** The signed-in account (null: a guest). Filled by refreshAccount below. */
+let account: Account | null = null;
+function currentXp(): number {
+  return account ? account.xp : loadProgress().xp;
+}
 function refreshRank(): void {
-  const lvl = levelOf(loadProgress().xp);
+  const lvl = levelOf(currentXp());
   must<HTMLElement>('.rank-level').textContent = `УРОВЕНЬ ${lvl.level}`;
   must<HTMLElement>('.rank-xp').textContent = `${lvl.into} / ${lvl.need} опыта`;
   must<HTMLElement>('.rank-fill').style.width = `${(lvl.into / lvl.need) * 100}%`;
@@ -325,6 +334,7 @@ function refreshRank(): void {
     b.addEventListener('click', () => {
       settings.color = r.level === 1 ? -1 : r.color;
       saveSettings(settings);
+      syncProfile();
       refreshRank();
     });
     ringBox.appendChild(b);
@@ -352,15 +362,15 @@ btnHost.addEventListener('click', async () => {
   btnHost.disabled = true;
   btnHost.querySelector('.btn-title')!.textContent = 'СОЗДАЁМ...';
   try {
-    const code = await game.startHost(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty, bots: settings.roomBots });
+    const code = await game.createRoom(playerName(), { mode: matchMode, arena, fighters, difficulty: settings.difficulty, bots: settings.roomBots });
     roomCodeValue.textContent = code;
     roomResult.classList.remove('hidden');
     hud.showRoomCode(code);
-    enterGame();
   } catch (err) {
+    game.returnToMenu();
     showError(err instanceof Error ? err.message : 'Не удалось открыть комнату');
   } finally {
-    btnHost.disabled = false;
+    btnHost.disabled = !assetsReady;
     btnHost.querySelector('.btn-title')!.textContent = 'СОЗДАТЬ КОМНАТУ';
   }
 });
@@ -368,30 +378,64 @@ btnHost.addEventListener('click', async () => {
 btnJoin.addEventListener('click', async () => {
   game.audio.init();
   const code = codeInput.value.trim().toUpperCase();
-  if (code.length < 4) {
+  if (code.length !== 5) {
     showError('Введите код комнаты (5 символов)');
     return;
   }
   btnJoin.disabled = true;
   btnJoin.querySelector('.btn-title')!.textContent = 'ПОДКЛЮЧАЕМ...';
   try {
-    await game.startClient(playerName(), code);
-    enterGame();
+    await game.joinRoom(playerName(), code);
+    hud.showRoomCode(code);
   } catch (err) {
+    game.returnToMenu();
     showError(err instanceof Error ? err.message : 'Не удалось подключиться');
   } finally {
-    btnJoin.disabled = false;
+    btnJoin.disabled = !assetsReady;
     btnJoin.querySelector('.btn-title')!.textContent = 'ВОЙТИ';
   }
 });
 
+// Online: the menu gives way only once the server sent the map (no black screen).
+game.onMatchStart = () => {
+  hideQueue();
+  enterGame();
+};
+game.onFailed = (text) => {
+  backToMenu();
+  showError(text);
+};
+game.onProgressSaved = (xp) => {
+  if (account) account.xp = xp;
+};
+// Game over: solo plays again with the same choices; a room host starts a new
+// match for everyone; ranked queues again.
+hud.onPlayAgain = () => {
+  if (game.playAgain()) return;
+  const wasRanked = game.ranked;
+  const wasSolo = game.mode === 'solo';
+  backToMenu();
+  if (wasSolo) btnSolo.click();
+  else if (wasRanked) btnRanked.click();
+};
+
 // ---------------------------------------------------------------- account & ranked
 
-let account: Account | null = null;
 
 async function refreshAccount(): Promise<void> {
   const { user, available } = await fetchAccount();
   account = user;
+  game.signedIn = !!user;
+  if (user && !user.imported) {
+    // First time signed in on this browser: the guest experience joins the account once.
+    const local = loadProgress();
+    if (local.xp > 0) {
+      const merged = await importProgress(local.xp, local.matches);
+      if (merged) account = merged;
+    }
+  }
+  if (account) applyProfile(account);
+  refreshRank();
   // No game server (a static preview): no login, no ranked play.
   accountBox.classList.toggle('hidden', !available);
   btnRanked.classList.toggle('hidden', !available);
@@ -442,16 +486,7 @@ game.onQueue = (msg) => {
     showQueue(`${msg.players ?? 1} / ${msg.need ?? 2}`, msg.startIn !== undefined && msg.startIn >= 0 ? `Бой начнётся через ${msg.startIn} с — ждём ещё соперников.` : 'Ждём соперников. Deathmatch на сервере: без ботов, итог меняет рейтинг.');
   } else if (msg.state === 'found') {
     showQueue('БОЙ НАЙДЕН', `${msg.players ?? 2} игроков · загружаем арену…`);
-  } else {
-    showError(msg.text ?? 'Очередь прервана');
-    game.returnToMenu();
-    hideQueue();
   }
-};
-game.onMatchStart = () => {
-  if (!game.ranked) return;
-  hideQueue();
-  enterGame();
 };
 
 btnRanked.addEventListener('click', async () => {
@@ -466,11 +501,13 @@ btnRanked.addEventListener('click', async () => {
     await game.startRanked(account.name);
   } catch (err) {
     hideQueue();
-    showError(err instanceof Error ? err.message : 'Сервер недоступен');
+    game.returnToMenu();
+    if (!(err instanceof Error && err.message === 'cancelled')) showError(err instanceof Error ? err.message : 'Сервер недоступен');
   }
 });
 
 rankedQueue.querySelector('.ranked-cancel')!.addEventListener('click', () => {
+  game.cancelQueue();
   game.returnToMenu();
   hideQueue();
 });
@@ -525,4 +562,29 @@ function must<T extends HTMLElement>(selector: string): T {
   const el = document.querySelector<T>(selector);
   if (!el) throw new Error(`Element not found: ${selector}`);
   return el;
+}
+
+// ---------------------------------------------------------------- profile on the account
+
+/** Signed in: class, ring colour, difficulty and the bots switch come from the account. */
+function applyProfile(a: Account): void {
+  const p = a.settings ?? {};
+  if (p.cls) settings.cls = p.cls;
+  if (typeof p.color === 'number') settings.color = p.color;
+  if (p.difficulty) settings.difficulty = p.difficulty;
+  if (typeof p.roomBots === 'boolean') settings.roomBots = p.roomBots;
+  saveSettings(settings);
+  roomBotsInput.checked = settings.roomBots;
+  showClass();
+  showDifficulty();
+}
+
+let profileTimer = 0;
+/** Saves the profile to the account a moment after the last change. */
+function syncProfile(): void {
+  if (!account) return;
+  window.clearTimeout(profileTimer);
+  profileTimer = window.setTimeout(() => {
+    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots });
+  }, 600);
 }

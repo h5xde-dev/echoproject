@@ -1,434 +1,172 @@
-import Peer, { type PeerOptions } from 'peerjs';
-import { makeRoomCode } from '@echo/shared/core/rng';
-import type { PlayerClass } from '@echo/shared/game/types';
 import type {
+  ByeMsg,
   ClientMessage,
   EventMsg,
   HostMessage,
-  InputMsg,
   LobbyMsg,
-  MatchmakingMsg,
   OverMsg,
   PlayerJoinedMsg,
   PlayerLeftMsg,
+  ProgressMsg,
   RankedMsg,
+  RoomMsg,
   SnapshotMsg,
   WelcomeMsg,
 } from '@echo/shared/net/protocol';
-import { ServerLink, serverUrl } from './serverLink';
+import { ServerLink } from './serverLink';
 
-export interface HostClient {
-  playerId: number;
-  name: string;
-  conn: DataChannelLike;
-  ready: boolean;
-}
-
-export interface NetHostHandlers {
-  onClientInput(input: InputMsg, playerId: number): void;
-  onClientHello(name: string, playerId: number, cls: PlayerClass | null, color: number): void;
-  onClientLeave(playerId: number): void;
-  onClientReady(playerId: number, ready: boolean): void;
-  onStatus(text: string): void;
-  onError(text: string): void;
-}
+// The link to a game server: every online match (rooms, co-op, ranked) is run
+// by the server, and this browser is one of its clients. See serverLink.ts for
+// the transport (WebSocket plus a UDP-like data channel).
 
 export interface NetClientHandlers {
+  onRoom(msg: RoomMsg): void;
   onWelcome(msg: WelcomeMsg): void;
   onSnapshot(msg: SnapshotMsg): void;
   onEvent(msg: EventMsg): void;
-  onStart(msg: Extract<HostMessage, { t: 'start' }>): void;
   onOver(msg: OverMsg): void;
   onJoined(msg: PlayerJoinedMsg): void;
   onLeft(msg: PlayerLeftMsg): void;
-  onStatus(text: string): void;
-  onError(text: string): void;
-  onLatency(ms: number): void;
-  /** The channel to the host closed without us leaving. */
-  onDisconnected(): void;
   onLobby(msg: LobbyMsg): void;
-  /** Dedicated server only: queue progress and the ranked result. */
-  onMatchmaking?(msg: MatchmakingMsg): void;
-  onRanked?(msg: RankedMsg): void;
+  onRanked(msg: RankedMsg): void;
+  onProgress(msg: ProgressMsg): void;
+  /** The server closed our seat on purpose (room closed, update, another tab): no reconnect. */
+  onBye(msg: ByeMsg): void;
+  onLatency(ms: number): void;
+  /** The link dropped without us leaving: worth reconnecting. */
+  onDisconnected(): void;
 }
 
-export interface IceServerEntry {
-  urls: string | string[];
-  username?: string;
-  credential?: string;
-}
-
-/**
- * Optional self-hosted PeerServer: `?signal=host:port` or a full URL, or the
- * `VITE_PEER_SIGNAL` build variable. Without either the public PeerJS cloud
- * server is used.
- */
-function peerOptions(): PeerOptions {
-  const params = new URLSearchParams(location.search);
-  const options: PeerOptions = {};
-
-  const raw = params.get('signal') ?? import.meta.env.VITE_PEER_SIGNAL;
-  if (raw) {
-    try {
-      const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
-      options.host = url.hostname;
-      options.port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
-      options.path = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`;
-      options.secure = url.protocol === 'https:';
-    } catch {
-      /* fall back to the cloud server */
-    }
-  }
-
-  // Own TURN servers as JSON, from ?ice= or the VITE_ICE_SERVERS build variable:
-  // [{"urls":"turn:host:3478","username":"u","credential":"p"}]. They replace
-  // PeerJS's public TURN; the STUN server stays for direct connections.
-  const ice = params.get('ice') ?? import.meta.env.VITE_ICE_SERVERS;
-  if (ice) {
-    try {
-      const parsed = JSON.parse(ice) as IceServerEntry[];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        options.config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, ...parsed] };
-      }
-    } catch {
-      /* invalid ICE config is ignored */
-    }
-  }
-
-  return options;
-}
-
-/** Minimal surface of a PeerJS data channel used by this module. */
+/** What `send` needs from a link: the server one, or an in-memory one in tests. */
 export interface DataChannelLike {
-  peer: string;
   open: boolean;
   on(event: 'open', cb: () => void): unknown;
   on(event: 'data', cb: (data: unknown) => void): unknown;
-  on(event: 'close', cb: () => void): unknown;
+  on(event: 'close', cb: (code?: number) => void): unknown;
   on(event: 'error', cb: (err: { type?: string; message?: string }) => void): unknown;
   send(data: unknown): void;
   close(): void;
 }
 
-/** Minimal surface of a PeerJS peer used by this module. */
-export interface PeerLike {
-  on(event: 'open', cb: (id: string) => void): unknown;
-  on(event: 'error', cb: (err: { type?: string; message?: string }) => void): unknown;
-  on(event: 'connection', cb: (conn: DataChannelLike) => void): unknown;
-  on(event: 'disconnected', cb: () => void): unknown;
-  /** Re-registers with the signalling server; open channels are unaffected. */
-  reconnect?(): void;
-  connect(id: string, options?: { reliable?: boolean; serialization?: string }): DataChannelLike;
-  destroy(): void;
-}
-
-export type PeerFactory = (id?: string) => PeerLike;
-
 export class Net {
-  /** Overridable so the netcode can be exercised without a real WebRTC stack. */
-  static peerFactory: PeerFactory = (id) =>
-    (id === undefined ? new Peer(peerOptions()) : new Peer(id, peerOptions())) as unknown as PeerLike;
+  /** Overridable so the netcode can be exercised without a real server. */
+  static linkFactory: (url: string) => DataChannelLike = (url) => new ServerLink(url);
 
-  mode: 'offline' | 'host' | 'client' = 'offline';
-  code = '';
-  myPeerId = '';
-  /** Human-readable connection trace, surfaced in the UI and useful for debugging. */
-  debug = '';
-
-  private peer: PeerLike | null = null;
   private conn: DataChannelLike | null = null;
-  private hostHandlers: NetHostHandlers | null = null;
-  private clientHandlers: NetClientHandlers | null = null;
-  private hostClients = new Map<string, HostClient>();
-  private nextPlayerId = 2;
+  private handlers: NetClientHandlers | null = null;
   private pingTimer: number | null = null;
   private pingSeq = 0;
   private pingSentAt = new Map<number, number>();
-  /** Snapshots may arrive out of order over the unreliable channel: older ones are dropped. */
   private lastSnapTick = -1;
+  /** The server said goodbye: the close that follows is not a drop. */
+  private bye = false;
 
-  // ------------------------------------------------------------- hosting
-
-  host(handlers: NetHostHandlers): Promise<string> {
-    this.mode = 'host';
-    this.hostHandlers = handlers;
-
-    return new Promise((resolve, reject) => {
-      const attempt = (code: string) => {
-        const peer = Net.peerFactory(code);
-        this.peer = peer;
-
-        peer.on('open', (id) => {
-          this.code = id;
-          this.myPeerId = id;
-          this.debug = `peer open: ${id}`;
-          handlers.onStatus(`Комната ${id} открыта`);
-          resolve(id);
-        });
-
-        peer.on('connection', (conn) => {
-          const playerId = this.nextPlayerId++;
-          this.hostClients.set(conn.peer, { playerId, name: 'оператор', conn, ready: false });
-          conn.on('open', () => {
-            this.debug = `host: client connected (${conn.peer})`;
-            handlers.onStatus('Клиент подключается...');
-          });
-          conn.on('data', (raw) => this.onHostData(raw, conn));
-          conn.on('close', () => {
-            const c = this.hostClients.get(conn.peer);
-            if (c) {
-              this.hostClients.delete(conn.peer);
-              handlers.onClientLeave(c.playerId);
-            }
-          });
-          conn.on('error', () => {
-            /* closed connections are reported through 'close' */
-          });
-        });
-
-        // Losing the signalling server does not drop players already in the
-        // room, but nobody new can join until the room code is registered again.
-        peer.on('disconnected', () => {
-          if (this.peer !== peer) return;
-          this.debug = 'host: signalling lost, reconnecting';
-          handlers.onStatus('Сервер связи недоступен — восстанавливаем комнату…');
-          window.setTimeout(() => {
-            if (this.peer === peer) peer.reconnect?.();
-          }, 1000);
-        });
-
-        peer.on('error', (err) => {
-          this.debug = `peer error: ${err.type} ${err.message ?? ''}`;
-          // While reconnecting to the signalling server, network errors are
-          // expected; the 'disconnected' handler keeps retrying.
-          if (this.code && (err.type === 'network' || err.type === 'server-error')) return;
-          if (err.type === 'unavailable-id') {
-            peer.destroy();
-            attempt(makeRoomCode());
-            return;
-          }
-          handlers.onError(describePeerError(err));
-          reject(err);
-        });
-      };
-
-      attempt(makeRoomCode());
-    });
-  }
-
-  private onHostData(raw: unknown, conn: DataChannelLike): void {
-    const msg = raw as ClientMessage;
-    if (!msg || typeof msg !== 'object') return;
-    let client = this.hostClients.get(conn.peer);
-    if (!client) {
-      const playerId = this.nextPlayerId++;
-      client = { playerId, name: 'оператор', conn, ready: false };
-      this.hostClients.set(conn.peer, client);
-    }
-
-    switch (msg.t) {
-      case 'hello':
-        client.name = msg.name.slice(0, 14) || 'оператор';
-        client.ready = true;
-        this.hostHandlers?.onClientHello(client.name, client.playerId, msg.cls ?? null, typeof msg.color === 'number' ? msg.color : -1);
-        break;
-      case 'input':
-        this.hostHandlers?.onClientInput(msg, client.playerId);
-        break;
-      case 'ready':
-        this.hostHandlers?.onClientReady(client.playerId, !!msg.ready);
-        break;
-      case 'ping': {
-        conn.send({ t: 'ping', id: msg.id, time: msg.time } as HostMessage);
-        break;
-      }
-    }
-  }
-
-  broadcast(msg: HostMessage): void {
-    for (const c of this.hostClients.values()) {
-      if (c.conn.open) {
-        try {
-          c.conn.send(msg);
-        } catch {
-          /* the connection died mid-send; 'close' will clean it up */
-        }
-      }
-    }
-  }
-
-  sendTo(playerId: number, msg: HostMessage): void {
-    for (const c of this.hostClients.values()) {
-      if (c.playerId === playerId && c.conn.open) {
-        try {
-          c.conn.send(msg);
-        } catch {
-          /* the connection died mid-send */
-        }
-      }
-    }
-  }
-
-  hostClientCount(): number {
-    return this.hostClients.size;
-  }
-
-  hostClientsInfo(): { playerId: number; name: string }[] {
-    return [...this.hostClients.values()].map((c) => ({ playerId: c.playerId, name: c.name }));
-  }
-
-  // ------------------------------------------------------------- joining
-
-  join(code: string, handlers: NetClientHandlers): Promise<void> {
-    this.mode = 'client';
-    this.clientHandlers = handlers;
-    this.code = code.toUpperCase();
-
-    return new Promise((resolve, reject) => {
-      const peer = Net.peerFactory();
-      this.peer = peer;
-
-      peer.on('open', (id) => {
-        this.myPeerId = id;
-        this.debug = `client peer open: ${id}, connecting to ${this.code}`;
-        const conn = peer.connect(this.code, { reliable: true, serialization: 'json' });
-        this.conn = conn;
-
-        conn.on('open', () => {
-          this.debug = `channel open with ${conn.peer}`;
-          handlers.onStatus('Соединение установлено');
-          this.startPinging();
-          resolve();
-        });
-
-        conn.on('data', (raw) => this.onClientData(raw));
-
-        conn.on('close', () => {
-          this.debug = `channel closed (${conn.peer})`;
-          // Our own disconnect() clears `conn` first; anything else is a drop.
-          if (this.conn === conn) handlers.onDisconnected();
-        });
-
-        conn.on('error', (err) => {
-          this.debug = `channel error: ${err.type ?? ''} ${err.message ?? ''}`;
-          handlers.onError(describePeerError(err));
-        });
-      });
-
-      peer.on('error', (err) => {
-        this.debug = `client peer error: ${err.type} ${err.message ?? ''}`;
-        // Once the channel is up the signalling server is no longer needed.
-        if (this.conn?.open && (err.type === 'network' || err.type === 'server-error')) return;
-        handlers.onError(describePeerError(err));
-        reject(err);
-      });
-
-      setTimeout(() => {
-        if (!this.conn?.open) {
-          handlers.onError('Не удалось подключиться. Проверьте код комнаты.');
-          reject(new Error('timeout'));
-        }
-      }, 12000);
-    });
-  }
-
-  /**
-   * Join the dedicated game server (ranked matches). Same handlers as a
-   * peer-to-peer room; the server plays the host.
-   */
-  joinServer(handlers: NetClientHandlers): Promise<void> {
-    this.mode = 'client';
-    this.clientHandlers = handlers;
-    this.code = 'SERVER';
+  /** Connects to the game server at `url` (ticket included); resolves once the link is open. */
+  connect(url: string, handlers: NetClientHandlers): Promise<void> {
+    this.disconnect();
+    this.handlers = handlers;
     this.lastSnapTick = -1;
+    this.bye = false;
 
     return new Promise((resolve, reject) => {
-      const conn: DataChannelLike = new ServerLink(serverUrl());
+      const conn = Net.linkFactory(url);
       this.conn = conn;
+      let opened = false;
       conn.on('open', () => {
-        this.debug = 'server link open';
+        opened = true;
         this.startPinging();
         resolve();
       });
-      conn.on('data', (raw) => this.onClientData(raw));
-      conn.on('close', () => {
-        this.debug = 'server link closed';
-        if (this.conn === conn) handlers.onDisconnected();
+      conn.on('data', (raw) => this.onData(raw));
+      conn.on('close', (code) => {
+        if (this.conn !== conn) return;
+        // 4000: closed on purpose by the server (it sent a bye with the reason).
+        if (opened && !this.bye && code !== 4000) handlers.onDisconnected();
+        this.stopPinging();
       });
       conn.on('error', (err) => {
-        if (this.conn !== conn) return;
-        handlers.onError(err.message ?? 'Игровой сервер недоступен.');
-        reject(new Error(err.message ?? 'server'));
+        if (this.conn !== conn || opened) return;
+        reject(new Error(err.message ?? 'Игровой сервер недоступен.'));
       });
     });
   }
 
-  /** True when the server link runs over the UDP-like data channel. */
+  /** True when snapshots and input travel over the UDP-like channel. */
   get udp(): boolean {
     return this.conn instanceof ServerLink && this.conn.udp;
   }
 
-  private onClientData(raw: unknown): void {
+  get connected(): boolean {
+    return !!this.conn?.open;
+  }
+
+  private onData(raw: unknown): void {
     const msg = raw as HostMessage;
-    if (!msg || typeof msg !== 'object') return;
+    const h = this.handlers;
+    if (!msg || typeof msg !== 'object' || !h) return;
     switch (msg.t) {
+      case 'room':
+        h.onRoom(msg);
+        break;
       case 'welcome':
         this.lastSnapTick = msg.snapshot.tick - 1;
-        this.clientHandlers?.onWelcome(msg);
+        h.onWelcome(msg);
         break;
       case 'snap':
         // A welcome restarts the tick count; otherwise only newer snapshots count.
         if (msg.tick <= this.lastSnapTick) break;
         this.lastSnapTick = msg.tick;
-        this.clientHandlers?.onSnapshot(msg);
-        break;
-      case 'mm':
-        this.clientHandlers?.onMatchmaking?.(msg);
-        break;
-      case 'ranked':
-        this.clientHandlers?.onRanked?.(msg);
+        h.onSnapshot(msg);
         break;
       case 'evt':
-        this.clientHandlers?.onEvent(msg);
-        break;
-      case 'start':
-        this.clientHandlers?.onStart(msg);
+        h.onEvent(msg);
         break;
       case 'over':
-        this.clientHandlers?.onOver(msg);
+        h.onOver(msg);
         break;
       case 'joined':
-        this.clientHandlers?.onJoined(msg);
+        h.onJoined(msg);
         break;
       case 'left':
-        this.clientHandlers?.onLeft(msg);
+        h.onLeft(msg);
         break;
       case 'lobby':
-        this.clientHandlers?.onLobby(msg);
+        h.onLobby(msg);
+        break;
+      case 'ranked':
+        h.onRanked(msg);
+        break;
+      case 'progress':
+        h.onProgress(msg);
+        break;
+      case 'bye':
+        this.bye = true;
+        h.onBye(msg);
         break;
       case 'ping': {
         const sent = this.pingSentAt.get(msg.id);
         if (sent !== undefined) {
-          this.clientHandlers?.onLatency(Math.round(performance.now() - sent));
+          h.onLatency(Math.round(performance.now() - sent));
           this.pingSentAt.delete(msg.id);
         }
         break;
       }
+      default:
+        break;
     }
   }
 
   send(msg: ClientMessage): void {
-    if (this.conn?.open) {
-      try {
-        this.conn.send(msg);
-      } catch {
-        /* ignore transient send failures */
-      }
+    if (!this.conn?.open) return;
+    try {
+      this.conn.send(msg);
+    } catch {
+      /* ignore transient send failures */
     }
   }
 
   private startPinging(): void {
-    if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
+    this.stopPinging();
     this.pingTimer = window.setInterval(() => {
       const id = ++this.pingSeq;
       this.pingSentAt.set(id, performance.now());
@@ -440,36 +178,18 @@ export class Net {
     }, 1500);
   }
 
-  disconnect(): void {
+  private stopPinging(): void {
     if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
     this.pingTimer = null;
-    // Cleared before closing, so the close/disconnected events that follow
-    // are recognised as ours and not reported as a dropped connection.
-    const conn = this.conn;
-    const peer = this.peer;
-    this.conn = null;
-    this.peer = null;
-    conn?.close();
-    peer?.destroy();
     this.pingSentAt.clear();
-    this.hostClients.clear();
-    this.mode = 'offline';
   }
-}
 
-function describePeerError(err: { type?: string; message?: string }): string {
-  switch (err.type) {
-    case 'peer-unavailable':
-      return 'Комната не найдена. Проверьте код.';
-    case 'network':
-      return 'Ошибка сети. Проверьте подключение.';
-    case 'server-error':
-      return 'Сигнальный сервер недоступен.';
-    case 'browser-incompatible':
-      return 'Браузер не поддерживает WebRTC.';
-    case 'unavailable-id':
-      return 'Этот код уже занят, выберите другой.';
-    default:
-      return err.message ?? 'Неизвестная ошибка соединения.';
+  disconnect(): void {
+    this.stopPinging();
+    // Cleared before closing, so the close that follows is recognised as ours.
+    const conn = this.conn;
+    this.conn = null;
+    this.handlers = null;
+    conn?.close();
   }
 }

@@ -1,11 +1,11 @@
 /**
- * Ranked play end to end: two players sign in (dev login), queue, get a
- * server-hosted match without bots over the UDP-like channel, and are rated
- * when one walks out.
+ * Ranked play end to end in real browsers: two players sign in (dev login),
+ * queue on the meta server, get a game-server match without bots over the
+ * UDP-like channel, and are rated when one walks out.
  *
- *   npm run build:server && RANKED_GATHER=1 RANKED_ALONE=2 DEV_LOGIN=1 SECURE_COOKIES=0 DB_PATH=/tmp/t.db npm run server
+ *   RANKED_GATHER=1 RANKED_ALONE=2 npm run dev:services   (fresh DB_PATH)
  *   npm run dev
- *   npm run test:server
+ *   SERVER_TEST_URL=http://127.0.0.1:5173 npm run test:server
  */
 import { chromium } from 'playwright';
 
@@ -16,7 +16,7 @@ const check = (ok, text) => {
   if (!ok) failures++;
 };
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-gpu', '--ignore-gpu-blocklist'] });
 const errors = [];
 async function player(name) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });

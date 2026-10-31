@@ -1,9 +1,11 @@
 import { GameAudio } from '../core/audio';
 import { Input } from '../core/input';
 import { clamp } from '@echo/shared/core/math';
-import { Net, type NetClientHandlers } from '../net/net';
-import { buildSnapshot, roundStateOf, scoreRows, waveStateOf } from '@echo/shared/net/snapshot';
-import type { ActorState, EventMsg, HostMessage, LobbyMsg, MatchmakingMsg, RankedMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '@echo/shared/net/protocol';
+import { gameUrl, MetaLink, type MetaRequest } from '../net/meta';
+import { Net } from '../net/net';
+import { roundStateOf, scoreRows, waveStateOf } from '@echo/shared/net/snapshot';
+import type { MetaTicketMsg, RoomOptions } from '@echo/shared/net/meta';
+import type { ActorState, EventMsg, LobbyMsg, MatchmakingMsg, ProgressMsg, RankedMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '@echo/shared/net/protocol';
 import { POWERUP_COLOR, Renderer } from '../render/renderer';
 import { buildArena } from '@echo/shared/game/arenas';
 import { POWERUP_INFO } from '@echo/shared/game/info';
@@ -11,7 +13,6 @@ import { updateBullets, type BulletActor, type BulletCtx } from '@echo/shared/ga
 import { CONFIG, COLORS } from '@echo/shared/game/config';
 import { generateMap } from '@echo/shared/game/levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from '@echo/shared/game/modes';
-import { NO_ONCE, mergeOnce, type OnceInput } from '@echo/shared/game/once';
 import { ARENA_DOOR_BASE, Sim, type PlayerInput } from '@echo/shared/game/sim';
 import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem } from '@echo/shared/game/types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
@@ -19,7 +20,7 @@ import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
 import { newTally, tallyEvent } from '@echo/shared/progress';
 
-export type GameMode = 'solo' | 'host' | 'client';
+export type GameMode = 'solo' | 'online';
 
 export interface MatchOptions {
   mode?: MatchMode;
@@ -148,20 +149,14 @@ export class Game {
   private latestActors = new Map<number, ActorState>();
   private snapBuffer: SnapFrame[] = [];
   private pendingInputs: PendingInput[] = [];
-  private clientInputs = new Map<string, { input: PlayerInput; once: OnceInput; lastAck: number }>();
   /** This player's class (set from the menu before a game starts). */
   playerClass: PlayerClass = 'assault';
-  /** Host: each client's class, kept for a match restart from the lobby. */
-  private clientClasses = new Map<number, PlayerClass | null>();
-  private clientColors = new Map<number, number>();
   /** This player's ring colour (an unlocked one; -1 the default). */
   playerColor = -1;
   /** What the local player did this match, for experience at the end. */
   private tally: MatchTally = { kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 };
   /** Client: last measured round trip to the host (ms). */
   private rttMs = 0;
-  /** Client: the room code joined, reused to reconnect. */
-  private joinCode = '';
   private reconnecting = false;
   private clientNames = new Map<number, string>();
   private frameMove = { x: 0, z: 0 };
@@ -193,9 +188,6 @@ export class Game {
   private droneBuzzT = 0;
   private buyOpen = false;
   private gameOver = false;
-  /** Host of a room: the warm-up lobby (null for solo games and clients). */
-  private lobby: { started: boolean; ready: Map<number, boolean> } | null = null;
-  private matchOpts: MatchOptions = {};
   private lastFootstep = 0;
   private enemyCount = 0;
   private scores: [number, number, number, number][] = [];
@@ -231,74 +223,73 @@ export class Game {
   startSolo(name: string, opts: MatchOptions = {}): void {
     this.mode = 'solo';
     this.isAuthority = true;
+    this.ranked = false;
     this.localName = name;
     this.localId = 1;
     this.beginAuthoritySession(opts);
   }
 
-  async startHost(name: string, opts: MatchOptions = {}): Promise<string> {
-    this.mode = 'host';
-    this.isAuthority = true;
-    this.localName = name;
-    this.localId = 1;
-    this.matchOpts = opts;
-    // A hosted room starts as a warm-up with a lobby; the host starts the match.
-    this.lobby = { started: false, ready: new Map() };
-    this.beginAuthoritySession(opts);
-    this.broadcastLobby();
-
-    this.roomCode = await this.net.host({
-      onClientInput: (input, playerId) => {
-        const state = this.clientInputs.get(String(playerId));
-        if (state) {
-          // Continuous state from the newest packet; one-shot actions from
-          // every packet, so none is lost when several arrive between ticks.
-          state.input = input;
-          state.lastAck = input.seq;
-          mergeOnce(state.once, input);
-        }
-      },
-      onClientHello: (name, playerId, cls, color) => this.onClientHello(name, playerId, cls, color),
-      onClientLeave: (playerId) => this.onClientLeave(playerId),
-      onClientReady: (playerId, ready) => {
-        if (!this.lobby || this.lobby.started) return;
-        this.lobby.ready.set(playerId, ready);
-        this.broadcastLobby();
-      },
-      onStatus: (text) => this.hud.setStatus(text),
-      onError: (text) => this.hud.setError(text),
-    });
-    this.hud.setStatus(`Комната ${this.roomCode} — ждём напарника`);
+  /** Open a room on the game server; resolves with its code once we are in. */
+  async createRoom(name: string, opts: MatchOptions = {}): Promise<string> {
+    const o: RoomOptions = { mode: opts.mode ?? 'coop', arena: opts.arena ?? 'sklad', fighters: opts.fighters, difficulty: opts.difficulty, bots: opts.bots };
+    await this.goOnline(name, { t: 'create', opts: o });
     return this.roomCode;
   }
 
-  async startClient(name: string, code: string): Promise<void> {
-    this.mode = 'client';
-    this.isAuthority = false;
-    this.ranked = false;
-    this.localName = name;
-    this.joinCode = code;
-    await this.connectToHost();
+  /** Join a friend's room by its code. */
+  async joinRoom(name: string, code: string): Promise<void> {
+    await this.goOnline(name, { t: 'join', code: code.trim().toUpperCase() });
   }
 
   /**
-   * Ranked: queue on the dedicated server, which hosts the match itself (no
-   * bots) and rates everyone at the end. `onQueue` hears the queue progress;
-   * `onMatchStart` fires with the first welcome.
+   * Ranked: queue on the meta server; the match is hosted by a game server
+   * (no bots) and rates everyone at the end. `onQueue` hears the queue
+   * progress; `onMatchStart` fires with the first welcome.
    */
   async startRanked(name: string): Promise<void> {
-    this.mode = 'client';
-    this.isAuthority = false;
-    this.ranked = true;
-    this.localName = name;
-    this.joinCode = '';
-    await this.connectToHost();
+    await this.goOnline(name, { t: 'queue' });
+  }
+
+  /** Leave the ranked queue before a match is found. */
+  cancelQueue(): void {
+    this.metaLink?.cancel();
   }
 
   /** Playing a ranked match on the server. */
   ranked = false;
+  /** Signed in: the server counts experience (guests count it in this browser). */
+  signedIn = false;
   onQueue: ((msg: MatchmakingMsg) => void) | null = null;
+  /** First welcome of an online session: the menu can give way to the game. */
   onMatchStart: (() => void) | null = null;
+  private metaLink: MetaLink | null = null;
+  /** How to get a new ticket for the same seat after a dropped link. */
+  private rejoinCode = '';
+  private welcomeTimer = 0;
+
+  private identity() {
+    return { name: this.localName, cls: this.playerClass, color: this.playerColor };
+  }
+
+  private async goOnline(name: string, req: MetaRequest): Promise<void> {
+    this.mode = 'online';
+    this.isAuthority = false;
+    this.ranked = req.t === 'queue';
+    this.localName = name;
+    this.roomCode = '';
+    this.gotWelcome = false;
+    const link = new MetaLink();
+    this.metaLink = link;
+    link.onQueue = (msg) => this.onQueue?.(msg);
+    try {
+      const ticket = await link.request(this.identity(), req);
+      this.ranked = ticket.ranked;
+      this.rejoinCode = ticket.code;
+      await this.connectTo(ticket);
+    } finally {
+      if (this.metaLink === link) this.metaLink = null;
+    }
+  }
 
   private onRanked(msg: RankedMsg): void {
     const me = msg.rows.find((r) => r.id === this.localId);
@@ -307,64 +298,85 @@ export class Game {
     this.hud.showRating(`РЕЙТИНГ ${Math.round(me.before)} → ${Math.round(me.after)} (${d >= 0 ? '+' : ''}${d}) · МЕСТО ${me.place} ИЗ ${msg.rows.length}`);
   }
 
-  private async connectToHost(): Promise<void> {
-    const join = this.ranked ? (h: NetClientHandlers) => this.net.joinServer(h) : (h: NetClientHandlers) => this.net.join(this.joinCode, h);
-    await join({
-      onMatchmaking: (msg) => this.onQueue?.(msg),
-      onRanked: (msg) => this.onRanked(msg),
+  /** Opens the game server link with a ticket; the welcome then starts the match. */
+  private async connectTo(ticket: MetaTicketMsg): Promise<void> {
+    await this.net.connect(gameUrl(ticket), {
+      onRoom: (msg) => {
+        this.roomCode = msg.ranked ? '' : msg.code;
+        this.roomHost = msg.host;
+        this.ranked = msg.ranked;
+        this.onRoom?.(msg.code, msg.host);
+      },
       onWelcome: (msg) => this.onWelcome(msg),
       onSnapshot: (msg) => this.onSnapshot(msg),
       onEvent: (msg) => this.onEvent(msg),
-      onStart: () => undefined,
-      // Co-op outcome is shared; deathmatch outcome comes per player from the victory event.
+      // Co-op outcome is shared; arena outcomes come per player from the victory event.
       onOver: (msg) => {
-        if (this.matchMode === 'coop') this.endGame(msg.win, msg.text);
+        if (isCoopMode(this.matchMode)) this.endGame(msg.win, msg.text);
       },
       onJoined: (msg) => {
         this.clientNames.set(msg.playerId, msg.name);
-        this.hud.message(`${msg.name} в эфире`, 'info');
+        if (msg.playerId !== this.localId) this.hud.message(`${msg.name} в эфире`, 'info');
       },
       onLeft: (msg) => {
-        this.clientNames.delete(msg.playerId);
-        this.hud.message('Оператор вышел из эфира', 'warn');
+        const who = this.clientNames.get(msg.playerId);
+        this.hud.message(`${who ?? 'Оператор'} вышел из эфира`, 'warn');
       },
-      onStatus: (text) => this.hud.setStatus(text),
-      onError: (text) => this.hud.setError(text),
+      onLobby: (msg) => this.showLobby(msg),
+      onRanked: (msg) => this.onRanked(msg),
+      onProgress: (msg) => this.onServerProgress(msg),
+      onBye: (msg) => {
+        if (!msg.text) return;
+        if (this.running && !this.gameOver) this.endGame(false, msg.text, 'СВЯЗЬ ЗАКРЫТА');
+        else this.hud.setError(msg.text);
+      },
       onLatency: (ms) => {
         this.rttMs = ms;
-        this.hud.setLatency(ms, this.ranked ? (this.net.udp ? 'UDP' : 'TCP') : '');
+        this.hud.setLatency(ms, this.net.udp ? 'UDP' : 'TCP');
       },
       onDisconnected: () => void this.recoverConnection(),
-      onLobby: (msg) => this.showLobby(msg),
     });
-
-    this.net.send({ t: 'hello', name: this.localName, cls: this.playerClass, color: this.playerColor });
+    // No welcome soon after the link opened: say so instead of a black screen.
+    window.clearTimeout(this.welcomeTimer);
+    this.welcomeTimer = window.setTimeout(() => {
+      if (this.gotWelcome || this.mode !== 'online') return;
+      this.net.disconnect();
+      this.onFailed?.('Сервер не прислал карту. Попробуйте войти ещё раз.');
+    }, 12_000);
   }
 
+  /** The room code and whether we host it (for the menu and the HUD). */
+  onRoom: ((code: string, host: boolean) => void) | null = null;
+  /** An online session could not start or was lost before the match began. */
+  onFailed: ((text: string) => void) | null = null;
+  private gotWelcome = false;
+  private roomHost = false;
+
   /**
-   * The channel to the host dropped. Try the same room code a few times (the
-   * host greets us as a fresh player); if the room is gone, end the match
-   * with a clear reason instead of leaving a frozen screen.
+   * The link to the game server dropped. Ask the meta server for a new ticket
+   * to the same seat a few times (the server keeps it 30 s); if the room is
+   * gone, end the match with a clear reason instead of a frozen screen.
    */
   private async recoverConnection(): Promise<void> {
-    if (this.reconnecting || !this.running || this.gameOver) return;
+    if (this.reconnecting || !this.running || this.gameOver || this.mode !== 'online') return;
     this.reconnecting = true;
-    for (let attempt = 1; attempt <= 3 && this.running; attempt++) {
-      this.hud.setStatus(`Связь с хостом потеряна — переподключение (${attempt}/3)…`);
-      this.net.disconnect();
+    for (let attempt = 1; attempt <= 5 && this.running; attempt++) {
+      this.hud.setStatus(`Связь с сервером потеряна — переподключение (${attempt}/5)…`);
       try {
-        await this.connectToHost();
+        const ticket = await new MetaLink().request(this.identity(), this.ranked ? { t: 'queue' } : { t: 'join', code: this.rejoinCode });
+        await this.connectTo(ticket);
+        this.hud.setStatus('');
         this.reconnecting = false;
         return;
       } catch {
-        await new Promise((r) => window.setTimeout(r, 1500));
+        await new Promise((r) => window.setTimeout(r, 1000 + attempt * 1000));
       }
     }
     this.reconnecting = false;
-    if (this.running) this.endGame(false, 'Хост вышел из игры или пропала сеть.', 'СВЯЗЬ ПОТЕРЯНА');
+    if (this.running) this.endGame(false, 'Сервер недоступен или пропала сеть.', 'СВЯЗЬ ПОТЕРЯНА');
   }
 
-  /** Forgets everything mirrored from a host session. */
+  /** Forgets everything mirrored from a server session. */
   private resetClientState(): void {
     this.clientBullets = [];
     this.latestActors.clear();
@@ -383,7 +395,9 @@ export class Game {
     if (opts.difficulty) this.sim.difficulty = opts.difficulty;
     this.sim.addPlayer('local', this.localName, this.localId, this.playerClass, this.playerColor);
     this.tally = newTally();
-    this.topUpBots();
+    // Solo: the arena is always filled with bots.
+    this.sim.botsAllowed = true;
+    this.sim.fillBots();
     this.setupWorld();
     this.startLoop();
   }
@@ -428,139 +442,44 @@ export class Game {
     return this.display.get(this.localId)?.team ?? this.sim.actors.get(this.localId)?.team ?? -1;
   }
 
-  // ------------------------------------------------------------------ host
-
-  /**
-   * Arena bots. Solo: always. A network room: only if the host left them on,
-   * and only once at least two players are in — a host waiting alone for
-   * friends does not get a bot match started under them.
-   */
-  private topUpBots(): void {
-    let humans = 0;
-    for (const a of this.sim.actors.values()) if (a.kind === 'player') humans++;
-    this.sim.botsAllowed = this.mode !== 'host' || (this.matchOpts.bots !== false && humans >= 2);
-    this.sim.fillBots();
-  }
-
-  private onClientHello(name: string, playerId: number, cls: PlayerClass | null, color: number): void {
-    this.clientClasses.set(playerId, cls);
-    this.clientColors.set(playerId, color);
-    this.sim.addPlayer(`c${playerId}`, name, playerId, cls, color);
-    this.topUpBots();
-    this.clientNames.set(playerId, name);
-    this.clientInputs.set(String(playerId), {
-      input: {
-        seq: 0,
-        moveX: 0,
-        moveZ: 0,
-        aim: 0,
-        fire: false,
-        reload: false,
-        interact: false,
-        flashlight: false,
-        slot: -1,
-        dt: CONFIG.tickDt,
-      },
-      once: { ...NO_ONCE },
-      lastAck: 0,
-    });
-
-    this.sendWelcome(playerId, name);
-
-    const joined: HostMessage = { t: 'joined', playerId, name };
-    this.net.broadcast(joined);
-    this.hud.message(`${name} подключился`, 'good');
-    if (this.lobby && !this.lobby.started) {
-      this.lobby.ready.set(playerId, false);
-      this.broadcastLobby();
-    }
-  }
-
-  private sendWelcome(playerId: number, name: string): void {
-    const welcome: WelcomeMsg = {
-      t: 'welcome',
-      playerId,
-      name,
-      seed: this.map.seed,
-      map: this.map,
-      snapshot: this.buildSnapshot(),
-      // The ring colour the player picked, not a slot colour.
-      colors: { [String(playerId)]: this.clientColors.get(playerId) ?? PLAYER_COLORS[(playerId - 1) % PLAYER_COLORS.length] },
-    };
-    this.net.sendTo(playerId, welcome);
-  }
-
   // ------------------------------------------------------------------ lobby
-
-  /** Host: everyone in the room and who is ready, to all and to our own HUD. */
-  private broadcastLobby(): void {
-    if (!this.lobby) return;
-    const msg: LobbyMsg = {
-      t: 'lobby',
-      started: this.lobby.started,
-      players: [
-        { id: this.localId, name: this.localName, ready: true, host: true },
-        ...[...this.clientNames].map(([id, name]) => ({ id, name, ready: this.lobby!.ready.get(id) ?? false, host: false })),
-      ],
-    };
-    this.net.broadcast(msg);
-    this.showLobby(msg);
-  }
 
   private showLobby(msg: LobbyMsg): void {
     const me = msg.players.find((p) => p.id === this.localId);
     this.localReady = me?.ready ?? false;
-    this.hud.showLobby(msg.started ? null : msg.players, this.isAuthority, this.localReady);
+    this.roomHost = me?.host ?? this.roomHost;
+    for (const p of msg.players) this.clientNames.set(p.id, p.name);
+    this.hud.showLobby(msg.started ? null : msg.players, this.roomHost, this.localReady);
   }
 
-  /** Client: our ready flag as the host last confirmed it. */
+  /** Our ready flag as the server last confirmed it. */
   private localReady = false;
 
+  /** This player starts the match in the room. */
   get isHost(): boolean {
-    return this.mode === 'host';
+    return this.mode === 'online' && this.roomHost;
   }
 
-  /** Client: tell the host we are (not) ready. */
+  /** Tell the server we are (not) ready. */
   toggleReady(): void {
-    if (!this.isAuthority) this.net.send({ t: 'ready', ready: !this.localReady });
+    if (this.mode === 'online') this.net.send({ t: 'ready', ready: !this.localReady });
   }
 
-  /**
-   * Host: end the warm-up. The match starts over on a fresh map with
-   * everyone now in the room; each client gets a new welcome.
-   */
+  /** Room host: end the warm-up, or start another match after one ended. */
   startMatch(): void {
-    if (!this.isAuthority || !this.lobby || this.lobby.started) return;
-    this.lobby.started = true;
-    this.gameOver = false;
-    this.hud.hideGameOver();
-    this.prevTick.clear();
-    this.beginAuthoritySession(this.matchOpts);
-    for (const [id, name] of this.clientNames) {
-      this.sim.addPlayer(`c${id}`, name, id, this.clientClasses.get(id) ?? null, this.clientColors.get(id) ?? -1);
+    if (!this.isHost) return;
+    this.net.send({ t: 'start' });
+  }
+
+  /** Game over screen: play again. Solo restarts here; a room host starts a new match. */
+  playAgain(): boolean {
+    if (this.isHost && !this.ranked) {
+      this.startMatch();
+      return true;
     }
-    this.topUpBots();
-    for (const [id, name] of this.clientNames) this.sendWelcome(id, name);
-    this.broadcastLobby();
-    this.hud.banner('МАТЧ НАЧАЛСЯ', '');
+    return false;
   }
 
-  private onClientLeave(playerId: number): void {
-    this.sim.removeActor(playerId);
-    this.topUpBots();
-    this.clientNames.delete(playerId);
-    this.lobby?.ready.delete(playerId);
-    this.broadcastLobby();
-    this.clientInputs.delete(String(playerId));
-    this.net.broadcast({ t: 'left', playerId });
-    this.hud.message('Оператор отключился', 'warn');
-  }
-
-  private buildSnapshot(): SnapshotMsg {
-    const ack: Record<string, number> = {};
-    for (const [key, state] of this.clientInputs) ack[key] = state.lastAck;
-    return buildSnapshot(this.sim, this.tick, ack);
-  }
 
   private scoreRows(): [number, number, number, number][] {
     return scoreRows(this.sim);
@@ -582,8 +501,14 @@ export class Game {
   private onWelcome(msg: WelcomeMsg): void {
     // A welcome after a reconnect (or a match start) begins a new mirror of the host.
     this.resetClientState();
+    const first = !this.gotWelcome;
+    this.gotWelcome = true;
+    window.clearTimeout(this.welcomeTimer);
+    // A new welcome without a reconnect is a new match (the host started one).
+    if (!this.reconnecting) this.tally = newTally();
     this.gameOver = false;
     this.hud.hideGameOver();
+    this.localName = msg.name;
     this.map = msg.map;
     this.matchMode = msg.map.mode ?? 'coop';
     this.localId = msg.playerId;
@@ -600,8 +525,10 @@ export class Game {
     this.setupWorld();
     this.startLoop();
     this.onSnapshot(msg.snapshot);
-    this.hud.message(this.ranked ? 'Рейтинговый бой: боты отключены' : 'Соединение установлено', 'good');
-    this.onMatchStart?.();
+    if (first) {
+      this.hud.message(this.ranked ? 'Рейтинговый бой: боты отключены' : 'Соединение установлено', 'good');
+      this.onMatchStart?.();
+    }
   }
 
   private onSnapshot(msg: SnapshotMsg): void {
@@ -1079,15 +1006,27 @@ export class Game {
   private endGame(win: boolean, text: string, title?: string): void {
     if (this.gameOver) return;
     this.gameOver = true;
-    // Bank the match: experience, level, anything it unlocked.
-    const got = addMatch(this.tally, win);
-    const lvl = levelOf(loadProgress().xp);
-    const up = got.after > got.before ? ` · НОВЫЙ УРОВЕНЬ ${got.after}!` : '';
-    const unlocked = got.unlocked.length > 0 ? ` · ОТКРЫТ ЦВЕТ: ${got.unlocked.join(', ').toUpperCase()}` : '';
-    const progress = `+${got.gained} ОПЫТА · УРОВЕНЬ ${lvl.level} (${lvl.into}/${lvl.need})${up}${unlocked}`;
-    this.hud.showGameOver(win, text, title, isArena(this.matchMode) ? this.scoreTable() : null, progress);
-    if (this.isAuthority) this.net.broadcast({ t: 'over', win, text });
+    let progress: string;
+    if (this.mode === 'online' && this.signedIn) {
+      // The server counts a signed-in player's experience; its answer fills this in.
+      progress = 'ОПЫТ СЧИТАЕТСЯ НА СЕРВЕРЕ…';
+    } else {
+      // Solo and guests: banked in this browser.
+      const got = addMatch(this.tally, win);
+      progress = progressLine(got.gained, loadProgress().xp, got.before, got.after, got.unlocked);
+    }
+    const again = this.mode === 'solo' ? 'solo' : this.ranked ? 'ranked' : this.isHost ? 'host' : 'guest';
+    this.hud.showGameOver(win, text, title, isArena(this.matchMode) ? this.scoreTable() : null, progress, again);
   }
+
+  /** A signed-in player's experience, as the server counted it. */
+  private onServerProgress(msg: ProgressMsg): void {
+    this.hud.setGameOverProgress(progressLine(msg.gained, msg.xp, msg.before, msg.after, msg.unlocked));
+    this.onProgressSaved?.(msg.xp);
+  }
+
+  /** The account's experience changed (the menu shows the level). */
+  onProgressSaved: ((xp: number) => void) | null = null;
 
   // ------------------------------------------------------------- pause & exit
 
@@ -1107,6 +1046,11 @@ export class Game {
     this.paused = true;
     this.input.enabled = false;
     this.hud.showPause();
+    // Online the match goes on: stop the soldier rather than leave the last
+    // input (running, firing) applied while the menu is up.
+    if (this.mode === 'online') {
+      this.net.send({ t: 'input', seq: ++this.inputSeq, moveX: 0, moveZ: 0, aim: this.frameAim, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt: CONFIG.tickDt });
+    }
   }
 
   /** Resume from the pause overlay. */
@@ -1134,11 +1078,17 @@ export class Game {
     this.hud.hideGameOver();
     this.display.clear();
     this.resetClientState();
-    this.clientInputs.clear();
     this.clientNames.clear();
     this.buyOpen = false;
     this.roomCode = '';
-    this.lobby = null;
+    this.roomHost = false;
+    this.ranked = false;
+    this.gameOver = false;
+    this.reconnecting = false;
+    window.clearTimeout(this.welcomeTimer);
+    this.metaLink?.cancel();
+    this.mode = 'solo';
+    this.isAuthority = true;
     this.hud.showLobby(null, false, false);
   }
 
@@ -1298,7 +1248,7 @@ export class Game {
       grenade: this.pending.grenade,
       throwDist: this.frameThrow,
       buy: this.pending.buy,
-      rttMs: this.mode === 'client' ? this.rttMs : undefined,
+      rttMs: this.mode === 'online' ? this.rttMs : undefined,
       gait: this.frameGait,
       grenadeKind: this.nadeKind,
       // Held, not pressed: planting and defusing take seconds.
@@ -1343,30 +1293,8 @@ export class Game {
       const local = this.sim.actors.get(this.localId);
       if (local) this.sim.applyInput(local, input);
 
-      for (const [key, state] of this.clientInputs) {
-        const actor = this.sim.actors.get(Number(key));
-        if (!actor) continue;
-        // One-way delay of this client's input, capped so a bad link cannot
-        // shoot far ahead of what everyone else sees.
-        actor.lagComp = Math.min(CONFIG.lagCompMax, (state.input.rttMs ?? 0) / 2000);
-        // One-shots apply exactly once, even if no new packet came this tick.
-        this.sim.applyInput(actor, { ...state.input, ...NO_ONCE, ...state.once });
-        state.once = { ...NO_ONCE };
-      }
-
       this.sim.step(dt);
       this.drainSimEvents();
-
-      // The host has no ping of its own; show the worst one its clients report.
-      if (this.tick % 60 === 0 && this.clientInputs.size > 0) {
-        let worst = 0;
-        for (const state of this.clientInputs.values()) worst = Math.max(worst, state.input.rttMs ?? 0);
-        this.hud.setLatency(worst);
-      }
-
-      if (this.tick % Math.round(1 / CONFIG.snapshotRate / CONFIG.tickDt) === 0) {
-        this.net.broadcast(this.buildSnapshot());
-      }
     } else {
       const mirror = this.sim.actors.get(this.localId);
       if (mirror) {
@@ -1388,10 +1316,7 @@ export class Game {
 
   private drainSimEvents(): void {
     const events = this.sim.drainEvents();
-    for (const event of events) {
-      this.applyEvent(event);
-      this.net.broadcast({ t: 'evt', event });
-    }
+    for (const event of events) this.applyEvent(event);
   }
 
   private simulateClientBullets(dt: number): void {
@@ -1891,6 +1816,8 @@ export class Game {
   private soundAt(x: number, z: number, play: (dist: number) => void): void {
     const self = this.localDisplay();
     const dist = self ? Math.hypot(self.x - x, self.z - z) : 0;
+    // Before the first snapshot places us there is nothing to hear it from.
+    if (!Number.isFinite(dist)) return;
     // Pure direction, not loudness (distance already sets that); right next
     // to you a sound is centred.
     const pan = self && dist > 1.5 ? ((x - self.x) / dist) * 0.85 : 0;
@@ -2136,3 +2063,11 @@ function shortestAngle(a: number, b: number): number {
 }
 
 /** The parts of an input that happen once per press, not every tick. */
+
+/** The experience line on the game-over screen. */
+function progressLine(gained: number, xp: number, before: number, after: number, unlocked: string[]): string {
+  const lvl = levelOf(xp);
+  const up = after > before ? ` · НОВЫЙ УРОВЕНЬ ${after}!` : '';
+  const colors = unlocked.length > 0 ? ` · ОТКРЫТ ЦВЕТ: ${unlocked.join(', ').toUpperCase()}` : '';
+  return `+${gained} ОПЫТА · УРОВЕНЬ ${lvl.level} (${lvl.into}/${lvl.need})${up}${colors}`;
+}

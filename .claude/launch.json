@@ -2,10 +2,28 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "services",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/dev-services.mjs"
+      ],
+      "port": 8090
+    },
+    {
       "name": "dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--host", "127.0.0.1"],
-      "port": 5173
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "-w",
+        "@echo/web",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "5176"
+      ],
+      "port": 5176
     }
   ]
 }

@@ -29,6 +29,7 @@ function publicUser(u: UserRow) {
     xp: u.xp,
     matches: u.matches,
     level: lvl.level,
+    imported: u.progress_imported === 1,
     settings: parseSettings(u.settings),
   };
 }
