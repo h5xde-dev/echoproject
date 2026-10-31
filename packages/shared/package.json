@@ -1,0 +1,10 @@
+{
+  "name": "@echo/shared",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Simulation, protocol and rules shared by the browser and the servers. Plain TypeScript, no DOM.",
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}

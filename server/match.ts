@@ -1,10 +1,10 @@
-import { ARENAS, buildArena } from '../src/game/arenas';
-import { CONFIG } from '../src/game/config';
-import { NO_ONCE, mergeOnce, type OnceInput } from '../src/game/once';
-import { Sim, type PlayerInput } from '../src/game/sim';
-import type { PlayerClass } from '../src/game/types';
-import type { ClientMessage, HostMessage, RankedMsg } from '../src/net/protocol';
-import { buildSnapshot } from '../src/net/snapshot';
+import { ARENAS, buildArena } from '@echo/shared/game/arenas';
+import { CONFIG } from '@echo/shared/game/config';
+import { NO_ONCE, mergeOnce, type OnceInput } from '@echo/shared/game/once';
+import { Sim, type PlayerInput } from '@echo/shared/game/sim';
+import type { PlayerClass } from '@echo/shared/game/types';
+import type { ClientMessage, HostMessage, RankedMsg } from '@echo/shared/net/protocol';
+import { buildSnapshot } from '@echo/shared/net/snapshot';
 import { SERVER } from './config';
 import { encode, type PlayerConn } from './conn';
 import { saveMatch, userById, type UserRow } from './db';

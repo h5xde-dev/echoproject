@@ -1,0 +1,31 @@
+{
+  "name": "@echo/web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "assets": "node tools/build-assets.mjs",
+    "test:netcode": "node test/run-netcode.mjs",
+    "test:arenas": "node test/run-dm.mjs",
+    "test:server": "node test/run-server.mjs"
+  },
+  "dependencies": {
+    "@echo/shared": "*",
+    "peerjs": "^1.5.5",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "@types/three": "^0.186.0",
+    "meshoptimizer": "^1.3.0",
+    "playwright": "^1.56.0",
+    "sharp": "^0.35.5",
+    "vite": "^8.3.5"
+  }
+}

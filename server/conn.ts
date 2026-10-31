@@ -1,6 +1,6 @@
 import nodeDataChannel from 'node-datachannel';
 import type { WebSocket } from 'ws';
-import type { ClientMessage, HostMessage, RtcMsg } from '../src/net/protocol';
+import type { ClientMessage, HostMessage, RtcMsg } from '@echo/shared/net/protocol';
 import { SERVER } from './config';
 import type { UserRow } from './db';
 

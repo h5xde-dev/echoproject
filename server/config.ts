@@ -22,7 +22,7 @@ export const SERVER = {
   /** Site origin, for redirects after login. */
   origin: env('ORIGIN', 'http://127.0.0.1:5173'),
   /** Built site, for the server-rendered rating page. */
-  distDir: env('DIST_DIR', new URL('../dist', import.meta.url).pathname),
+  distDir: env('DIST_DIR', new URL('../apps/web/dist', import.meta.url).pathname),
   yandex: {
     clientId: env('YANDEX_CLIENT_ID'),
     clientSecret: env('YANDEX_CLIENT_SECRET'),

@@ -1,5 +1,5 @@
-import type { PlayerClass } from '../src/game/types';
-import type { ClientMessage } from '../src/net/protocol';
+import type { PlayerClass } from '@echo/shared/game/types';
+import type { ClientMessage } from '@echo/shared/net/protocol';
 import { SERVER } from './config';
 import type { PlayerConn } from './conn';
 import { RankedMatch, type Entrant } from './match';
