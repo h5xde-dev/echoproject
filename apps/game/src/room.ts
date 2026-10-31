@@ -29,7 +29,9 @@ const EMPTY_CLOSE_MS = 60_000;
 const RANKED_CLOSE_MS = 15_000;
 /** Ticks that may throw in a row before the match is called off. */
 const MAX_TICK_ERRORS = 30;
-const MAX_SEATS = 8;
+export const MAX_SEATS = 8;
+/** A public room: results on screen this long, then the next match starts by itself. */
+const REMATCH_MS = 10_000;
 
 const IDLE: PlayerInput = { seq: 0, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt: CONFIG.tickDt };
 
@@ -82,8 +84,9 @@ export class Room {
     readonly ranked: boolean,
     private onClose: (room: Room) => void,
   ) {
-    // Ranked starts at once; a room opens with a warm-up the host ends.
-    this.phase = ranked ? 'live' : 'lobby';
+    // Ranked and public rooms start at once; a private room opens with a
+    // warm-up its host ends.
+    this.phase = ranked || opts.public ? 'live' : 'lobby';
     this.newSession();
     this.timer = setInterval(() => this.pump(), 1000 / 120);
   }
@@ -133,7 +136,8 @@ export class Room {
       this.topUpBots();
     }
     // The creator hosts (again, after a reconnect); otherwise the first one in.
-    if (!this.ranked && (t.host || !this.hostSub)) this.hostSub = t.sub;
+    // Public rooms have no host: nobody starts or holds up a match.
+    if (!this.ranked && !this.opts.public && (t.host || !this.hostSub)) this.hostSub = t.sub;
     this.attach(seat, conn);
   }
 
@@ -185,7 +189,7 @@ export class Room {
       this.broadcast({ t: 'left', playerId: seat.playerId });
       this.sendLobby();
     };
-    conn.send({ t: 'room', code: this.code, mode: this.opts.mode, ranked: this.ranked, host: seat.sub === this.hostSub });
+    conn.send({ t: 'room', code: this.code, mode: this.opts.mode, ranked: this.ranked, host: seat.sub === this.hostSub, public: this.opts.public === true });
     this.welcome(seat);
     this.broadcast({ t: 'joined', playerId: seat.playerId, name: seat.name });
     this.sendLobby();
@@ -272,7 +276,8 @@ export class Room {
     }
     let humans = 0;
     for (const a of this.sim.actors.values()) if (a.kind === 'player') humans++;
-    this.sim.botsAllowed = this.opts.bots !== false && humans >= 2;
+    // A public room fills with bots from the first player: quick play means a fight now.
+    this.sim.botsAllowed = this.opts.bots !== false && humans >= (this.opts.public ? 1 : 2);
     this.sim.fillBots();
   }
 
@@ -285,7 +290,7 @@ export class Room {
   }
 
   private sendLobby(): void {
-    if (this.ranked) return;
+    if (this.ranked || this.opts.public) return;
     const msg: LobbyMsg = {
       t: 'lobby',
       started: this.phase !== 'lobby',
@@ -409,6 +414,7 @@ export class Room {
     else this.emptySince ||= now;
     if (this.emptySince && now - this.emptySince > EMPTY_CLOSE_MS) this.close('');
     else if (this.ranked && this.phase === 'over' && now - this.overAt > RANKED_CLOSE_MS) this.close('');
+    else if (this.opts.public && this.phase === 'over' && now - this.overAt > REMATCH_MS) this.startMatch();
   }
 
   private giveUp(seat: Seat): void {

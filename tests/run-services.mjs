@@ -186,6 +186,41 @@ try {
   hostMeta.ws.close();
   joinMeta.ws.close();
 
+  // ------------------------------------------------------------ quick play
+  const quick = async (guestId) => {
+    const m = meta();
+    await m.ready;
+    m.send({ t: 'hello', guestId, name: guestId.slice(0, 8) });
+    await m.next((x) => x.t === 'me');
+    m.send({ t: 'quick', mode: 'dm' });
+    const t = await m.next((x) => x.t === 'ticket');
+    m.ws.close();
+    return t;
+  };
+  const q1 = await quick('quick-guest-0001');
+  const g1 = game(q1.url, q1.ticket);
+  await g1.ready;
+  const room1 = await g1.next((m) => m.t === 'room');
+  check(room1.public && !room1.host, `quick play opens a public room without a host (${q1.code})`);
+  const snap1 = await g1.next((m) => m.t === 'snap');
+  const bots1 = snap1.actors.filter((a) => a.kind === 'enemy').length;
+  check(bots1 >= 3, `alone in quick play: bots fill the arena at once (${bots1})`);
+  check(!g1.inbox.some((m) => m.t === 'lobby'), 'no warm-up lobby in a public room');
+  await sleep(3500); // the next heartbeat lists it
+  const list = await fetch(`http://127.0.0.1:${PORTS.meta}/meta/rooms`).then((r) => r.json());
+  check(list.rooms.some((r) => r.code === q1.code && r.mode === 'dm' && r.players === 1), `the open-room list shows it (${list.rooms.length})`);
+  const q2 = await quick('quick-guest-0002');
+  check(q2.code === q1.code, 'a second quick player joins the same room');
+  const g2 = game(q2.url, q2.ticket);
+  await g2.ready;
+  await g2.next((m) => m.t === 'welcome');
+  await sleep(300);
+  const snap2 = await g1.next((m) => m.t === 'snap' && m.actors.filter((a) => a.kind === 'player').length === 2);
+  const bots2 = snap2.actors.filter((a) => a.kind === 'enemy').length;
+  check(bots2 === bots1 - 1, `a bot makes room for the person (${bots1} → ${bots2})`);
+  g1.ws.close();
+  g2.ws.close();
+
   // ---------------------------------------------------------------- ranked
   const bobCookie = await login('Боб');
   const guestMeta = meta();

@@ -17,6 +17,22 @@ export interface RoomOptions {
   bots?: boolean;
   /** Match-wide rule changes (see Mutator). */
   mutators?: Mutator[];
+  /**
+   * Public (quick play, the room list): starts at once without a host, bots
+   * fill it from the first player on and leave as people come, and a new
+   * match follows each one by itself.
+   */
+  public?: boolean;
+}
+
+/** A public room as the room list shows it. */
+export interface PublicRoom {
+  code: string;
+  mode: GameMode;
+  arena: string;
+  players: number;
+  max: number;
+  phase: string;
 }
 
 /** Only known mutators, each once. */
@@ -43,12 +59,18 @@ export interface MetaJoinMsg {
   code: string;
 }
 
+/** Quick play: any public room of this mode with a free seat, or a new one. */
+export interface MetaQuickMsg {
+  t: 'quick';
+  mode: GameMode;
+}
+
 /** Ranked queue: join or leave. */
 export interface MetaQueueMsg {
   t: 'queue' | 'unqueue';
 }
 
-export type MetaClientMsg = MetaHelloMsg | MetaCreateMsg | MetaJoinMsg | MetaQueueMsg;
+export type MetaClientMsg = MetaHelloMsg | MetaCreateMsg | MetaJoinMsg | MetaQuickMsg | MetaQueueMsg;
 
 /** After the hello: signed in or a guest. */
 export interface MetaMeMsg {

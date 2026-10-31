@@ -1,5 +1,5 @@
-import type { PlayerClass } from '@echo/shared/game/types';
-import type { MetaClientMsg, MetaServerMsg, MetaTicketMsg, RoomOptions } from '@echo/shared/net/meta';
+import type { GameMode, PlayerClass } from '@echo/shared/game/types';
+import type { MetaClientMsg, MetaServerMsg, MetaTicketMsg, PublicRoom, RoomOptions } from '@echo/shared/net/meta';
 import type { MatchmakingMsg } from '@echo/shared/net/protocol';
 
 // The meta server (WebSocket /meta): the front door to online play. It knows
@@ -42,7 +42,7 @@ export function gameUrl(t: MetaTicketMsg): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${t.url}?ticket=${encodeURIComponent(t.ticket)}`;
 }
 
-export type MetaRequest = { t: 'create'; opts: RoomOptions } | { t: 'join'; code: string } | { t: 'queue' };
+export type MetaRequest = { t: 'create'; opts: RoomOptions } | { t: 'join'; code: string } | { t: 'quick'; mode: GameMode } | { t: 'queue' };
 
 /**
  * One request to the meta server: resolves with the ticket. Ranked queue
@@ -98,4 +98,20 @@ export class MetaLink {
     this.rejectFn?.(new Error('cancelled'));
     this.rejectFn = null;
   }
+}
+
+/** Public rooms on the server (for the menu list); empty when it cannot be reached. */
+export async function fetchPublicRooms(): Promise<PublicRoom[]> {
+  try {
+    const res = await fetch('/meta/rooms', { cache: 'no-store' });
+    if (!res.ok) return [];
+    return ((await res.json()) as { rooms: PublicRoom[] }).rooms ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** The address that drops a friend straight into this room. */
+export function inviteLink(code: string): string {
+  return `${location.origin}/play?room=${encodeURIComponent(code)}`;
 }

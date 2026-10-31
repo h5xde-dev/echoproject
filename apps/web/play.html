@@ -37,7 +37,7 @@
           <div class="panel panel-room hidden">
             <div class="panel-title">КОД КОМНАТЫ</div>
             <div class="room-code-inline">-----</div>
-            <div class="room-hint">Нажмите, чтобы скопировать</div>
+            <div class="room-hint">Нажмите — ссылка-приглашение в буфере</div>
           </div>
           <div class="panel panel-lobby hidden">
             <div class="panel-title">ЛОББИ · РАЗМИНКА</div>
@@ -292,6 +292,10 @@
                 <span class="btn-title">ИГРАТЬ</span>
                 <span class="btn-desc">Пройти объект в одиночку</span>
               </button>
+              <button id="btn-quick" class="btn quick" disabled>
+                <span class="btn-title">БЫСТРАЯ ИГРА</span>
+                <span class="btn-desc">Онлайн с людьми прямо сейчас, боты добирают состав</span>
+              </button>
               <button id="btn-host" class="btn" disabled>
                 <span class="btn-title">СОЗДАТЬ КОМНАТУ</span>
                 <span class="btn-desc">Позвать друзей по коду</span>
@@ -319,10 +323,16 @@
               </button>
             </div>
 
+            <div class="open-rooms">
+              <div class="open-rooms-head"><span>ОТКРЫТЫЕ КОМНАТЫ</span><em class="open-rooms-count"></em></div>
+              <div class="open-rooms-list"><div class="open-rooms-empty">Пока никого — нажмите «Быстрая игра», и комната появится здесь.</div></div>
+            </div>
+
             <div id="room-result" class="room-result hidden">
               <div class="room-code-label">КОД КОМНАТЫ</div>
               <div id="room-code-value" class="room-code-value">-----</div>
-              <div class="room-hint">Отправьте код — друг введёт его в поле «Код комнаты».</div>
+              <div class="room-hint">Отправьте код или ссылку — друг попадёт прямо в комнату.</div>
+              <button class="btn room-link" type="button"><span class="btn-title">СКОПИРОВАТЬ ССЫЛКУ</span></button>
             </div>
 
             <div class="menu-keys">

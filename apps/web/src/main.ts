@@ -8,6 +8,7 @@ import { ARENAS, arenaGrid } from '@echo/shared/game/arenas';
 import { modeInfo } from '@echo/shared/game/modes';
 import type { GameMode } from '@echo/shared/game/types';
 import { fetchAccount, importProgress, logout, rename, saveProfile, type Account } from './ui/account';
+import { fetchPublicRooms, inviteLink } from './net/meta';
 import { classCard, HelpPanel } from './ui/help';
 
 const viewport = must<HTMLElement>('#viewport');
@@ -19,6 +20,7 @@ const nameInput = must<HTMLInputElement>('#player-name');
 const codeInput = must<HTMLInputElement>('#room-code');
 const btnSolo = must<HTMLButtonElement>('#btn-solo');
 const btnHost = must<HTMLButtonElement>('#btn-host');
+const btnQuick = must<HTMLButtonElement>('#btn-quick');
 const btnJoin = must<HTMLButtonElement>('#btn-join');
 const btnRanked = must<HTMLButtonElement>('#btn-ranked');
 const rankedQueue = must<HTMLElement>('#ranked-queue');
@@ -37,8 +39,9 @@ void assets
   })
   .then(() => {
     loadingBox.classList.add('done');
-    for (const b of [btnSolo, btnHost, btnJoin, btnRanked]) b.disabled = false;
+    for (const b of [btnSolo, btnQuick, btnHost, btnJoin, btnRanked]) b.disabled = false;
     assetsReady = true;
+    joinFromLink();
     game.audio.setSamples(assets.sounds);
   });
 
@@ -535,12 +538,72 @@ roomPanel.addEventListener('mousedown', (e) => e.stopPropagation());
 roomPanel.addEventListener('click', () => {
   const code = roomPanel.querySelector('.room-code-inline')?.textContent ?? '';
   if (!code || code === '-----') return;
-  void copyText(code).then((ok) =>
+  const link = inviteLink(code);
+  void copyText(link).then((ok) =>
     ok
-      ? hud.message('Код скопирован в буфер обмена', 'good')
-      : hud.message(`Не удалось скопировать, код: ${code}`, 'warn'),
+      ? hud.message('Ссылка-приглашение скопирована — отправьте её другу', 'good')
+      : hud.message(`Не удалось скопировать, ссылка: ${link}`, 'warn'),
   );
 });
+must<HTMLButtonElement>('.room-link').addEventListener('click', () => {
+  const code = roomCodeValue.textContent ?? '';
+  if (code && code !== '-----') void copyText(inviteLink(code)).then((ok) => ok && showError('Ссылка скопирована — отправьте её другу'));
+});
+
+// ---------------------------------------------------------------- quick play and open rooms
+
+btnQuick.addEventListener('click', async () => {
+  game.audio.init();
+  btnQuick.disabled = true;
+  btnQuick.querySelector('.btn-title')!.textContent = 'ИЩЕМ БОЙ...';
+  try {
+    await game.quickPlay(playerName(), matchMode);
+    hud.showRoomCode(game.roomCode);
+  } catch (err) {
+    game.returnToMenu();
+    showError(err instanceof Error ? err.message : 'Сервер недоступен');
+  } finally {
+    btnQuick.disabled = !assetsReady;
+    btnQuick.querySelector('.btn-title')!.textContent = 'БЫСТРАЯ ИГРА';
+  }
+});
+
+const openRoomsList = must<HTMLElement>('.open-rooms-list');
+const openRoomsCount = must<HTMLElement>('.open-rooms-count');
+async function refreshOpenRooms(): Promise<void> {
+  if (menu.classList.contains('hidden') || document.visibilityState !== 'visible') return;
+  const rooms = await fetchPublicRooms();
+  openRoomsCount.textContent = rooms.length ? `${rooms.reduce((n, r) => n + r.players, 0)} в игре` : '';
+  openRoomsList.innerHTML = '';
+  if (rooms.length === 0) {
+    openRoomsList.innerHTML = '<div class="open-rooms-empty">Пока никого — нажмите «Быстрая игра», и комната появится здесь.</div>';
+    return;
+  }
+  for (const r of rooms.slice(0, 8)) {
+    const row = document.createElement('button');
+    row.className = 'open-room';
+    row.disabled = r.players >= r.max || !assetsReady;
+    const arenaName = ARENAS.find((a) => a.id === r.arena)?.name ?? '';
+    row.innerHTML = `<b>${modeInfo(r.mode).title}</b><span>${r.mode === 'coop' || r.mode === 'waves' ? 'объект' : arenaName}</span><em>${r.players}/${r.max}</em>`;
+    row.addEventListener('click', () => {
+      codeInput.value = r.code;
+      btnJoin.click();
+    });
+    openRoomsList.appendChild(row);
+  }
+}
+void refreshOpenRooms();
+window.setInterval(() => void refreshOpenRooms(), 5000);
+
+/** /play?room=CODE: a friend's invite drops the player straight into that room. */
+function joinFromLink(): void {
+  const params = new URLSearchParams(location.search);
+  const code = (params.get('room') ?? '').trim().toUpperCase();
+  if (!code) return;
+  history.replaceState(null, '', location.pathname);
+  codeInput.value = code;
+  btnJoin.click();
+}
 
 /** Clipboard API where available (secure contexts), else the legacy copy command. */
 async function copyText(text: string): Promise<boolean> {

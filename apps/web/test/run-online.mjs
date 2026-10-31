@@ -153,6 +153,23 @@ try {
   });
   check(true, 'after a dropped link the joiner is back as the same soldier');
 
+  // An invite link drops a friend straight into the room.
+  const d = await player('Дельта');
+  await d.page.goto(`${BASE}/play?room=${code}`);
+  await inGame(d);
+  check((await d.page.evaluate(() => window.echo.game.roomCode)) === code, 'an invite link /play?room=CODE joins that room');
+
+  // Quick play: a public room with bots, and it shows in the open-room list.
+  const e = await player('Эхо');
+  await e.page.click('.mode-card[data-mode="dm"]');
+  await e.page.click('#btn-quick');
+  await inGame(e);
+  const q = await e.page.evaluate(() => ({ code: window.echo.game.roomCode, pub: window.echo.game.roomPublic, bots: [...window.echo.game.latestActors.values()].filter((a) => a.kind === 'enemy').length }));
+  check(q.pub && q.bots > 0, `quick play: a public room with bots right away (${q.code}, ${q.bots} bots)`);
+  const f = await player('Фокстрот');
+  await f.page.waitForFunction((c) => [...document.querySelectorAll('.open-room')].length > 0 && document.querySelector('.open-rooms-list').textContent.length > 0, q.code, { timeout: 15000, polling: 500 });
+  check(true, 'the menu lists open rooms');
+
   // A wrong code: a clear message, back in the menu.
   const c = await player('Чарли');
   await c.page.fill('#room-code', 'ZZZZZ');

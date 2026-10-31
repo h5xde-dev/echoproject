@@ -220,6 +220,8 @@ export interface RoomMsg {
   ranked: boolean;
   /** This player starts the match. */
   host: boolean;
+  /** Public room: no host, the next match starts by itself. */
+  public?: boolean;
 }
 
 /** A signed-in player's experience after a match (the server counted it). */

@@ -794,11 +794,11 @@ export class Hud {
    * `again`: what "play again" does here — solo restarts, a room host starts a
    * new match, a room guest waits for the host, ranked queues again.
    */
-  showGameOver(win: boolean, text: string, title?: string, scores: HudScore[] | null = null, progress = '', again: 'solo' | 'host' | 'guest' | 'ranked' = 'solo'): void {
+  showGameOver(win: boolean, text: string, title?: string, scores: HudScore[] | null = null, progress = '', again: 'solo' | 'host' | 'guest' | 'ranked' | 'public' = 'solo'): void {
     this.overTitle.textContent = title ?? (win ? 'ОБЪЕКТ ЗАЧИЩЕН' : 'ОПЕРАЦИЯ ПРОВАЛЕНА');
     const btn = must(this.overEl, '.gameover-again') as HTMLButtonElement;
-    btn.disabled = again === 'guest';
-    must(btn, '.btn-title').textContent = { solo: 'ЕЩЁ РАЗ', host: 'НОВЫЙ МАТЧ', guest: 'ЖДЁМ ХОСТА', ranked: 'В ОЧЕРЕДЬ' }[again];
+    btn.disabled = again === 'guest' || again === 'public';
+    must(btn, '.btn-title').textContent = { solo: 'ЕЩЁ РАЗ', host: 'НОВЫЙ МАТЧ', guest: 'ЖДЁМ ХОСТА', ranked: 'В ОЧЕРЕДЬ', public: 'НОВЫЙ МАТЧ ЧЕРЕЗ 10 С' }[again];
     must(this.overEl, '.gameover-progress').textContent = progress;
     if (scores) this.fillScores(this.overScores, scores);
     this.overScores.style.display = scores ? '' : 'none';

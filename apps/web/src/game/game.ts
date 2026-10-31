@@ -241,6 +241,11 @@ export class Game {
     return this.roomCode;
   }
 
+  /** Quick play: a public room of this mode with a free seat (or a new one). */
+  async quickPlay(name: string, mode: MatchMode): Promise<void> {
+    await this.goOnline(name, { t: 'quick', mode });
+  }
+
   /** Join a friend's room by its code. */
   async joinRoom(name: string, code: string): Promise<void> {
     await this.goOnline(name, { t: 'join', code: code.trim().toUpperCase() });
@@ -309,6 +314,7 @@ export class Game {
       onRoom: (msg) => {
         this.roomCode = msg.ranked ? '' : msg.code;
         this.roomHost = msg.host;
+        this.roomPublic = msg.public === true;
         this.ranked = msg.ranked;
         this.onRoom?.(msg.code, msg.host);
       },
@@ -356,6 +362,8 @@ export class Game {
   onFailed: ((text: string) => void) | null = null;
   private gotWelcome = false;
   private roomHost = false;
+  /** Public room (quick play): the next match starts by itself. */
+  roomPublic = false;
 
   /**
    * The link to the game server dropped. Ask the meta server for a new ticket
@@ -1021,7 +1029,7 @@ export class Game {
       const got = addMatch(this.tally, win);
       progress = progressLine(got.gained, loadProgress().xp, got.before, got.after, got.unlocked);
     }
-    const again = this.mode === 'solo' ? 'solo' : this.ranked ? 'ranked' : this.isHost ? 'host' : 'guest';
+    const again = this.mode === 'solo' ? 'solo' : this.ranked ? 'ranked' : this.roomPublic ? 'public' : this.isHost ? 'host' : 'guest';
     this.hud.showGameOver(win, text, title, isArena(this.matchMode) ? this.scoreTable() : null, progress, again);
   }
 
@@ -1088,6 +1096,7 @@ export class Game {
     this.buyOpen = false;
     this.roomCode = '';
     this.roomHost = false;
+    this.roomPublic = false;
     this.ranked = false;
     this.gameOver = false;
     this.reconnecting = false;

@@ -17,6 +17,9 @@ export interface RoomInfo {
   full: boolean;
   /** Ranked: whose seats (so a dropped player is sent back to their match). */
   subs: string[];
+  public?: boolean;
+  arena?: string;
+  max?: number;
 }
 
 interface Instance {
@@ -103,7 +106,18 @@ export async function createRoom(opts: RoomOptions | null, ranked: boolean, subs
     const code = newCode(ranked);
     try {
       await callService(instance.base, '/internal/rooms', META.secret, { code, opts, ranked });
-      const info: RoomInfo = { code, players: 0, phase: ranked ? 'live' : 'lobby', mode: opts?.mode ?? 'dm', ranked, full: false, subs };
+      const info: RoomInfo = {
+        code,
+        players: 0,
+        phase: ranked || opts?.public ? 'live' : 'lobby',
+        mode: opts?.mode ?? 'dm',
+        ranked,
+        full: false,
+        subs,
+        public: opts?.public === true,
+        arena: opts?.arena ?? '',
+        max: 8,
+      };
       pending.set(code, { instance: instance.id, at: Date.now(), info });
       return { code, url: instance.url };
     } catch (err) {
@@ -111,6 +125,21 @@ export async function createRoom(opts: RoomOptions | null, ranked: boolean, subs
     }
   }
   throw new NoCapacity();
+}
+
+/** Public rooms on live instances (and those just created), busiest first. */
+export function publicRooms(): (RoomInfo & { url: string })[] {
+  const out = new Map<string, RoomInfo & { url: string }>();
+  for (const instance of live()) {
+    if (instance.draining) continue;
+    for (const r of instance.rooms) if (r.public) out.set(r.code, { ...r, url: instance.url });
+  }
+  for (const [code, p] of pending) {
+    if (!p.info.public || out.has(code) || Date.now() - p.at >= META.staleMs) continue;
+    const instance = live().find((i) => i.id === p.instance);
+    if (instance && !instance.draining) out.set(code, { ...p.info, url: instance.url });
+  }
+  return [...out.values()].sort((a, b) => b.players - a.players);
 }
 
 export function stats() {

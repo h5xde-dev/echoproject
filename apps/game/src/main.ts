@@ -9,7 +9,7 @@ import type { GameMode } from '@echo/shared/game/types';
 import { cleanMutators, type RoomOptions } from '@echo/shared/net/meta';
 import { GAME } from './config';
 import { PlayerConn } from './conn';
-import { Room } from './room';
+import { MAX_SEATS, Room } from './room';
 
 // North Echo game server: hosts the rooms the meta server places here and
 // runs their matches. Browsers come in on the WebSocket with a ticket the
@@ -32,6 +32,7 @@ function validOptions(raw: Partial<RoomOptions>): RoomOptions {
     difficulty: raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal',
     bots: raw.bots !== false,
     mutators: cleanMutators(raw.mutators),
+    public: raw.public === true,
   };
 }
 
@@ -42,7 +43,18 @@ function status() {
     url: GAME.publicPath,
     draining,
     capacity: GAME.maxRooms,
-    rooms: [...rooms.values()].map((r) => ({ code: r.code, players: r.players, phase: r.phase, mode: r.opts.mode, ranked: r.ranked, full: r.full, subs: r.ranked ? r.subs : [] })),
+    rooms: [...rooms.values()].map((r) => ({
+      code: r.code,
+      players: r.players,
+      phase: r.phase,
+      mode: r.opts.mode,
+      arena: r.opts.arena,
+      public: r.opts.public === true,
+      max: MAX_SEATS,
+      ranked: r.ranked,
+      full: r.full,
+      subs: r.ranked ? r.subs : [],
+    })),
   };
 }
 

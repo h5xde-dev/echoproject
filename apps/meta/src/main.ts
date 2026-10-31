@@ -5,13 +5,14 @@ import { onShutdown, parseCookies } from '@echo/node-kit/lifecycle';
 import { signTicket } from '@echo/node-kit/ticket';
 import { ARENAS } from '@echo/shared/game/arenas';
 import type { Difficulty, GameMode, PlayerClass } from '@echo/shared/game/types';
-import { cleanMutators, ROOM_CODE_RE, type MetaClientMsg, type MetaServerMsg, type RoomOptions } from '@echo/shared/net/meta';
+import { cleanMutators, ROOM_CODE_RE, type MetaClientMsg, type MetaServerMsg, type PublicRoom, type RoomOptions } from '@echo/shared/net/meta';
 import { MODE_IDS } from '@echo/shared/game/modes';
 import { cleanName } from '@echo/shared/names';
 import { RING_COLORS } from '@echo/shared/progress';
 import { META } from './config';
 import { enqueue, leave, queued, type Waiting } from './matchmaker';
-import { createRoom, findRoom, heartbeat, NoCapacity, rankedSeatOf, stats } from './registry';
+import { createRoom, findRoom, heartbeat, NoCapacity, publicRooms, rankedSeatOf, stats } from './registry';
+import { randomInt } from 'node:crypto';
 
 // North Echo meta server: the front door to online play. A browser says who
 // it is (signed in through the API's cookie, or a guest), then opens a room,
@@ -50,6 +51,7 @@ function roomOptions(raw: Partial<RoomOptions> | undefined): RoomOptions | null 
     difficulty,
     bots: raw.bots !== false,
     mutators: cleanMutators(raw.mutators),
+    public: raw.public === true,
   };
 }
 
@@ -145,6 +147,20 @@ class Client implements Waiting {
         if (found.room.full) return this.send({ t: 'error', text: 'Комната заполнена' });
         return this.ticket(code, found.instance.url, false, found.room.ranked);
       }
+      case 'quick': {
+        if (!MODE_IDS.includes(msg.mode)) return this.send({ t: 'error', text: 'Неизвестный режим' });
+        // A public room of this mode with a free seat, busiest first; else a new one.
+        const room = publicRooms().find((r) => r.mode === msg.mode && !r.full && r.players < (r.max ?? 8));
+        if (room) return this.ticket(room.code, room.url, false, false);
+        const opts = roomOptions({ mode: msg.mode, arena: ARENAS[randomInt(ARENAS.length)].id, bots: true, public: true });
+        try {
+          const { code, url } = await createRoom(opts, false);
+          return this.ticket(code, url, false, false);
+        } catch (err) {
+          if (err instanceof NoCapacity) return this.send({ t: 'error', text: 'Игровой сервер недоступен или обновляется — попробуйте через минуту' });
+          throw err;
+        }
+      }
       case 'queue': {
         if (!this.who.userId) return this.send({ t: 'mm', state: 'error', text: 'Рейтинговый бой — только со входом через Яндекс' });
         // Dropped out of a ranked match that is still on: straight back in.
@@ -169,6 +185,10 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promi
     const s = stats();
     // Public numbers for the menu (and the old /api/status shape).
     return json(res, 200, { queued: queued(), matches: s.instances.reduce((n, i) => n + i.rooms, 0), playing: s.instances.reduce((n, i) => n + i.players, 0), online: s.instances.some((i) => !i.draining) });
+  }
+  if (req.method === 'GET' && path === '/meta/rooms') {
+    const rooms: PublicRoom[] = publicRooms().map((r) => ({ code: r.code, mode: r.mode as GameMode, arena: r.arena ?? '', players: r.players, max: r.max ?? 8, phase: r.phase }));
+    return json(res, 200, { rooms });
   }
   if (!path.startsWith('/internal/') || !isService(req, META.secret)) throw new HttpError(404, 'not found');
   if (req.method === 'POST' && path === '/internal/heartbeat') {
