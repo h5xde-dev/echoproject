@@ -109,7 +109,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { id: 'a_eye', title: 'Зоркий', desc: '100 критических попаданий снайперкой', stat: 'crits', goal: 100, xp: 1000, unlock: { kind: 'badge', id: 'eye' } },
 ];
 
-const NEW_MODES: GameMode[] = ['infect', 'extract', 'vip', 'zone'] as unknown as GameMode[];
+const NEW_MODES: GameMode[] = ['infect', 'extract', 'vip', 'zone'];
 
 /**
  * The stats a match adds, with the derived keys quests read: the match itself,
@@ -125,7 +125,7 @@ export function matchStatsFor(stats: MatchStats, mode: GameMode, win: boolean): 
     s.win = 1;
     s[`win_${mode}`] = 1;
     if (NEW_MODES.includes(mode)) s.win_new = 1;
-    if ((mode as string) === 'infect' || (mode as string) === 'zone') s.win_survival = 1;
+    if (mode === 'infect' || mode === 'zone') s.win_survival = 1;
   }
   return s;
 }

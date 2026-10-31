@@ -75,7 +75,7 @@ export function tallyEvent(t: MatchTally, e: GameEvent, playerId: number, hostil
       t.rooms++;
       break;
     case 'objective':
-      if ((e.text === 'hacked' || e.text === 'defused') && e.ownerId === playerId) t.objectives++;
+      if ((e.text === 'hacked' || e.text === 'defused' || e.text === 'cargo' || e.text === 'vip') && e.ownerId === playerId) t.objectives++;
       break;
     case 'revive':
       if (e.by === playerId) t.revives++;
@@ -145,6 +145,8 @@ export function statEvent(s: MatchStats, e: GameEvent, playerId: number, hostile
       break;
     case 'objective':
       if ((e.text === 'hacked' || e.text === 'defused') && e.ownerId === playerId) bumpStat(s, 'objectives');
+      if (e.text === 'cargo' && e.ownerId === playerId) bumpStat(s, 'cargo');
+      if (e.text === 'vip' && e.ownerId === playerId) bumpStat(s, 'vip_escaped');
       break;
     case 'bomb':
       if (e.ownerId === playerId && e.text === 'planted') bumpStat(s, 'plants');

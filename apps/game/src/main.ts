@@ -67,12 +67,13 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promi
   if (req.method === 'POST' && path === '/internal/rooms') {
     if (draining) throw new HttpError(503, 'draining');
     if (rooms.size >= GAME.maxRooms) throw new HttpError(503, 'full');
-    const body = await readJson<{ code?: string; opts?: Partial<RoomOptions>; ranked?: boolean }>(req);
+    const body = await readJson<{ code?: string; opts?: Partial<RoomOptions>; ranked?: boolean; subs?: unknown }>(req);
     const code = String(body.code ?? '');
     if (!/^[A-Z0-9]{5,12}$/.test(code) || rooms.has(code)) throw new HttpError(409, 'code');
     const ranked = body.ranked === true;
     const opts = ranked ? { mode: 'dm' as const, arena: ARENAS[Math.floor(Math.random() * ARENAS.length)].id, bots: false } : validOptions(body.opts ?? {});
-    const room = new Room(code, opts, ranked, (r) => {
+    const expected = Array.isArray(body.subs) ? body.subs.filter((x): x is string => typeof x === 'string').slice(0, 16) : [];
+    const room = new Room(code, opts, ranked, expected, (r) => {
       rooms.delete(r.code);
       console.log(`room ${r.code} closed (${rooms.size} open)`);
       void heartbeat();

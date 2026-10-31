@@ -70,6 +70,34 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'infect',
+    title: 'Заражение',
+    short: 'ЗАРАЖЕНИЕ',
+    desc: 'Через 10 секунд один из вас заражён: только нож, быстрее и крепче, без фонаря. Убитый человек встаёт заражённым. Люди не возрождаются — продержитесь 3 минуты.',
+    arena: true,
+  },
+  {
+    id: 'extract',
+    title: 'Эвакуация',
+    short: 'ЭВАКУАЦИЯ',
+    desc: 'Отряд против охраны. Найдите грузы на карте и донесите до точки эвакуации (груз замедляет, павший его роняет). За 6 минут вынесите хотя бы половину. Охрана подходит волнами.',
+    arena: true,
+  },
+  {
+    id: 'vip',
+    title: 'Сопровождение VIP',
+    short: 'VIP',
+    desc: 'Раунды. Атака ведёт VIP (пистолет и броня) к точке, защита устраивает засаду. Довели — очко атаке, VIP убит или время вышло — защите. Стороны меняются, до 4 побед.',
+    arena: true,
+  },
+  {
+    id: 'zone',
+    title: 'Сужающаяся зона',
+    short: 'ЗОНА',
+    desc: 'Одна жизнь, каждый сам за себя. На старте нож и пистолет, остальное — с пола. Зона сжимается, снаружи темно и больно. Последний выживший побеждает.',
+    arena: true,
+  },
+  {
     id: 'comp',
     title: 'Соревнование',
     short: 'СОРЕВН.',
@@ -91,12 +119,12 @@ export function isArena(mode: GameMode): boolean {
 
 /** Players on one side against guards: co-op levels and waves. */
 export function isCoopMode(mode: GameMode): boolean {
-  return mode === 'coop' || mode === 'waves';
+  return mode === 'coop' || mode === 'waves' || mode === 'extract';
 }
 
 /** Modes fought in two teams. */
 export function isTeamMode(mode: GameMode): boolean {
-  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb';
+  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb' || mode === 'infect' || mode === 'vip';
 }
 
 /** Modes played in rounds with a freeze, a buy window and money. */

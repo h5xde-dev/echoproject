@@ -102,7 +102,7 @@ interface SnapFrame {
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
 /** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
-const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a };
+const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a };
 /** Team modes: blue and red, for humans and bots alike. */
 const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
@@ -582,6 +582,7 @@ export class Game {
     this.sim.syncWorldExtras(msg.inter ?? [], msg.supply ?? [], msg.shells ?? [], msg.flares ?? []);
     this.droneSyncAt = performance.now();
     if (msg.flags) this.sim.syncFlags(msg.flags);
+    this.sim.syncModeState(msg.modeState);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
     if (msg.attackTeam !== undefined) this.sim.sidesSwapped = msg.attackTeam === 1;
@@ -615,6 +616,8 @@ export class Game {
       mirror.buffs = { ...local.buffs };
       // Carrying a flag or crawling downed slows you: prediction has to know.
       mirror.carrying = local.carrying ?? -1;
+      // The infected run faster: their role sets the speed.
+      if (local.role) mirror.role = local.role;
       mirror.downed = local.downed ?? false;
       // So does the gun in hand (knife faster, flamer slower) and the class.
       mirror.weapon = local.weapon;
@@ -916,6 +919,7 @@ export class Game {
         if (event.text === 'hacked' || event.text === 'defused') {
           this.audio.powerup();
         }
+        this.modeEvent(event);
         break;
       }
       case 'down': {
@@ -988,6 +992,45 @@ export class Game {
         } else {
           this.endGame(true, event.text ?? 'ОБЪЕКТ ЗАЧИЩЕН');
         }
+        break;
+    }
+  }
+
+  /** Banners and lines for the new modes' events. */
+  private modeEvent(event: GameEvent): void {
+    const mine = event.ownerId === this.localId;
+    const who = this.nameOf(event.ownerId);
+    switch (event.text) {
+      case 'outbreak':
+        this.hud.banner(mine ? 'ВЫ ЗАРАЖЕНЫ' : 'ЗАРАЖЕНИЕ', mine ? 'Нож, скорость, без фонаря — заразите всех' : `Нулевой пациент: ${who}`);
+        this.audio.flashBang(30);
+        break;
+      case 'infected':
+        if (mine) this.hud.banner('ВЫ ЗАРАЖЕНЫ', 'Встанете через несколько секунд — охотьтесь на людей');
+        else this.hud.message(`${who} заражён`, 'warn');
+        break;
+      case 'cargoTaken':
+        this.hud.message(mine ? 'Груз у вас — несите к точке эвакуации' : `${who} несёт груз`, 'good');
+        break;
+      case 'cargo':
+        this.hud.message(mine ? 'Груз эвакуирован!' : `${who} эвакуировал груз`, 'good');
+        this.audio.powerup();
+        break;
+      case 'reinforce':
+        this.hud.message('Охрана: подкрепление', 'warn');
+        break;
+      case 'vipStart':
+        this.hud.banner(mine ? 'ВЫ — VIP' : 'НОВЫЙ РАУНД', mine ? 'Дойдите до точки — вас прикроют' : `VIP: ${who}`);
+        break;
+      case 'vipRound': {
+        const won = event.team === this.localTeam();
+        this.hud.banner(won ? 'РАУНД ВАШ' : 'РАУНД ПРОИГРАН', event.id ?? '');
+        break;
+      }
+      case 'zoneShrink':
+        this.hud.message('Зона сжимается — в круг!', 'warn');
+        break;
+      default:
         break;
     }
   }
@@ -1499,6 +1542,8 @@ export class Game {
       return d ? { ...f, x: d.x, z: d.z } : f;
     });
     this.renderer.syncFlags(flags, this.sim.bases);
+    // New modes: marks on the ground and the zone; cargo being carried is not drawn on the floor.
+    this.renderer.syncModeMarks(this.sim.modeState.text ? this.sim.modeState : null);
     // The bomb: shown lying or planted; carried, only to the carrier's side.
     const bomb = this.sim.bomb;
     const carrier = bomb && bomb.carrier >= 0 ? this.display.get(bomb.carrier) : undefined;
@@ -2026,6 +2071,8 @@ export class Game {
       wave: this.waveState(),
       task: this.sim.objectives.find((o) => o.room === this.sim.roomIndex && !o.done) ?? null,
       flags: this.sim.flags,
+      modeState: this.sim.modeState.text ? this.sim.modeState : null,
+      isVip: this.sim.modeState.vip === this.localId,
       carrying: self.carrying,
       bomb: this.sim.bomb,
       useT: self.useT,
@@ -2058,7 +2105,7 @@ export class Game {
     this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined, {
       noise: this.noiseBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 1500 })),
       marks: this.markBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 4000 })),
-    });
+    }, this.sim.modeState.text ? this.sim.modeState : null);
     this.updatePlates();
   }
 
@@ -2075,7 +2122,7 @@ export class Game {
         x: p.x,
         y: p.y,
         // Arena bots and players have names worth showing; a badge goes before the name.
-        name: d.kind === 'enemy' && this.matchMode === 'coop' ? '' : `${badgeById(d.badge)?.glyph ?? ''}${badgeById(d.badge) ? ' ' : ''}${d.name}`,
+        name: d.kind === 'enemy' && this.matchMode === 'coop' ? '' : `${this.sim.modeState.vip === d.id ? '♛ VIP · ' : ''}${badgeById(d.badge)?.glyph ?? ''}${badgeById(d.badge) ? ' ' : ''}${d.name}`,
         hpRatio: d.hp / d.maxHp,
         armorRatio: d.armor / CONFIG.powerups.maxArmor,
         kind: d.isLocal ? 'self' : hostile ? 'enemy' : 'ally',

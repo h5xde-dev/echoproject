@@ -84,6 +84,8 @@ export class Room {
     readonly code: string,
     readonly opts: RoomOptions,
     readonly ranked: boolean,
+    /** Ranked: who the match was made for (they may not have connected yet). */
+    private expected: string[],
     private onClose: (room: Room) => void,
   ) {
     // Ranked and public rooms start at once; a private room opens with a
@@ -101,7 +103,12 @@ export class Room {
 
   /** Ranked: whose seats these are (the meta server sends them back here after a drop). */
   get subs(): string[] {
-    return [...this.seats.values()].filter((s) => !s.left).map((s) => s.sub);
+    const out = new Set(this.expected);
+    for (const s of this.seats.values()) {
+      if (s.left) out.delete(s.sub);
+      else out.add(s.sub);
+    }
+    return [...out];
   }
 
   get full(): boolean {

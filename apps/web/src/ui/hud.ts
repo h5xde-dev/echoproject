@@ -1,4 +1,4 @@
-import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, PlayerClass, RoomDef, RoomObjective, ShopItem } from '@echo/shared/game/types';
+import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, ModeState, PlayerClass, RoomDef, RoomObjective, ShopItem } from '@echo/shared/game/types';
 import { GUN_LADDER, isArena, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from '@echo/shared/game/modes';
 import type { RoundState, WaveState } from '@echo/shared/net/protocol';
 import { WEAPON_ORDER } from '@echo/shared/game/weapons';
@@ -48,6 +48,10 @@ export interface HudState {
   molotovs: number;
   /** Grenade kind G throws. */
   nadeKind: GrenadeKind;
+  /** New modes: status line, clock and marks (null for the others). */
+  modeState: ModeState | null;
+  /** «Сопровождение VIP»: the local player is the VIP. */
+  isVip: boolean;
   /** Team modes: the local player's team and the kills per team. */
   team: number;
   teamScore: [number, number];
@@ -531,7 +535,14 @@ export class Hud {
         return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
       };
       const leader = lead && !lead.isLocal ? lead.name.toUpperCase() : 'ВЫ';
-      if (this.mode === 'bomb') {
+      if (state.modeState) {
+        const ms = state.modeState;
+        let me = '';
+        if (this.mode === 'infect') me = state.team === 1 ? ' · ВЫ ЗАРАЖЁННЫЙ — НОЖ' : ' · ВЫ ЧЕЛОВЕК';
+        else if (this.mode === 'vip') me = state.isVip ? ' · ВЫ — VIP: К ТОЧКЕ!' : state.team >= 0 ? ` · ВЫ — ${TEAM_NAMES[state.team]}` : '';
+        else if (this.mode === 'extract' && state.carrying >= 0) me = ' · ГРУЗ У ВАС — К ТОЧКЕ';
+        this.objectiveEl.textContent = `${ms.text}${ms.t > 0 ? ` ${clock(ms.t)}` : ''}${me}`;
+      } else if (this.mode === 'bomb') {
         const r = state.round;
         const B = CONFIG.bomb;
         const [blue, red] = state.teamScore;
@@ -859,6 +870,7 @@ export class Hud {
     localId: number,
     activeRoom: RoomDef | undefined,
     blips: { noise: { x: number; z: number; life: number }[]; marks: { x: number; z: number; life: number }[] } = { noise: [], marks: [] },
+    modeState: ModeState | null = null,
   ): void {
     const ctx = this.minimapCtx;
     // Drawn in 184 CSS px; the backing store follows the screen density and
@@ -883,6 +895,25 @@ export class Hud {
     const oy = (h - spanZ * scale) / 2;
     const px = (x: number) => ox + (x - map.minX) * scale;
     const pz = (z: number) => oy + (z - map.minZ) * scale;
+
+    // New modes: the zone (edge, where it goes) and the marks.
+    if (modeState?.zone) {
+      const z = modeState.zone;
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = 'rgba(255, 58, 74, 0.9)';
+      ctx.beginPath();
+      ctx.arc(px(z.x), pz(z.z), z.r * scale, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.beginPath();
+      ctx.arc(px(z.x), pz(z.z), z.nextR * scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    for (const p of modeState?.points ?? []) {
+      ctx.fillStyle = p.kind === 'extract' ? '#3fd6c8' : p.kind === 'goal' ? '#ffd23a' : '#ffa040';
+      const r = p.kind === 'cargo' ? 2.5 : 4;
+      ctx.fillRect(px(p.x) - r, pz(p.z) - r, r * 2, r * 2);
+    }
 
     if (activeRoom) {
       ctx.fillStyle = 'rgba(255, 176, 102, 0.09)';

@@ -221,6 +221,23 @@ try {
   g1.ws.close();
   g2.ws.close();
 
+  // The new modes run on the server too.
+  for (const mode of ['infect', 'extract', 'vip', 'zone']) {
+    const m = meta();
+    await m.ready;
+    m.send({ t: 'hello', guestId: `mode-guest-${mode}`, name: mode });
+    await m.next((x) => x.t === 'me');
+    m.send({ t: 'quick', mode });
+    const t = await m.next((x) => x.t === 'ticket');
+    const g = game(t.url, t.ticket);
+    await g.ready;
+    const w = await g.next((x) => x.t === 'welcome');
+    const snap = await g.next((x) => x.t === 'snap' && !!x.modeState);
+    check(w.map.mode === mode && snap.modeState.text.length > 0, `${mode} on the server: «${snap.modeState.text}»`);
+    g.ws.close();
+    m.ws.close();
+  }
+
   // ---------------------------------------------------------------- ranked
   const bobCookie = await login('Боб');
   const guestMeta = meta();

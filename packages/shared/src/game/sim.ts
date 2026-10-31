@@ -20,6 +20,7 @@ import type {
   FireZone,
   Flare,
   FlagState,
+  ModeState,
   Interactable,
   StrikeShell,
   SupplyDrop,
@@ -200,6 +201,22 @@ export class Sim {
   /** Deathmatch: seconds left in the match. */
   timeLeft = 0;
   matchOver = false;
+  /** New modes: status, marks and score for the HUD (authority builds it, snapshots carry it). */
+  modeState: ModeState = { t: 0, text: '' };
+  /** New modes' private state (authority only). */
+  private modeReady = false;
+  private infectStarted = false;
+  private cargo: { x: number; z: number; carrier: number; delivered: boolean }[] = [];
+  private extractAt = { x: 0, z: 0 };
+  private delivered = 0;
+  private reinforceT = 0;
+  private vipId = -1;
+  private vipGoal = { x: 0, z: 0 };
+  private vipAttack = 0;
+  private vipScore: [number, number] = [0, 0];
+  private vipPhase: 'live' | 'end' = 'live';
+  private zone = { x: 0, z: 0, r: 0, nextR: 0, stage: 0, shrinking: false, from: 0 };
+  private zonePulse = 0;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
   /** Bot and guard sharpness (host setting). */
@@ -481,9 +498,9 @@ export class Sim {
   addPlayer(peerId: string, name: string, id: number, cls: PlayerClass | null = null, color = -1): Actor {
     let x = this.map.spawnX + (id === 1 ? -1.6 : 1.6);
     let z = this.map.spawnZ;
-    const team = this.teams ? this.teamFor(true) : -1;
+    const team = this.mode === 'infect' ? (this.infectStarted ? 1 : 0) : this.teams ? this.teamFor(true) : -1;
     if (this.arena) {
-      const s = this.pickSpawn(null, team);
+      const s = this.mode === 'extract' && this.modeReady ? this.extractAt : this.pickSpawn(null, team);
       x = s.x;
       z = s.z;
     } else if (this.actors.size > 0) {
@@ -499,12 +516,15 @@ export class Sim {
     this.classKit(actor);
     if (this.arena && !this.rounds) actor.shield = CONFIG.dm.spawnShield;
     // Joining a competitive round already under way: wait for the next one.
-    if (this.rounds && this.roundPhase !== 'freeze') {
+    // The zone (after its first moments) and a VIP round: watch until the next.
+    const late = (this.mode === 'zone' && this.time > CONFIG.zone.lateJoin) || (this.mode === 'vip' && this.modeReady);
+    if ((this.rounds && this.roundPhase !== 'freeze') || late) {
       actor.alive = false;
       actor.respawnT = Infinity;
     }
     this.actors.set(id, actor);
     this.scores.set(id, { kills: 0, deaths: 0, rounds: 0 });
+    if (this.mode === 'infect' && this.infectStarted) this.infectActor(actor);
     return actor;
   }
 
@@ -520,8 +540,8 @@ export class Sim {
 
   /** Deathmatch: tops the arena up with bots to the configured head count. */
   fillBots(): void {
-    // Waves bring their own guards.
-    if (!this.arena || this.mode === 'waves') return;
+    // Waves and extraction bring their own guards.
+    if (!this.arena || this.mode === 'waves' || this.mode === 'extract') return;
     let humans = 0;
     let bots = 0;
     for (const a of this.actors.values()) {
@@ -531,7 +551,7 @@ export class Sim {
     const want = this.botsAllowed ? Math.max(0, this.fighters - humans) : 0;
     while (bots < want) {
       const id = this.nextActorId++;
-      const team = this.teams ? this.teamFor(false) : -1;
+      const team = this.mode === 'infect' ? (this.infectStarted ? 1 : 0) : this.teams ? this.teamFor(false) : -1;
       const s = this.pickSpawn(null, team);
       const bot = this.newActor(id, 'enemy', BOT_NAMES[(id - ENEMY_ID_BASE) % BOT_NAMES.length], s.x, s.z);
       bot.team = team;
@@ -549,6 +569,7 @@ export class Sim {
       if (this.rounds && this.roundPhase === 'freeze') this.botShopping(bot);
       this.actors.set(id, bot);
       this.scores.set(id, { kills: 0, deaths: 0, rounds: 0 });
+      if (this.mode === 'infect' && this.infectStarted) this.infectActor(bot);
       bots++;
     }
     while (bots > want) {
@@ -698,7 +719,8 @@ export class Sim {
       return;
     }
 
-    if (input.flashlight) actor.flashOn = !actor.flashOn;
+    // The infected have no light at all.
+    if (input.flashlight && actor.role !== 'zombie') actor.flashOn = !actor.flashOn;
     if (input.drone) this.launchDrone(actor);
     if (input.interact) this.interact(actor);
     if (input.strike) this.callStrike(actor, input.aim, input.throwDist ?? 15);
@@ -850,6 +872,10 @@ export class Sim {
     if (this.mode === 'coop') this.updateRoomProgress();
     else if (this.rounds) this.updateRounds(dt);
     else if (this.mode === 'waves') this.updateWaves(dt);
+    else if (this.mode === 'infect') this.updateInfect(dt);
+    else if (this.mode === 'extract') this.updateExtract(dt);
+    else if (this.mode === 'vip') this.updateVip(dt);
+    else if (this.mode === 'zone') this.updateZone(dt);
     else this.updateMatch(dt);
     if (this.mode === 'ctf') this.updateFlags(dt);
     this.updateInteractables(dt);
@@ -938,6 +964,8 @@ export class Sim {
       if (bomb.planted && actor.team === this.defendTeam) return { x: bomb.x, z: bomb.z, reach: CONFIG.bomb.defuseReach * 0.7 };
     }
     if (this.mode === 'ctf' && actor.carrying >= 0) return { ...this.bases[actor.team], reach: CONFIG.ctf.touch };
+    if (this.mode === 'extract' && actor.carrying >= 0) return { ...this.extractAt, reach: CONFIG.extract.radius * 0.6 };
+    if (this.mode === 'vip' && actor.id === this.vipId) return { ...this.vipGoal, reach: CONFIG.vip.radius * 0.6 };
     return null;
   }
 
@@ -1183,6 +1211,8 @@ export class Sim {
 
   /** The nearest enemy drone a guard can see within reach of a shot (after a moment to react). */
   private droneThreat(actor: Actor): Drone | null {
+    // A knife cannot reach a drone.
+    if (actor.role === 'zombie') return null;
     let best: Drone | null = null;
     let bestD = 11;
     for (const d of this.drones) {
@@ -1398,7 +1428,18 @@ export class Sim {
     const R = CONFIG.powerups.pickupRadius;
     const pickupsAllowed = actor.kind === 'player' || this.arena;
     if (!pickupsAllowed) return;
+    // The infected fight with their hands; the VIP keeps the pistol.
+    const noGuns = actor.role === 'zombie' || actor.id === this.vipId;
+    if (this.mode === 'extract' && actor.kind === 'player' && actor.alive && !actor.downed && actor.carrying < 0) {
+      const i = this.cargo.findIndex((c) => !c.delivered && c.carrier < 0 && dist(actor.x, actor.z, c.x, c.z) < 1.3);
+      if (i >= 0) {
+        this.cargo[i].carrier = actor.id;
+        actor.carrying = i;
+        this.events.push({ type: 'objective', text: 'cargoTaken', ownerId: actor.id, x: actor.x, z: actor.z });
+      }
+    }
     for (const p of this.pickups) {
+      if (noGuns) break;
       if (!p.active || dist(actor.x, actor.z, p.x, p.z) > R + actor.radius) continue;
       if (this.mode === 'coop' && p.room > this.roomIndex) continue;
       // Walking over a gun you already hold (with a full magazine) leaves it there.
@@ -1630,7 +1671,17 @@ export class Sim {
     this.dropBomb(actor);
     if (this.arena) {
       // Competitive: back next round. Waves: players after the wave, guards never.
-      actor.respawnT = this.rounds || this.mode === 'waves' ? Infinity : CONFIG.dm.respawnDelay;
+      // VIP and the zone: one life (VIP: until the next round).
+      actor.respawnT = this.rounds || this.mode === 'waves' || this.mode === 'vip' || this.mode === 'zone' ? Infinity : CONFIG.dm.respawnDelay;
+      if (this.mode === 'infect') {
+        // A person caught after the outbreak gets up infected.
+        if (this.infectStarted && actor.team === 0) {
+          actor.team = 1;
+          this.events.push({ type: 'objective', text: 'infected', ownerId: actor.id, x: actor.x, z: actor.z });
+        }
+        actor.respawnT = CONFIG.infect.respawn;
+      }
+      if (this.mode === 'extract') actor.respawnT = actor.kind === 'player' ? CONFIG.extract.respawn : Infinity;
       const victim = this.scores.get(actor.id);
       if (victim) victim.deaths++;
       const killer = this.scores.get(sourceId);
@@ -1641,8 +1692,8 @@ export class Sim {
       if (k && !suicide) this.rewardKill(k);
       // Sometimes a powerup falls where they fell (it lies there for a while).
       if (!this.rounds && this.mode !== 'waves' && this.rng.next() < CONFIG.powerups.arenaDropChance) this.dropPowerup(actor.x, actor.z, CONFIG.powerups.dropLife);
-      // Waves: fallen guards are bodies, cleared like co-op corpses.
-      if (this.mode === 'waves' && actor.kind === 'enemy') {
+      // Waves and extraction: fallen guards are bodies, cleared like co-op corpses.
+      if ((this.mode === 'waves' || this.mode === 'extract') && actor.kind === 'enemy') {
         this.corpses.push(actor.id);
         while (this.corpses.length > MAX_CORPSES) {
           const id = this.corpses.shift()!;
@@ -2021,8 +2072,10 @@ export class Sim {
         wantAng = Math.atan2(ai.targetZ - actor.z, ai.targetX - actor.x);
         if (nearest) {
           // Snipers hold far back; heavies close in and never give ground.
-          const tank = actor.role === 'heavy' || actor.role === 'boss';
-          const ideal = actor.role === 'sniper' ? 22 : tank ? 5 : Math.min(16, def.falloffStart * 0.8);
+          // The infected rush in with the knife and never back off.
+          const zombie = actor.role === 'zombie';
+          const tank = actor.role === 'heavy' || actor.role === 'boss' || zombie;
+          const ideal = zombie ? CONFIG.knife.reach * 0.7 : actor.role === 'sniper' ? 22 : tank ? 5 : Math.min(16, def.falloffStart * 0.8);
           const d = nearestD;
           if (d > ideal * 1.25) {
             move = this.steer(actor, nearest.x, nearest.z, ideal);
@@ -2483,6 +2536,8 @@ export class Sim {
   }
 
   private pickPatrolTarget(actor: Actor): { x: number; z: number } {
+    const special = this.modePatrolTarget(actor);
+    if (special) return special;
     // Waves: guards sweep toward the squad, a little off target.
     if (this.mode === 'waves') {
       const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
@@ -2678,7 +2733,7 @@ export class Sim {
   }
 
   private respawn(actor: Actor): void {
-    const at = this.arena ? this.pickSpawn(actor) : this.findSafeSpawn(actor);
+    const at = this.mode === 'extract' ? this.nearestWalkable(this.extractAt.x + this.rng.range(-2, 2), this.extractAt.z + this.rng.range(-2, 2)) : this.arena ? this.pickSpawn(actor) : this.findSafeSpawn(actor);
     actor.alive = true;
     actor.burnT = 0;
     actor.x = at.x;
@@ -2703,6 +2758,7 @@ export class Sim {
       actor.blind = 0;
       actor.shield = this.rounds ? 0 : CONFIG.dm.spawnShield;
       if (actor.ai) Object.assign(actor.ai, makeAi(), { hasLight: true });
+      if (this.mode === 'infect' && actor.team === 1) this.infectActor(actor);
     } else {
       actor.hp = actor.maxHp * 0.7;
       actor.ammo = WEAPONS[actor.weapon].mag;
@@ -2918,6 +2974,17 @@ export class Sim {
   /** A carrier going down (or leaving) drops the flag where they stand. */
   private dropFlag(actor: Actor): void {
     if (actor.carrying < 0) return;
+    if (this.mode === 'extract') {
+      // Cargo falls where its carrier fell.
+      const c = this.cargo[actor.carrying];
+      actor.carrying = -1;
+      if (c) {
+        c.carrier = -1;
+        c.x = actor.x;
+        c.z = actor.z;
+      }
+      return;
+    }
     const flag = this.flags[actor.carrying];
     actor.carrying = -1;
     if (!flag) return;
@@ -3021,6 +3088,350 @@ export class Sim {
     actor.shield = CONFIG.dm.spawnShield;
     actor.respawnT = 0;
     this.events.push({ type: 'respawn', ownerId: actor.id, x: actor.x, z: actor.z });
+  }
+
+  // ---------------------------------------------------------- new modes
+
+  /** «Заражение»: the kit of the infected — the knife, more health, speed, no light. */
+  private infectActor(actor: Actor): void {
+    actor.team = 1;
+    actor.role = 'zombie';
+    actor.maxHp = Math.round(CONFIG.player.maxHp * CONFIG.roles.zombie.hp);
+    actor.hp = actor.maxHp;
+    actor.armor = 0;
+    actor.weapons = ['knife'];
+    this.equip(actor, 'knife');
+    actor.grenades = actor.smokes = actor.flashes = actor.molotovs = 0;
+    actor.drones = actor.mines = actor.flares = 0;
+    actor.flashOn = false;
+    if (actor.ai) {
+      actor.ai.hasLight = false;
+      actor.ai.awareness = 1;
+    }
+    this.applySpeed(actor);
+  }
+
+  /**
+   * «Заражение»: a calm start, then patient zero (one per `perFighters`). People
+   * caught get up infected; people do not come back. Holding out wins it for
+   * the people, nobody left wins it for the infected.
+   */
+  private updateInfect(dt: number): void {
+    if (this.matchOver) return;
+    const I = CONFIG.infect;
+    const all = [...this.actors.values()];
+    const humans = all.filter((a) => a.team === 0 && a.alive).length;
+    const infected = all.filter((a) => a.team === 1).length;
+    if (!this.infectStarted) {
+      const left = Math.max(0, I.startDelay - this.time);
+      this.modeState = { t: left, text: 'Заражение начнётся через', score: [humans, 0] };
+      const candidates = all.filter((a) => a.alive && a.team === 0);
+      if (left > 0 || candidates.length < 2) return;
+      const count = Math.max(1, Math.floor(candidates.length / I.perFighters));
+      for (let i = 0; i < count; i++) {
+        const pick = candidates.splice(this.rng.int(0, candidates.length - 1), 1)[0];
+        this.infectActor(pick);
+        this.events.push({ type: 'objective', text: 'outbreak', ownerId: pick.id, x: pick.x, z: pick.z });
+      }
+      this.infectStarted = true;
+      this.timeLeft = I.survive;
+      return;
+    }
+    this.timeLeft = Math.max(0, this.timeLeft - dt);
+    this.modeState = { t: this.timeLeft, text: `ЛЮДИ ${humans} · ЗАРАЖЁННЫЕ ${infected} · продержаться`, score: [humans, infected] };
+    if (humans === 0) this.finishTeamMatch(1, 'Заражены все');
+    else if (this.timeLeft <= 0) this.finishTeamMatch(0, `Люди продержались: ${humans}`);
+  }
+
+  /** «Эвакуация»: the point by the squad's start, cargo at the far spawns, guards on it. */
+  private setupExtract(): void {
+    const E = CONFIG.extract;
+    this.modeReady = true;
+    this.timeLeft = E.time;
+    this.reinforceT = E.reinforceEvery;
+    const spawns = this.map.spawns.length ? this.map.spawns : [{ x: this.map.spawnX, z: this.map.spawnZ }];
+    const squad = [...this.actors.values()].filter((a) => a.kind === 'player');
+    const cx = squad.length ? squad.reduce((n, a) => n + a.x, 0) / squad.length : spawns[0].x;
+    const cz = squad.length ? squad.reduce((n, a) => n + a.z, 0) / squad.length : spawns[0].z;
+    const start = [...spawns].sort((a, b) => dist(a.x, a.z, cx, cz) - dist(b.x, b.z, cx, cz))[0];
+    this.extractAt = { x: start.x, z: start.z };
+    // The squad starts together at the point.
+    for (const p of squad) {
+      const at = this.nearestWalkable(start.x + this.rng.range(-2, 2), start.z + this.rng.range(-2, 2));
+      p.x = at.x;
+      p.z = at.z;
+    }
+    const far = [...spawns].sort((a, b) => dist(b.x, b.z, start.x, start.z) - dist(a.x, a.z, start.x, start.z));
+    this.cargo = [];
+    for (let i = 0; i < E.cargo; i++) {
+      const s = far[i % Math.max(1, far.length - 1)] ?? far[0];
+      const at = this.nearestWalkable(s.x + this.rng.range(-3, 3), s.z + this.rng.range(-3, 3));
+      this.cargo.push({ x: at.x, z: at.z, carrier: -1, delivered: false });
+    }
+    this.spawnGuards(E.guards + squad.length * E.guardsPerPlayer, false);
+  }
+
+  /** Guards for «Эвакуация»: on the cargo at the start, after the squad later. */
+  private spawnGuards(count: number, hunt: boolean): void {
+    const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
+    const spots = this.cargo.filter((c) => !c.delivered);
+    const level = 1 + Math.floor((this.time / CONFIG.extract.time) * 4);
+    for (let i = 0; i < count; i++) {
+      const spot = hunt ? (this.map.spawns.length ? [...this.map.spawns].sort((a, b) => dist(b.x, b.z, this.extractAt.x, this.extractAt.z) - dist(a.x, a.z, this.extractAt.x, this.extractAt.z))[i % 2] : this.extractAt) : spots[i % Math.max(1, spots.length)] ?? this.extractAt;
+      const at = this.nearestWalkable(spot.x + this.rng.range(-3, 3), spot.z + this.rng.range(-3, 3));
+      const id = this.nextActorId++;
+      const guard = this.newActor(id, 'enemy', BOT_NAMES[(id - ENEMY_ID_BASE) % BOT_NAMES.length], at.x, at.z);
+      guard.maxHp = guard.hp = CONFIG.enemy.maxHp;
+      this.equip(guard, ENEMY_WEAPONS[this.rng.int(0, ENEMY_WEAPONS.length - 1)]);
+      guard.ai!.hasLight = this.rng.next() < 0.5;
+      guard.flashOn = guard.ai!.hasLight;
+      this.giveRole(guard, this.pickRole(level, this.rng));
+      const target = hunt ? squad[this.rng.int(0, Math.max(0, squad.length - 1))] : null;
+      if (target) {
+        guard.ai!.mode = 'alert';
+        guard.ai!.lastKnownX = target.x;
+        guard.ai!.lastKnownZ = target.z;
+        guard.ai!.timer = 8;
+      }
+      this.actors.set(id, guard);
+      this.scores.set(id, { kills: 0, deaths: 0, rounds: 0 });
+    }
+  }
+
+  /**
+   * «Эвакуация»: carry the cargo to the point before the clock runs out; all of
+   * it wins at once, at least half wins at the end. Guards keep coming.
+   */
+  private updateExtract(dt: number): void {
+    if (this.matchOver) return;
+    const E = CONFIG.extract;
+    if (!this.modeReady) this.setupExtract();
+    this.timeLeft = Math.max(0, this.timeLeft - dt);
+    for (const c of this.cargo) {
+      if (c.delivered || c.carrier < 0) continue;
+      const a = this.actors.get(c.carrier);
+      if (!a || !a.alive || a.downed || a.carrying < 0) {
+        c.carrier = -1;
+        continue;
+      }
+      c.x = a.x;
+      c.z = a.z;
+      if (dist(a.x, a.z, this.extractAt.x, this.extractAt.z) < E.radius) {
+        c.delivered = true;
+        c.carrier = -1;
+        a.carrying = -1;
+        this.delivered++;
+        this.events.push({ type: 'objective', text: 'cargo', ownerId: a.id, x: a.x, z: a.z });
+      }
+    }
+    this.reinforceT -= dt;
+    if (this.reinforceT <= 0) {
+      this.reinforceT = E.reinforceEvery;
+      const squad = [...this.actors.values()].filter((a) => a.kind === 'player').length;
+      this.spawnGuards(Math.ceil((E.guards + squad * E.guardsPerPlayer) / 2), true);
+      this.events.push({ type: 'objective', text: 'reinforce' });
+    }
+    const total = this.cargo.length;
+    const need = Math.ceil(total / 2);
+    this.modeState = {
+      t: this.timeLeft,
+      text: `ГРУЗ ${this.delivered}/${total} · НУЖНО ${need}`,
+      points: [{ ...this.extractAt, kind: 'extract' }, ...this.cargo.filter((c) => !c.delivered && c.carrier < 0).map((c) => ({ x: c.x, z: c.z, kind: 'cargo' as const }))],
+      score: [this.delivered, total],
+    };
+    const done = (win: boolean, text: string) => {
+      this.matchOver = true;
+      this.events.push(win ? { type: 'victory', text } : { type: 'gameOver', text });
+    };
+    if (this.delivered >= total) done(true, `Вынесен весь груз: ${total}`);
+    else if (this.timeLeft <= 0) done(this.delivered >= need, `Вынесено ${this.delivered} из ${total}`);
+  }
+
+  /**
+   * «Сопровождение VIP»: rounds. The attack escorts its VIP (pistol, armour,
+   * more health) to the goal; the defence stops them. Sides swap each round.
+   */
+  private updateVip(dt: number): void {
+    if (this.matchOver) return;
+    const V = CONFIG.vip;
+    if (!this.modeReady) {
+      this.modeReady = true;
+      this.vipAttack = 0;
+      this.startVipRound();
+    }
+    this.timeLeft = Math.max(0, this.timeLeft - dt);
+    const vip = this.actors.get(this.vipId);
+    if (this.vipPhase === 'live') {
+      let winner = -1;
+      let why = '';
+      if (!vip || !vip.alive) {
+        winner = 1 - this.vipAttack;
+        why = 'VIP убит';
+      } else if (dist(vip.x, vip.z, this.vipGoal.x, this.vipGoal.z) < V.radius) {
+        winner = this.vipAttack;
+        why = 'VIP на месте';
+        this.events.push({ type: 'objective', text: 'vip', ownerId: vip.id, x: vip.x, z: vip.z });
+      } else if (this.timeLeft <= 0) {
+        winner = 1 - this.vipAttack;
+        why = 'Время вышло';
+      }
+      if (winner >= 0) {
+        this.vipScore[winner]++;
+        this.vipPhase = 'end';
+        this.timeLeft = V.endTime;
+        this.events.push({ type: 'objective', text: 'vipRound', team: winner, id: why });
+        if (this.vipScore[winner] >= V.winRounds) {
+          this.finishTeamMatch(winner, `${TEAM_NAMES[winner]} победили ${Math.max(...this.vipScore)}:${Math.min(...this.vipScore)}`);
+        }
+      }
+    } else if (this.timeLeft <= 0) {
+      this.vipAttack = 1 - this.vipAttack;
+      this.startVipRound();
+    }
+    const live = this.vipPhase === 'live';
+    this.modeState = {
+      t: this.timeLeft,
+      text: live ? `${TEAM_NAMES[this.vipAttack]} ВЕДУТ VIP · ${this.vipScore[0]}:${this.vipScore[1]}` : `РАУНД ОКОНЧЕН · ${this.vipScore[0]}:${this.vipScore[1]}`,
+      points: [{ ...this.vipGoal, kind: 'goal' }],
+      vip: this.vipId,
+      score: [...this.vipScore],
+    };
+  }
+
+  private startVipRound(): void {
+    const V = CONFIG.vip;
+    this.vipPhase = 'live';
+    this.timeLeft = V.roundTime;
+    // The goal: the spawn farthest from where the attack starts.
+    const from = this.pickSpawn(null, this.vipAttack);
+    const spawns = this.map.spawns.length ? this.map.spawns : [{ x: this.map.spawnX, z: this.map.spawnZ }];
+    const goal = [...spawns].sort((a, b) => dist(b.x, b.z, from.x, from.z) - dist(a.x, a.z, from.x, from.z))[0];
+    this.vipGoal = { x: goal.x, z: goal.z };
+    // Everyone back for the round, as they are.
+    for (const a of this.actors.values()) {
+      if (a.team < 0) continue;
+      a.maxHp = CONFIG.player.maxHp;
+      this.respawn(a);
+    }
+    const attackers = [...this.actors.values()].filter((a) => a.team === this.vipAttack && a.alive);
+    const people = attackers.filter((a) => a.kind === 'player');
+    const pool = people.length ? people : attackers;
+    const vip = pool[this.rng.int(0, Math.max(0, pool.length - 1))];
+    this.vipId = vip?.id ?? -1;
+    if (vip) {
+      vip.maxHp = vip.hp = Math.round(CONFIG.player.maxHp * V.hp);
+      vip.armor = V.armor;
+      vip.weapons = ['pistol'];
+      this.equip(vip, 'pistol');
+      vip.grenades = vip.drones = vip.mines = 0;
+      this.events.push({ type: 'objective', text: 'vipStart', ownerId: vip.id, team: this.vipAttack });
+    }
+  }
+
+  /** «Сужающаяся зона»: the circle, and guns on the floor for everyone. */
+  private setupZone(): void {
+    const Z = CONFIG.zone;
+    this.modeReady = true;
+    const m = this.map;
+    const c = this.nearestWalkable((m.minX + m.maxX) / 2, (m.minZ + m.maxZ) / 2);
+    const r0 = Math.hypot(m.maxX - m.minX, m.maxZ - m.minZ) / 2 + 2;
+    this.zone = { x: c.x, z: c.z, r: r0, nextR: this.zoneRadius(1, r0), stage: 0, shrinking: false, from: this.time };
+    this.zoneStart = r0;
+    this.zoneFromR = r0;
+    const guns: WeaponId[] = ['smg', 'shotgun', 'rifle', 'sniper', 'lmg', 'flamer'];
+    const loot = Z.lootPerFighter * Math.max(2, this.actors.size);
+    for (let i = 0; i < loot; i++) {
+      const at = this.nearestWalkable(this.rng.range(m.minX + 2, m.maxX - 2), this.rng.range(m.minZ + 2, m.maxZ - 2));
+      this.pickups.push({ id: this.nextPickupId++, weapon: guns[this.rng.int(0, guns.length - 1)], x: at.x, z: at.z, room: 0, active: true, respawnT: 0, life: 0 });
+    }
+  }
+
+  private zoneStart = 0;
+  private zoneFromR = 0;
+
+  private zoneRadius(stage: number, r0 = this.zoneStart): number {
+    const Z = CONFIG.zone;
+    return Z.finalRadius + (r0 - Z.finalRadius) * Math.max(0, 1 - stage / Z.stages);
+  }
+
+  /** «Сужающаяся зона»: hold, shrink, hold…; outside hurts; the last one standing wins. */
+  private updateZone(dt: number): void {
+    if (this.matchOver) return;
+    const Z = CONFIG.zone;
+    if (!this.modeReady) this.setupZone();
+    const zone = this.zone;
+    const since = this.time - zone.from;
+    if (!zone.shrinking && since >= Z.hold && zone.stage < Z.stages) {
+      zone.shrinking = true;
+      zone.from = this.time;
+      this.zoneFromR = zone.r;
+      this.events.push({ type: 'objective', text: 'zoneShrink' });
+    } else if (zone.shrinking) {
+      const k = Math.min(1, since / Z.shrink);
+      zone.r = this.zoneFromR + (zone.nextR - this.zoneFromR) * k;
+      if (k >= 1) {
+        zone.shrinking = false;
+        zone.from = this.time;
+        zone.stage++;
+        zone.r = zone.nextR;
+        zone.nextR = this.zoneRadius(zone.stage + 1);
+      }
+    }
+    this.zonePulse -= dt;
+    if (this.zonePulse <= 0) {
+      this.zonePulse = 0.5;
+      for (const a of this.actors.values()) {
+        if (!a.alive || dist(a.x, a.z, zone.x, zone.z) <= zone.r) continue;
+        a.shield = 0;
+        this.damageActor(a, Z.dps * 0.5, -1, undefined, false, 'zone');
+      }
+    }
+    const alive = [...this.actors.values()].filter((a) => a.alive);
+    const t = zone.shrinking ? Z.shrink - since : zone.stage < Z.stages ? Z.hold - since : 0;
+    this.modeState = {
+      t: Math.max(0, t),
+      text: `${zone.shrinking ? 'ЗОНА СЖИМАЕТСЯ' : zone.stage < Z.stages ? 'ЗОНА СОЖМЁТСЯ ЧЕРЕЗ' : 'ПОСЛЕДНИЙ КРУГ'} · В ЖИВЫХ ${alive.length}`,
+      zone: { x: zone.x, z: zone.z, r: zone.r, nextR: zone.nextR },
+    };
+    if (this.time > 3 && alive.length <= 1) {
+      const last = alive[0];
+      this.finishMatch(last?.id, last ? `${last.name} — последний выживший` : 'Никто не выжил');
+    }
+  }
+
+  /** Where bots of the new modes go when they have nobody in sight. */
+  private modePatrolTarget(actor: Actor): { x: number; z: number } | null {
+    const jitter = (p: { x: number; z: number }, r: number) => this.nearestWalkable(p.x + this.rng.range(-r, r), p.z + this.rng.range(-r, r));
+    if (this.mode === 'extract') {
+      const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
+      const cargo = this.cargo.filter((c) => !c.delivered);
+      if (cargo.length && this.rng.next() < 0.5) return jitter(cargo[this.rng.int(0, cargo.length - 1)], 5);
+      const p = squad[this.rng.int(0, Math.max(0, squad.length - 1))];
+      return p ? jitter(p, 6) : null;
+    }
+    if (this.mode === 'infect' && actor.role === 'zombie') {
+      // The infected hunt: the nearest person.
+      let best: Actor | null = null;
+      for (const a of this.actors.values()) if (a.alive && a.team === 0 && (!best || dist(a.x, a.z, actor.x, actor.z) < dist(best.x, best.z, actor.x, actor.z))) best = a;
+      return best ? { x: best.x, z: best.z } : null;
+    }
+    if (this.mode === 'vip' && actor.team >= 0) {
+      const vip = this.actors.get(this.vipId);
+      if (actor.team === this.vipAttack) return vip && vip.alive ? jitter(vip, 3) : jitter(this.vipGoal, 4);
+      return jitter(this.vipGoal, 7);
+    }
+    if (this.mode === 'zone') {
+      const z = this.zone;
+      const a = this.rng.next() * Math.PI * 2;
+      const r = this.rng.next() * z.r * 0.6;
+      return this.nearestWalkable(z.x + Math.cos(a) * r, z.z + Math.sin(a) * r);
+    }
+    return null;
+  }
+
+  /** Client: the new modes' state from a snapshot. */
+  syncModeState(state: ModeState | undefined): void {
+    this.modeState = state ?? { t: 0, text: '' };
   }
 
   private finishTeamMatch(team: number | undefined, text: string): void {

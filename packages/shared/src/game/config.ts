@@ -380,6 +380,58 @@ export const CONFIG = {
     scout: { base: 0.08, perLevel: 0.03, max: 0.22, hp: 0.9, armor: 0, speed: 1.1 },
     /** Waves: every bossEvery-th wave brings one (never rolled at random). */
     boss: { base: 0, perLevel: 0, max: 0, hp: 6, armor: 100, speed: 0.65 },
+    /** «Заражение» (never rolled): applied to the infected, people and bots alike. */
+    zombie: { base: 0, perLevel: 0, max: 0, hp: 1.5, armor: 0, speed: 1.2 },
+  },
+
+  /** «Заражение»: people against the infected. */
+  infect: {
+    /** Seconds before the first infection. */
+    startDelay: 10,
+    /** People hold out this long after it. */
+    survive: 180,
+    /** One patient zero per this many fighters (at least one). */
+    perFighters: 4,
+    respawn: 3,
+  },
+
+  /** «Эвакуация»: carry cargo to the extraction point against guards. */
+  extract: {
+    cargo: 5,
+    time: 360,
+    /** Reach of the extraction point. */
+    radius: 3.2,
+    /** Guards at the start and in each reinforcement. */
+    guards: 4,
+    guardsPerPlayer: 1,
+    reinforceEvery: 45,
+    /** The fallen come back at the extraction point after this long. */
+    respawn: 15,
+  },
+
+  /** «Сопровождение VIP»: rounds. */
+  vip: {
+    roundTime: 90,
+    endTime: 4,
+    winRounds: 4,
+    hp: 1.6,
+    armor: 100,
+    radius: 3,
+  },
+
+  /** «Сужающаяся зона»: one life, a shrinking safe circle. */
+  zone: {
+    /** Each stage: hold the circle, then shrink it to the next radius. */
+    hold: 30,
+    shrink: 18,
+    stages: 5,
+    finalRadius: 4,
+    /** Outside the circle: this much damage per second, every half second. */
+    dps: 9,
+    /** Guns put on the floor at the start, per fighter. */
+    lootPerFighter: 2,
+    /** Seconds after the start someone can still join alive. */
+    lateJoin: 20,
   },
 
   /** Co-op room tasks: from room `fromRoom` on, a room has one with this chance. */

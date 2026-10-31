@@ -1,4 +1,4 @@
-import type { BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, Flare, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud, StrikeShell, SupplyDrop } from '../game/types';
+import type { ModeState, BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, Flare, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud, StrikeShell, SupplyDrop } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -156,6 +156,8 @@ export interface SnapshotMsg {
   wave?: WaveState;
   /** Capture the flag: both flags and their bases. */
   flags?: FlagState[];
+  /** The new modes (infect, extract, vip, zone): status, marks, zone. */
+  modeState?: ModeState;
   bases?: { x: number; z: number }[];
   /** Co-op room tasks. */
   objectives?: RoomObjective[];

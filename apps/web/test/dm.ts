@@ -1767,6 +1767,148 @@ for (const info of ARENAS) {
   }
 }
 
+// New modes: infection, extraction, VIP escort, the shrinking zone.
+{
+  const dt = CONFIG.tickDt;
+  const run = (sim: Sim, seconds: number) => {
+    for (let i = 0; i < Math.round(seconds / dt); i++) sim.step(dt);
+  };
+  const priv = (sim: Sim) => sim as unknown as Record<string, unknown> & { timeLeft: number };
+  const won = (sim: Sim) => sim.drainEvents().find((e) => e.type === 'victory' || e.type === 'gameOver');
+
+  // Заражение.
+  {
+    const s = new Sim(buildArena('sklad', 7001, 'infect'));
+    s.fighters = 6;
+    s.addPlayer('local', 'тест', 1);
+    s.fillBots();
+    check([...s.actors.values()].every((a) => a.team === 0), 'infect: everyone starts human');
+    run(s, CONFIG.infect.startDelay + 0.2);
+    const zombies = [...s.actors.values()].filter((a) => a.team === 1);
+    check(zombies.length >= 1 && zombies.every((z) => z.role === 'zombie' && z.weapon === 'knife' && !z.flashOn), `infect: patient zero with a knife and no light (${zombies.length})`);
+    const z = zombies[0];
+    const human = [...s.actors.values()].find((a) => a.team === 0 && a.alive)!;
+    human.shield = 0;
+    s.damageActor(human, 9999, z.id);
+    check(human.team === 1, 'infect: a person caught joins the infected');
+    run(s, CONFIG.infect.respawn + 0.2);
+    check(human.alive && human.role === 'zombie', 'infect: and gets up infected');
+    s.drainEvents();
+    for (const a of s.actors.values()) {
+      if (a.team !== 0 || !a.alive) continue;
+      a.shield = 0;
+      s.damageActor(a, 9999, z.id);
+    }
+    run(s, 0.1);
+    const end = won(s);
+    check(end?.type === 'victory' && end.team === 1, `infect: nobody human left — the infected win (${end?.text})`);
+    const s2 = new Sim(buildArena('sklad', 7002, 'infect'));
+    s2.fighters = 6;
+    s2.addPlayer('local', 'тест', 1);
+    s2.fillBots();
+    run(s2, CONFIG.infect.startDelay + 0.2);
+    for (const a of s2.actors.values()) if (a.team === 1) a.alive = false;
+    priv(s2).timeLeft = 0.05;
+    s2.drainEvents();
+    run(s2, 0.1);
+    const end2 = won(s2);
+    check(end2?.type === 'victory' && end2.team === 0, 'infect: holding out wins it for the people');
+  }
+
+  // Эвакуация.
+  {
+    const s = new Sim(buildArena('port', 7003, 'extract'));
+    const p = s.addPlayer('local', 'тест', 1);
+    run(s, dt);
+    const ms = s.modeState;
+    const cargo = (priv(s).cargo as { x: number; z: number; delivered: boolean }[]);
+    const at = priv(s).extractAt as { x: number; z: number };
+    check(cargo.length === CONFIG.extract.cargo && ms.points?.some((q) => q.kind === 'extract') === true, `extract: cargo on the map and the point (${cargo.length})`);
+    check([...s.actors.values()].some((a) => a.kind === 'enemy'), 'extract: guards on it');
+    for (const a of s.actors.values()) if (a.kind === 'enemy') a.alive = false;
+    s.drainEvents();
+    for (let i = 0; i < cargo.length; i++) {
+      p.x = cargo[i].x;
+      p.z = cargo[i].z;
+      p.shield = 5;
+      run(s, dt * 2);
+      check(i > 0 || p.carrying === 0, 'extract: walking over cargo picks it up');
+      p.x = at.x;
+      p.z = at.z;
+      run(s, dt * 2);
+    }
+    const events = s.drainEvents();
+    check(events.filter((e) => e.type === 'objective' && e.text === 'cargo').length === cargo.length, 'extract: cargo carried to the point counts');
+    check(events.some((e) => e.type === 'victory'), 'extract: all of it — the squad wins');
+    const s2 = new Sim(buildArena('port', 7004, 'extract'));
+    s2.addPlayer('local', 'тест', 1);
+    run(s2, dt);
+    priv(s2).timeLeft = 0.05;
+    s2.drainEvents();
+    run(s2, 0.1);
+    check(won(s2)?.type === 'gameOver', 'extract: time up with too little — lost');
+  }
+
+  // Сопровождение VIP.
+  {
+    const s = new Sim(buildArena('sklad', 7005, 'vip'));
+    s.fighters = 6;
+    s.addPlayer('local', 'тест', 1);
+    s.fillBots();
+    run(s, dt);
+    const vip = s.actors.get(s.modeState.vip ?? -1)!;
+    check(!!vip && vip.weapon === 'pistol' && vip.weapons.length === 1 && vip.armor > 0 && vip.maxHp > CONFIG.player.maxHp, 'vip: a VIP with a pistol, armour and more health');
+    const goal = priv(s).vipGoal as { x: number; z: number };
+    const attack = priv(s).vipAttack as number;
+    vip.x = goal.x;
+    vip.z = goal.z;
+    s.drainEvents();
+    run(s, dt * 2);
+    const score = s.modeState.score!;
+    check(score[attack] === 1, `vip: at the goal — a round for the attack (${score.join(':')})`);
+    run(s, CONFIG.vip.endTime + 0.1);
+    const vip2 = s.actors.get(s.modeState.vip ?? -1)!;
+    check(priv(s).vipAttack === 1 - attack && vip2.team === 1 - attack, 'vip: sides swap for the next round');
+    vip2.shield = 0;
+    s.damageActor(vip2, 9999, -1);
+    run(s, dt * 2);
+    check(s.modeState.score![attack] === 2, 'vip: the VIP killed — a round for the defence');
+  }
+
+  // Сужающаяся зона.
+  {
+    const s = new Sim(buildArena('sklad', 7006, 'zone'));
+    s.fighters = 4;
+    const p = s.addPlayer('local', 'тест', 1);
+    s.fillBots();
+    const before = s.pickups.length;
+    run(s, dt);
+    const zone = s.modeState.zone!;
+    check(!!zone && zone.nextR < zone.r && s.pickups.length > before, `zone: a circle and guns on the floor (+${s.pickups.length - before})`);
+    run(s, CONFIG.zone.hold + CONFIG.zone.shrink * 0.5);
+    check(s.modeState.zone!.r < zone.r, `zone: it shrinks (${zone.r.toFixed(1)} → ${s.modeState.zone!.r.toFixed(1)} m)`);
+    const z = s.modeState.zone!;
+    p.x = z.x + z.r + 6;
+    p.z = z.z;
+    p.shield = 0;
+    const hp = p.hp;
+    s.drainEvents();
+    run(s, 1.1);
+    check(p.hp < hp, `zone: outside it hurts (${hp} → ${p.hp.toFixed(0)})`);
+    p.hp = p.maxHp;
+    p.x = z.x;
+    p.z = z.z;
+    for (const a of s.actors.values()) if (a !== p) {
+      a.shield = 0;
+      s.damageActor(a, 9999, p.id);
+    }
+    check([...s.actors.values()].every((a) => a === p || a.respawnT === Infinity), 'zone: one life');
+    run(s, dt * 2);
+    const end = s.drainEvents().find((e) => e.type === 'victory');
+    check(end?.ownerId === p.id, 'zone: the last one standing wins');
+  }
+}
+
 // Death causes and match stats (quests and achievements count these).
 {
   const base = buildArena('sklad', 6161, 'dm');

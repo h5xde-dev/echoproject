@@ -105,7 +105,7 @@ export async function createRoom(opts: RoomOptions | null, ranked: boolean, subs
   for (const instance of candidates) {
     const code = newCode(ranked);
     try {
-      await callService(instance.base, '/internal/rooms', META.secret, { code, opts, ranked });
+      await callService(instance.base, '/internal/rooms', META.secret, { code, opts, ranked, subs });
       const info: RoomInfo = {
         code,
         players: 0,

@@ -6,7 +6,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '@echo/shared/game/config';
-import type { CraterDef, FireZone, FlagState, Flare, FloorRect, GrenadeKind, Interactable, InteractDef, MapData, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, StrikeShell, SupplyDrop, TrenchDef } from '@echo/shared/game/types';
+import type { CraterDef, FireZone, FlagState, Flare, FloorRect, GrenadeKind, Interactable, InteractDef, MapData, ModeState, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, StrikeShell, SupplyDrop, TrenchDef } from '@echo/shared/game/types';
 import { smokeRadius } from '@echo/shared/game/sim';
 import type { WeaponId } from '@echo/shared/game/weapons';
 import { ActorVisual } from './actors';
@@ -1223,6 +1223,70 @@ export class Renderer {
     slot.light.position.set(x, 1.6, z);
     slot.light.intensity = slot.peak;
     this.shockwaves.spawn(x, z, 5, 0xffffff, 0.25);
+  }
+
+  /** New modes' marks: extraction point, cargo, VIP goal; and the zone. */
+  private modeMarks: THREE.Object3D[] = [];
+  private zoneRing: THREE.Mesh | null = null;
+  private zoneDark: THREE.Mesh | null = null;
+  private zoneNext: THREE.Mesh | null = null;
+  private zoneKey = '';
+
+  syncModeMarks(state: ModeState | null): void {
+    const points = state?.points ?? [];
+    while (this.modeMarks.length < points.length) {
+      const group = new THREE.Group();
+      const ringGeo = new THREE.RingGeometry(1, 1.25, 48);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, depthTest: false, toneMapped: false }));
+      ring.position.y = 0.06;
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.5), new THREE.MeshBasicMaterial({ color: 0xffa040, depthTest: false, toneMapped: false }));
+      box.position.y = 0.4;
+      group.add(ring, box);
+      this.overlay.add(group);
+      this.modeMarks.push(group);
+    }
+    this.modeMarks.forEach((g, i) => {
+      const p = points[i];
+      g.visible = !!p;
+      if (!p) return;
+      const [ring, box] = g.children as THREE.Mesh[];
+      const color = p.kind === 'extract' ? 0x3fd6c8 : p.kind === 'goal' ? 0xffd23a : 0xffa040;
+      (ring.material as THREE.MeshBasicMaterial).color.setHex(color);
+      const size = p.kind === 'cargo' ? 0.7 : 3;
+      ring.scale.set(size, 1, size);
+      box.visible = p.kind === 'cargo';
+      box.rotation.y = this.time * 1.5;
+      g.position.set(p.x, 0, p.z);
+    });
+    // The zone: its edge, where it is going, and darkness outside.
+    const z = state?.zone;
+    if (!z) {
+      if (this.zoneRing) this.zoneRing.visible = this.zoneDark!.visible = this.zoneNext!.visible = false;
+      return;
+    }
+    if (!this.zoneRing) {
+      const mat = (color: number, opacity: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+      this.zoneRing = new THREE.Mesh(new THREE.BufferGeometry(), mat(0xff3a4a, 0.85));
+      this.zoneNext = new THREE.Mesh(new THREE.BufferGeometry(), mat(0xffffff, 0.35));
+      this.zoneDark = new THREE.Mesh(new THREE.BufferGeometry(), mat(0x05000a, 0.55));
+      this.zoneDark.renderOrder = -1;
+      this.overlay.add(this.zoneDark, this.zoneRing, this.zoneNext);
+    }
+    const key = `${z.x.toFixed(1)},${z.z.toFixed(1)},${z.r.toFixed(2)},${z.nextR.toFixed(1)}`;
+    if (key !== this.zoneKey) {
+      this.zoneKey = key;
+      const ring = (inner: number, outer: number) => new THREE.RingGeometry(Math.max(0.01, inner), outer, 96).rotateX(-Math.PI / 2);
+      this.zoneRing.geometry.dispose();
+      this.zoneRing.geometry = ring(z.r - 0.18, z.r + 0.18);
+      this.zoneNext!.geometry.dispose();
+      this.zoneNext!.geometry = ring(z.nextR - 0.08, z.nextR + 0.08);
+      this.zoneDark!.geometry.dispose();
+      this.zoneDark!.geometry = ring(z.r, z.r + 400);
+      for (const m of [this.zoneRing, this.zoneNext!, this.zoneDark!]) m.position.set(z.x, 0.08, z.z);
+    }
+    this.zoneRing.visible = this.zoneDark!.visible = true;
+    this.zoneNext!.visible = z.nextR < z.r - 0.5;
   }
 
   /**

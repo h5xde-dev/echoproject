@@ -4,7 +4,22 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb';
+export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb' | 'infect' | 'extract' | 'vip' | 'zone';
+
+/**
+ * What the new modes (infect, extract, vip, zone) show and draw, built by the
+ * authority each tick and carried in snapshots: a status line with a clock,
+ * marks on the ground, the shrinking zone, who the VIP is, the score.
+ */
+export interface ModeState {
+  /** Seconds left on the current clock (0: none). */
+  t: number;
+  text: string;
+  zone?: { x: number; z: number; r: number; nextR: number };
+  points?: { x: number; z: number; kind: 'extract' | 'cargo' | 'goal' }[];
+  vip?: number;
+  score?: [number, number];
+}
 
 export interface StaticBody {
   cx: number;
@@ -253,7 +268,8 @@ export interface MapData {
 export type ActorKind = 'player' | 'enemy';
 
 /** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
-export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss';
+/** zombie: the infected in «Заражение» — knife only, fast, tough, no light. */
+export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie';
 
 /** A player's speciality (bots have none). */
 export type PlayerClass = 'assault' | 'scout' | 'medic' | 'engineer';

@@ -70,6 +70,10 @@ const SOLO_DESC: Record<GameMode, string> = {
   waves: 'Продержаться как можно дольше',
   ctf: 'Ваша команда с ботами против ботов',
   bomb: 'Ваша команда с ботами против ботов',
+  infect: 'Люди против заражённых, с ботами',
+  extract: 'Вынести груз из-под охраны',
+  vip: 'Довести VIP или устроить засаду, с ботами',
+  zone: 'Одна жизнь против ботов, зона сжимается',
 };
 
 function selectMode(mode: GameMode): void {
@@ -84,8 +88,10 @@ function selectMode(mode: GameMode): void {
   detailDesc.textContent = info.desc;
   arenaBox.classList.toggle('hidden', !info.arena);
   // Waves bring their own guards: the head count does not apply.
-  fightersRange.closest('.fighters')?.classList.toggle('hidden', mode === 'waves');
-  document.querySelector('.room-bots')?.classList.toggle('hidden', mode === 'waves');
+  // Waves and extraction bring their own guards: the head count does not apply.
+  const ownGuards = mode === 'waves' || mode === 'extract';
+  fightersRange.closest('.fighters')?.classList.toggle('hidden', ownGuards);
+  document.querySelector('.room-bots')?.classList.toggle('hidden', ownGuards);
   btnSolo.querySelector('.btn-desc')!.textContent = SOLO_DESC[mode];
   if (info.arena) drawPreview();
 }
