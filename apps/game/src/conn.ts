@@ -1,14 +1,14 @@
 import nodeDataChannel from 'node-datachannel';
 import type { WebSocket } from 'ws';
+import type { Ticket } from '@echo/node-kit/ticket';
 import type { ClientMessage, HostMessage, RtcMsg } from '@echo/shared/net/protocol';
-import { SERVER } from './config';
-import type { UserRow } from './db';
+import { GAME } from './config';
 
 // One player's link: the WebSocket it came in on, plus a WebRTC data channel
 // the server opens to it, unordered with no retransmits (UDP semantics). The
 // fast path carries snapshots out and steady input / pings in; everything that
-// must arrive goes over the WebSocket. See src/net/serverLink.ts for the
-// browser side.
+// must arrive goes over the WebSocket. See apps/web/src/net/serverLink.ts for
+// the browser side.
 
 const { PeerConnection } = nodeDataChannel;
 type Pc = InstanceType<typeof nodeDataChannel.PeerConnection>;
@@ -25,6 +25,9 @@ function compact(_key: string, v: unknown): unknown {
   return typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v;
 }
 
+/** A link that has not answered a WebSocket ping for this long is dead (half-open TCP). */
+const KEEPALIVE_MS = 10_000;
+
 export class PlayerConn {
   readonly id = nextConnId++;
   onMessage: ((msg: ClientMessage) => void) | null = null;
@@ -32,10 +35,12 @@ export class PlayerConn {
   closed = false;
   private pc: Pc | null = null;
   private dc: Dc | null = null;
+  private alive = true;
+  private keepalive: NodeJS.Timeout;
 
   constructor(
     private ws: WebSocket,
-    readonly user: UserRow,
+    readonly ticket: Ticket,
   ) {
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
@@ -44,8 +49,23 @@ export class PlayerConn {
       if (msg.t === 'rtc') this.onRtc(msg as RtcMsg);
       else this.onMessage?.(msg as ClientMessage);
     });
+    ws.on('pong', () => {
+      this.alive = true;
+    });
     ws.on('close', () => this.shutdown());
     ws.on('error', () => this.shutdown());
+    this.keepalive = setInterval(() => {
+      if (!this.alive) {
+        ws.terminate();
+        return;
+      }
+      this.alive = false;
+      try {
+        ws.ping();
+      } catch {
+        /* closing */
+      }
+    }, KEEPALIVE_MS);
     this.openFastPath();
   }
 
@@ -75,14 +95,21 @@ export class PlayerConn {
     if (this.ws.readyState === this.ws.OPEN && this.ws.bufferedAmount < 128 * 1024) this.ws.send(text);
   }
 
-  close(): void {
-    this.ws.close();
+  /** Close with a reason the browser can show (code 4000: closed on purpose, do not reconnect). */
+  close(reason = ''): void {
+    if (reason) this.send({ t: 'bye', text: reason });
+    try {
+      this.ws.close(reason ? 4000 : 1000);
+    } catch {
+      /* already closed */
+    }
     this.shutdown();
   }
 
   private shutdown(): void {
     if (this.closed) return;
     this.closed = true;
+    clearInterval(this.keepalive);
     try {
       this.dc?.close();
       this.pc?.close();
@@ -97,9 +124,9 @@ export class PlayerConn {
   private openFastPath(): void {
     try {
       const pc = new PeerConnection(`p${this.id}`, {
-        iceServers: ['stun:stun.l.google.com:19302'],
-        portRangeBegin: SERVER.rtc.portBegin,
-        portRangeEnd: SERVER.rtc.portEnd,
+        iceServers: [GAME.rtc.stun],
+        portRangeBegin: GAME.rtc.portBegin,
+        portRangeEnd: GAME.rtc.portEnd,
       });
       this.pc = pc;
       pc.onLocalDescription((sdp, type) => this.send({ t: 'rtc', sdp, type }));

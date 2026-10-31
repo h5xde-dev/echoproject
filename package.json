@@ -12,26 +12,20 @@
   },
   "scripts": {
     "dev": "npm run dev -w @echo/web",
-    "build": "npm run check:text && npm run typecheck && npm run build -w @echo/web && npm run build:server",
-    "typecheck": "tsc -p packages/shared --noEmit && tsc -p apps/web --noEmit && tsc -p server --noEmit",
+    "dev:services": "node tools/dev-services.mjs",
+    "build": "npm run check:text && npm run typecheck && npm run build --workspaces --if-present",
+    "typecheck": "tsc -p packages/shared --noEmit && tsc -p packages/node-kit --noEmit && tsc -p apps/web --noEmit && tsc -p apps/api --noEmit && tsc -p apps/meta --noEmit && tsc -p apps/game --noEmit",
     "check:text": "node tools/check-text.mjs",
-    "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=server-dist/main.mjs --external:better-sqlite3 --external:node-datachannel --external:ws",
-    "server": "node server-dist/main.mjs",
-    "dev:server": "npm run build:server && DEV_LOGIN=1 SECURE_COOKIES=0 node server-dist/main.mjs",
+    "test": "node --test tests/",
+    "test:services": "node tests/run-services.mjs",
     "test:netcode": "npm run test:netcode -w @echo/web",
     "test:arenas": "npm run test:arenas -w @echo/web",
     "test:server": "npm run test:server -w @echo/web"
   },
-  "dependencies": {
-    "better-sqlite3": "^12.11.1",
-    "node-datachannel": "^0.33.5",
-    "ws": "^8.22.0"
-  },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.5",
-    "@types/ws": "^8.18.2",
     "esbuild": "^0.28.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "ws": "^8.22.0"
   }
 }

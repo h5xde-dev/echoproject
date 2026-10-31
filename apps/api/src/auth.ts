@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseCookies } from '@echo/node-kit/lifecycle';
+import { cleanName } from '@echo/shared/names';
 import { API } from './config';
 import { createSession, dropSession, upsertYandexUser, userBySession, type UserRow } from './db';
 
@@ -119,7 +120,4 @@ export function logout(req: IncomingMessage, res: ServerResponse): void {
   res.writeHead(204, { 'Set-Cookie': cookie(SESSION_COOKIE, '', 0) }).end();
 }
 
-/** In-game call signs: 14 characters, no markup. */
-export function cleanName(raw: string): string {
-  return raw.replace(/[<>"'`\\\u0000-\u001f]/g, '').trim().slice(0, 14) || 'оператор';
-}
+export { cleanName };
