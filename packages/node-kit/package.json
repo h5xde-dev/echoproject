@@ -1,0 +1,13 @@
+{
+  "name": "@echo/node-kit",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Small helpers the Node services share: settings, HTTP, signed tickets, shutdown.",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@echo/shared": "*"
+  }
+}

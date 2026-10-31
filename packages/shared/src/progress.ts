@@ -2,6 +2,9 @@
  * Progress rules shared by the browser (guests, solo) and the servers (signed-in
  * players): experience per match, levels, and what levels unlock.
  */
+import { isArena, isTeamMode } from './game/modes';
+import type { GameEvent, GameMode } from './game/types';
+
 export interface Progress {
   xp: number;
   matches: number;
@@ -50,4 +53,55 @@ export function levelOf(xp: number): { level: number; into: number; need: number
 /** Experience earned in a match. */
 export function matchXp(t: MatchTally, win: boolean): number {
   return 50 + t.kills * 20 + t.objectives * 100 + t.revives * 40 + t.rooms * 40 + t.waves * 50 + (win ? 200 : 0);
+}
+
+/** Empty tally for a new match. */
+export function newTally(): MatchTally {
+  return { kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 };
+}
+
+/**
+ * Counts one game event into a player's tally. The same rules run in the
+ * browser (solo, guests) and on the game server (signed-in players), so the
+ * experience a match gives does not depend on who counts it.
+ * `hostile(id)` says whether soldier `id` is an enemy of `playerId`.
+ */
+export function tallyEvent(t: MatchTally, e: GameEvent, playerId: number, hostile: (id: number) => boolean): void {
+  switch (e.type) {
+    case 'death':
+      if (e.by === playerId && e.ownerId !== playerId && hostile(e.ownerId ?? -1)) t.kills++;
+      break;
+    case 'roomClear':
+      t.rooms++;
+      break;
+    case 'objective':
+      if ((e.text === 'hacked' || e.text === 'defused') && e.ownerId === playerId) t.objectives++;
+      break;
+    case 'revive':
+      if (e.by === playerId) t.revives++;
+      break;
+    case 'bomb':
+      if ((e.text === 'planted' || e.text === 'defused') && e.ownerId === playerId) t.objectives++;
+      break;
+    case 'flag':
+      if (e.text === 'captured' && e.ownerId === playerId) t.objectives++;
+      break;
+    case 'wave':
+      if (e.text === 'clear') t.waves++;
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Did this player win, by the event that ended the match? `team` is the
+ * player's team (-1 outside team modes). Null: the event does not end a match.
+ */
+export function outcomeFor(e: GameEvent, mode: GameMode, playerId: number, team: number): boolean | null {
+  if (e.type === 'gameOver') return false;
+  if (e.type !== 'victory') return null;
+  if (isTeamMode(mode)) return e.team === team;
+  if (isArena(mode)) return e.ownerId === playerId;
+  return true;
 }

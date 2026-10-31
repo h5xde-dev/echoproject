@@ -1,0 +1,19 @@
+{
+  "name": "@echo/api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/main.mjs --external:better-sqlite3",
+    "start": "node dist/main.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@echo/node-kit": "*",
+    "@echo/shared": "*",
+    "better-sqlite3": "^12.11.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
+  }
+}

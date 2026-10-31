@@ -207,11 +207,35 @@ export interface EventMsg {
   event: GameEvent;
 }
 
+/** Room host: end the warm-up and start the match (or start another after one ends). */
 export interface StartMsg {
   t: 'start';
-  seed: number;
-  map: MapData;
-  snapshot: SnapshotMsg;
+}
+
+/** The room this connection is in, sent before the welcome. */
+export interface RoomMsg {
+  t: 'room';
+  code: string;
+  mode: GameMode;
+  ranked: boolean;
+  /** This player starts the match. */
+  host: boolean;
+}
+
+/** A signed-in player's experience after a match (the server counted it). */
+export interface ProgressMsg {
+  t: 'progress';
+  gained: number;
+  xp: number;
+  before: number;
+  after: number;
+  unlocked: string[];
+}
+
+/** The server closes the room (empty, shut down for an update...): why. */
+export interface ByeMsg {
+  t: 'bye';
+  text: string;
 }
 
 export interface OverMsg {
@@ -288,10 +312,12 @@ export interface RtcMsg {
 export type HostMessage =
   | MatchmakingMsg
   | RankedMsg
+  | RoomMsg
+  | ProgressMsg
+  | ByeMsg
   | RtcMsg
   | SnapshotMsg
   | WelcomeMsg
-  | StartMsg
   | OverMsg
   | EventMsg
   | PlayerJoinedMsg
@@ -299,7 +325,7 @@ export type HostMessage =
   | LobbyMsg
   | PingMsg;
 
-export type ClientMessage = InputMsg | HelloMsg | ReadyMsg | PingMsg | RtcMsg;
+export type ClientMessage = InputMsg | HelloMsg | ReadyMsg | PingMsg | RtcMsg | StartMsg;
 
 /** Deterministic seed so both peers can reproduce the exact same bullet spread. */
 export function shotSeed(actorId: number, shotSeq: number, mapSeed: number): number {

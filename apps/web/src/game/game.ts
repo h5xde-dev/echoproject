@@ -17,6 +17,7 @@ import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, Ga
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
+import { newTally, tallyEvent } from '@echo/shared/progress';
 
 export type GameMode = 'solo' | 'host' | 'client';
 
@@ -381,7 +382,7 @@ export class Game {
     if (opts.fighters) this.sim.fighters = opts.fighters;
     if (opts.difficulty) this.sim.difficulty = opts.difficulty;
     this.sim.addPlayer('local', this.localName, this.localId, this.playerClass, this.playerColor);
-    this.tally = { kills: 0, objectives: 0, revives: 0, rooms: 0, waves: 0 };
+    this.tally = newTally();
     this.topUpBots();
     this.setupWorld();
     this.startLoop();
@@ -714,6 +715,8 @@ export class Game {
   }
 
   private applyEvent(event: GameEvent): void {
+    // Experience for this match: the same rules the game server uses.
+    tallyEvent(this.tally, event, this.localId, (id) => this.isHostile(id));
     switch (event.type) {
       case 'shot': {
         const weapon = event.weapon ?? 'pistol';
@@ -806,7 +809,6 @@ export class Game {
         if (event.ownerId === this.localId) this.spectate = { killer: event.by ?? -1, at: performance.now() };
         if (event.by === this.localId && event.ownerId !== this.localId) {
           this.hud.hitMarker(true);
-          if (this.isHostile(event.ownerId ?? -1)) this.tally.kills++;
         }
         if (isArena(this.matchMode)) {
           const by = event.by === event.ownerId ? '' : this.nameOf(event.by);
@@ -886,7 +888,6 @@ export class Game {
         }
         break;
       case 'roomClear':
-        this.tally.rooms++;
         this.audio.door();
         this.hud.message(event.text === '1' ? 'Выдвигайтесь — дверь открыта' : 'Комната зачищена — дверь открыта', 'good');
         break;
@@ -968,7 +969,6 @@ export class Game {
         if (text) this.hud.message(text, kind as 'good' | 'warn');
         if (event.text === 'hacked' || event.text === 'defused') {
           this.audio.powerup();
-          if (event.ownerId === this.localId) this.tally.objectives++;
         }
         break;
       }
@@ -978,14 +978,12 @@ export class Game {
         break;
       }
       case 'revive':
-        if (event.by === this.localId) this.tally.revives++;
         this.hud.message(event.ownerId === this.localId ? 'Вас подняли' : `${this.nameOf(event.ownerId)} снова в строю`, 'good');
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.powerup());
         break;
       case 'bomb': {
         const who = event.ownerId === this.localId ? 'Вы' : this.nameOf(event.ownerId ?? 0);
         const site = event.id === '1' ? 'B' : 'A';
-        if ((event.text === 'planted' || event.text === 'defused') && event.ownerId === this.localId) this.tally.objectives++;
         if (event.text === 'planted') {
           this.hud.banner(`БОМБА НА ${site}`, `${CONFIG.bomb.timer} секунд`);
           this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.flashBang(d + 20));
@@ -1009,7 +1007,6 @@ export class Game {
           captured: `${who} — захват!`,
         };
         const text = lines[event.text ?? ''] ?? '';
-        if (event.text === 'captured' && event.ownerId === this.localId) this.tally.objectives++;
         if (event.text === 'captured') {
           // The flag that was captured belongs to the losing side.
           this.hud.banner(ours ? 'ФЛАГ ПОТЕРЯН' : 'ЗАХВАТ', text);
@@ -1026,7 +1023,6 @@ export class Game {
         if (event.text === 'start') {
           this.hud.banner(`ВОЛНА ${event.id ?? ''}`, 'Они идут на шум и свет');
         } else if (event.text === 'clear') {
-          this.tally.waves++;
           this.hud.banner('ВОЛНА ОТБИТА', `Передышка ${CONFIG.waves.breakTime} с · магазин — B · павшие возвращаются`);
           this.audio.powerup();
         } else if (event.text === 'boss') {

@@ -1,11 +1,14 @@
 import Database from 'better-sqlite3';
-import { SERVER } from './config';
+import { API } from './config';
 
-// SQLite: players (from Yandex ID), login sessions, and ranked match history.
+// SQLite, owned by the API alone: players (from Yandex ID), login sessions,
+// match history, ratings, experience and profile settings. The meta and game
+// servers reach it only through the API's /internal endpoints.
 
-export const db = new Database(SERVER.dbPath);
+export const db = new Database(API.dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+db.pragma('busy_timeout = 3000');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -48,6 +51,28 @@ db.exec(`
   );
 `);
 
+// Schema changes after the first release, applied once each (PRAGMA user_version).
+const MIGRATIONS: string[] = [
+  // 1: experience and profile on the account; unrated matches in the history.
+  `ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE users ADD COLUMN matches INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE users ADD COLUMN settings TEXT NOT NULL DEFAULT '{}';
+   ALTER TABLE users ADD COLUMN progress_imported INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE matches ADD COLUMN rated INTEGER NOT NULL DEFAULT 1;
+   ALTER TABLE match_players ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE match_players ADD COLUMN win INTEGER NOT NULL DEFAULT 0;
+   CREATE INDEX IF NOT EXISTS match_players_user ON match_players (user_id, match_id DESC);
+   CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions (expires_at);`,
+];
+const version = db.pragma('user_version', { simple: true }) as number;
+for (let v = version; v < MIGRATIONS.length; v++) {
+  db.transaction(() => {
+    db.exec(MIGRATIONS[v]);
+    db.pragma(`user_version = ${v + 1}`);
+  })();
+  console.log(`db: migrated to version ${v + 1}`);
+}
+
 export interface UserRow {
   id: number;
   yandex_id: string;
@@ -59,6 +84,10 @@ export interface UserRow {
   wins: number;
   kills: number;
   deaths: number;
+  xp: number;
+  matches: number;
+  settings: string;
+  progress_imported: number;
 }
 
 const q = {
@@ -75,11 +104,14 @@ const q = {
   top: db.prepare('SELECT * FROM users WHERE games > 0 ORDER BY rating DESC, wins DESC LIMIT ?'),
   rankOf: db.prepare('SELECT COUNT(*) + 1 AS rank FROM users WHERE games > 0 AND rating > ?'),
   rename: db.prepare('UPDATE users SET name = ? WHERE id = ?'),
-  newMatch: db.prepare('INSERT INTO matches (mode, arena, started_at, ended_at) VALUES (?, ?, ?, ?)'),
-  matchPlayer: db.prepare(`INSERT INTO match_players (match_id, user_id, place, kills, deaths, left_early, rating_before, rating_after)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+  setSettings: db.prepare('UPDATE users SET settings = ? WHERE id = ?'),
+  importProgress: db.prepare('UPDATE users SET xp = xp + ?, matches = matches + ?, progress_imported = 1 WHERE id = ? AND progress_imported = 0'),
+  newMatch: db.prepare('INSERT INTO matches (mode, arena, rated, started_at, ended_at) VALUES (?, ?, ?, ?, ?)'),
+  matchPlayer: db.prepare(`INSERT INTO match_players (match_id, user_id, place, kills, deaths, left_early, rating_before, rating_after, xp, win)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   rate: db.prepare('UPDATE users SET rating = ?, games = games + 1, wins = wins + ?, kills = kills + ?, deaths = deaths + ? WHERE id = ?'),
-  recent: db.prepare(`SELECT m.id, m.arena, m.ended_at, p.place, p.kills, p.deaths, p.rating_before, p.rating_after,
+  addXp: db.prepare('UPDATE users SET xp = xp + ?, matches = matches + 1 WHERE id = ?'),
+  recent: db.prepare(`SELECT m.id, m.mode, m.arena, m.rated, m.ended_at, p.place, p.kills, p.deaths, p.rating_before, p.rating_after, p.xp, p.win,
       (SELECT COUNT(*) FROM match_players x WHERE x.match_id = m.id) AS players
     FROM match_players p JOIN matches m ON m.id = p.match_id WHERE p.user_id = ? ORDER BY m.id DESC LIMIT ?`),
 };
@@ -97,7 +129,6 @@ export function userBySession(token: string): UserRow | null {
 }
 
 export function createSession(token: string, userId: number, ttlMs: number): void {
-  q.expire.run(Date.now());
   q.newSession.run(token, userId, Date.now() + ttlMs);
 }
 
@@ -105,8 +136,22 @@ export function dropSession(token: string): void {
   q.dropSession.run(token);
 }
 
+/** Expired logins, cleared hourly (main.ts) rather than only when someone logs in. */
+export function expireSessions(): number {
+  return q.expire.run(Date.now()).changes;
+}
+
 export function renameUser(id: number, name: string): void {
   q.rename.run(name, id);
+}
+
+export function saveSettings(id: number, settings: object): void {
+  q.setSettings.run(JSON.stringify(settings), id);
+}
+
+/** A guest's progress from this browser, added to the account once. False if it already was. */
+export function importProgress(id: number, xp: number, matches: number): boolean {
+  return q.importProgress.run(xp, matches, id).changes > 0;
 }
 
 export function leaderboard(limit: number): UserRow[] {
@@ -127,16 +172,19 @@ export interface MatchResultRow {
   kills: number;
   deaths: number;
   left: boolean;
+  win: boolean;
   before: number;
   after: number;
+  xp: number;
 }
 
-/** One transaction: the match, every player's line, and their new ratings. */
-export const saveMatch = db.transaction((arena: string, startedAt: number, rows: MatchResultRow[]) => {
-  const { lastInsertRowid } = q.newMatch.run('dm', arena, startedAt, Date.now());
+/** One transaction: the match, every player's line, ratings (if rated) and experience. */
+export const saveMatch = db.transaction((mode: string, arena: string, rated: boolean, startedAt: number, rows: MatchResultRow[]) => {
+  const { lastInsertRowid } = q.newMatch.run(mode, arena, rated ? 1 : 0, startedAt, Date.now());
   for (const r of rows) {
-    q.matchPlayer.run(lastInsertRowid, r.userId, r.place, r.kills, r.deaths, r.left ? 1 : 0, r.before, r.after);
-    q.rate.run(r.after, r.place === 1 && !r.left ? 1 : 0, r.kills, r.deaths, r.userId);
+    q.matchPlayer.run(lastInsertRowid, r.userId, r.place, r.kills, r.deaths, r.left ? 1 : 0, r.before, r.after, r.xp, r.win ? 1 : 0);
+    if (rated) q.rate.run(r.after, r.win && !r.left ? 1 : 0, r.kills, r.deaths, r.userId);
+    q.addXp.run(r.xp, r.userId);
   }
   return Number(lastInsertRowid);
 });
