@@ -1,0 +1,6 @@
+[Unit]
+Description=North Echo: API, meta and game servers
+Wants=northecho-api.service northecho-meta.service northecho-game.service
+
+[Install]
+WantedBy=multi-user.target

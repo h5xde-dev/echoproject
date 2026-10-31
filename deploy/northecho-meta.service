@@ -1,0 +1,27 @@
+[Unit]
+Description=North Echo meta server (rooms, ranked queue, tickets)
+After=network-online.target
+Wants=network-online.target
+PartOf=northecho.target
+
+[Service]
+Type=simple
+User=northecho
+Group=northecho
+# current/ points at the live release (deploy.sh switches it atomically).
+WorkingDirectory=/var/www/northecho/current
+EnvironmentFile=/etc/northecho/env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /var/www/northecho/current/apps/meta/dist/main.mjs
+Restart=always
+RestartSec=2
+
+SyslogIdentifier=northecho-meta
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/www/northecho
+
+[Install]
+WantedBy=northecho.target

@@ -1,20 +1,22 @@
 [Unit]
-Description=North Echo game server (auth, rating, ranked matches)
+Description=North Echo API (login, account, rating)
 After=network-online.target
 Wants=network-online.target
+PartOf=northecho.target
 
 [Service]
 Type=simple
 User=northecho
 Group=northecho
-WorkingDirectory=/var/www/northecho
+# current/ points at the live release (deploy.sh switches it atomically).
+WorkingDirectory=/var/www/northecho/current
 EnvironmentFile=/etc/northecho/env
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node server-dist/main.mjs
+ExecStart=/usr/bin/node /var/www/northecho/current/apps/api/dist/main.mjs
 Restart=always
-RestartSec=3
+RestartSec=2
 StateDirectory=northecho
-SyslogIdentifier=northecho
+SyslogIdentifier=northecho-api
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -22,4 +24,4 @@ ProtectHome=true
 ReadOnlyPaths=/var/www/northecho
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=northecho.target

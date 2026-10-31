@@ -1,10 +1,13 @@
 [Unit]
-Description=North Echo autodeploy from GitHub main
+Description=North Echo autodeploy from GitHub
 After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/var/www/northecho/deploy/deploy.sh
+# Installed by setup.sh and refreshed by every successful deploy.
+ExecStart=/usr/local/sbin/northecho-deploy
+EnvironmentFile=-/etc/northecho/deploy.env
 SyslogIdentifier=northecho-deploy
-TimeoutStartSec=900
+# npm ci + build, plus a game server that may drain running matches for 150 s.
+TimeoutStartSec=1200
 Nice=10
