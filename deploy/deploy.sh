@@ -115,6 +115,14 @@ healthy() {
 }
 
 # 3. Switch: the site at once (one rename), then the services that changed.
+# Moving off the old single server (northecho.service, same port as the API):
+# it stops only now, seconds before the new services start, and comes back if
+# they fail.
+legacy=0
+if systemctl is-active -q northecho.service 2>/dev/null; then
+  legacy=1
+  systemctl stop northecho.service
+fi
 switch_to "$REL"
 for s in "${changed[@]}"; do systemctl restart "northecho-$s" || true; done
 
@@ -128,6 +136,11 @@ if [[ $ok != 1 ]]; then
     switch_to "$PREV"
     for s in "${changed[@]}"; do systemctl restart "northecho-$s" || true; done
     log "rolled back to $(basename "$PREV" | cut -c1-7)"
+  fi
+  if [[ $legacy == 1 ]]; then
+    for s in "${SERVICES[@]}"; do systemctl stop "northecho-$s" || true; done
+    systemctl start northecho.service || true
+    log "the old server is back"
   fi
   echo "$NEW" >> "$RELEASES/.failed"
   journalctl -u 'northecho-*' --since '-3min' --no-pager -n 40 | grep -v northecho-deploy || true

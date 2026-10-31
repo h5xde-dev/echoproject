@@ -80,17 +80,18 @@ install -m 644 "$SRC"/northecho-api.service "$SRC"/northecho-meta.service "$SRC"
 install -m 755 "$SRC/deploy.sh" /usr/local/sbin/northecho-deploy
 systemctl daemon-reload
 
-# The old single server holds port 8090 (the API's now): stop it for good.
-if systemctl list-unit-files northecho.service >/dev/null 2>&1 && [[ -f /etc/systemd/system/northecho.service ]]; then
-  systemctl disable --now northecho.service || true
-  rm -f /etc/systemd/system/northecho.service
-  systemctl daemon-reload
-fi
-
 systemctl stop northecho-deploy.timer 2>/dev/null || true
+# The first release: deploy.sh stops the old single server (it holds port 8090,
+# the API's now) only right before the new services start, and brings it back
+# if they fail. Only once they run is it removed for good.
 BRANCH=$BRANCH FORCE=1 /usr/local/sbin/northecho-deploy
 systemctl enable -q northecho.target northecho-api northecho-meta northecho-game
 systemctl enable -q --now northecho-deploy.timer
+if [[ -f /etc/systemd/system/northecho.service ]]; then
+  systemctl disable --now northecho.service 2>/dev/null || true
+  rm -f /etc/systemd/system/northecho.service
+  systemctl daemon-reload
+fi
 
 # The site config (deploy.sh installs it too, from then on with every release).
 cp "$APP/current/deploy/nginx.conf" /etc/nginx/sites-available/$DOMAIN
