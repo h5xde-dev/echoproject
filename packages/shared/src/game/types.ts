@@ -210,8 +210,16 @@ export interface LampDef {
   color: number;
 }
 
+/**
+ * Match-wide rule changes. They travel inside the map (the welcome carries
+ * it), so the server, a solo game and a client's mirror all apply the same.
+ */
+export type Mutator = 'night' | 'knives' | 'double' | 'noflash' | 'fast';
+export const MUTATORS: Mutator[] = ['night', 'knives', 'double', 'noflash', 'fast'];
+
 export interface MapData {
   mode: GameMode;
+  mutators?: Mutator[];
   /** Display name (arenas) or empty for generated levels. */
   name: string;
   seed: number;
@@ -594,6 +602,8 @@ export interface GameEvent {
   ownerId?: number;
   /** hurt/death: id of the actor who dealt the damage. */
   by?: number;
+  /** death: what did it — a weapon id, or knife, backstab, frag, mine, drone, mortar, barrel, blast, fire, wire, bleed, bomb, zone. */
+  cause?: string;
   /** victory in team modes: the winning team. */
   team?: number;
   shotSeq?: number;

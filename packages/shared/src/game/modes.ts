@@ -78,6 +78,9 @@ export const MODES: ModeInfo[] = [
   },
 ];
 
+/** Every mode, for validating what a browser asks for (meta and game servers). */
+export const MODE_IDS: GameMode[] = MODES.map((m) => m.id);
+
 export function modeInfo(mode: GameMode): ModeInfo {
   return MODES.find((m) => m.id === mode) ?? MODES[0];
 }

@@ -5,6 +5,7 @@
  * climbs the ladder, competitive plays rounds and bots buy gear.
  */
 import { aimRelativeMove } from '@echo/shared/core/math';
+import { statEvent, type MatchStats } from '@echo/shared/progress';
 import { ARENAS, buildArena } from '@echo/shared/game/arenas';
 import { CONFIG } from '@echo/shared/game/config';
 import { generateMap, pickPowerup } from '@echo/shared/game/levelgen';
@@ -1764,6 +1765,30 @@ for (const info of ARENAS) {
   } catch {
     /* no storage */
   }
+}
+
+// Death causes and match stats (quests and achievements count these).
+{
+  const base = buildArena('sklad', 6161, 'dm');
+  const s = new Sim({ ...base, walls: [], props: [], lamps: [], bushes: [], pickups: [], powerups: [] });
+  const p = s.addPlayer('local', 'тест', 1);
+  const foe = s.addPlayer('foe', 'враг', 2);
+  p.x = 10;
+  p.z = 10;
+  foe.x = 12;
+  foe.z = 10;
+  p.shield = foe.shield = 0;
+  foe.armor = 0;
+  s.events.length = 0;
+  s.explode(foe.x, foe.z, 3, 999, p.id, 'frag');
+  const death = s.events.find((e) => e.type === 'death' && e.ownerId === foe.id);
+  check(death?.cause === 'frag' && death.by === p.id, `a grenade kill says so (cause ${death?.cause})`);
+  const stats: MatchStats = {};
+  for (const e of s.events) statEvent(stats, e, p.id, (id) => id !== p.id);
+  check(stats.kills === 1 && stats.kills_frag === 1, `stats count the kill and its cause (${JSON.stringify(stats)})`);
+  const dead: MatchStats = {};
+  for (const e of s.events) statEvent(dead, e, foe.id, (id) => id !== foe.id);
+  check(dead.deaths === 1 && !dead.kills, 'and the death for the one who fell');
 }
 
 // Controls «по прицелу»: W toward the cursor, S away, A/D sideways.

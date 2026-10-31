@@ -5,7 +5,8 @@ import { onShutdown, parseCookies } from '@echo/node-kit/lifecycle';
 import { signTicket } from '@echo/node-kit/ticket';
 import { ARENAS } from '@echo/shared/game/arenas';
 import type { Difficulty, GameMode, PlayerClass } from '@echo/shared/game/types';
-import { ROOM_CODE_RE, type MetaClientMsg, type MetaServerMsg, type RoomOptions } from '@echo/shared/net/meta';
+import { cleanMutators, ROOM_CODE_RE, type MetaClientMsg, type MetaServerMsg, type RoomOptions } from '@echo/shared/net/meta';
+import { MODE_IDS } from '@echo/shared/game/modes';
 import { cleanName } from '@echo/shared/names';
 import { RING_COLORS } from '@echo/shared/progress';
 import { META } from './config';
@@ -17,7 +18,6 @@ import { createRoom, findRoom, heartbeat, NoCapacity, rankedSeatOf, stats } from
 // joins one by its code, or queues for ranked; it gets back a ticket for a
 // seat on a game server. Game servers report their rooms here by heartbeat.
 
-const MODES: GameMode[] = ['coop', 'dm', 'duel', 'gun', 'comp', 'tdm', 'waves', 'ctf', 'bomb'];
 const CLASSES: PlayerClass[] = ['assault', 'scout', 'medic', 'engineer'];
 
 interface Who {
@@ -41,7 +41,7 @@ async function accountOf(req: IncomingMessage): Promise<{ id: number; name: stri
 }
 
 function roomOptions(raw: Partial<RoomOptions> | undefined): RoomOptions | null {
-  if (!raw || !MODES.includes(raw.mode as GameMode)) return null;
+  if (!raw || !MODE_IDS.includes(raw.mode as GameMode)) return null;
   const difficulty: Difficulty = raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal';
   return {
     mode: raw.mode!,
@@ -49,6 +49,7 @@ function roomOptions(raw: Partial<RoomOptions> | undefined): RoomOptions | null 
     fighters: typeof raw.fighters === 'number' ? Math.max(2, Math.min(8, Math.floor(raw.fighters))) : undefined,
     difficulty,
     bots: raw.bots !== false,
+    mutators: cleanMutators(raw.mutators),
   };
 }
 

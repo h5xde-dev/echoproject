@@ -8,6 +8,7 @@ import { NavGrid } from './nav';
 import { PhysicsWorld, resolveCircleBox, type DoorBody } from './physics';
 import type {
   Actor,
+  Mutator,
   AiState,
   BombState,
   Buffs,
@@ -260,8 +261,12 @@ export class Sim {
   private scratch: StaticBody[] = [];
   private scratchProps: StaticBody[] = [];
 
+  /** Match-wide rule changes in force (from the map, see Mutator). */
+  readonly mut: ReadonlySet<Mutator>;
+
   constructor(map: MapData) {
     this.map = map;
+    this.mut = new Set(map.mutators ?? []);
     this.lampAlive = map.lamps.map(() => true);
     this.lampBroken = map.lamps.map(() => false);
     this.interactables = (map.interactables ?? []).map((d) => ({ ...d, on: true, charge: CONFIG.interact.medCharge, cd: 0 }));
@@ -987,7 +992,7 @@ export class Sim {
       if (p.downT <= 0) {
         p.shield = 0;
         p.armor = 0;
-        this.damageActor(p, 9999, p.downBy);
+        this.damageActor(p, 9999, p.downBy, undefined, false, 'bleed');
       }
     }
     if (players.length >= 2 && players.some((p) => p.downed) && !players.some((p) => p.alive && !p.downed)) {
@@ -1076,7 +1081,7 @@ export class Sim {
     const D = CONFIG.drone;
     this.drones = this.drones.filter((d) => d !== drone);
     this.releasePilot(drone);
-    this.explode(drone.x, drone.z, D.blastRadius, D.blastDamage, drone.ownerId);
+    this.explode(drone.x, drone.z, D.blastRadius, D.blastDamage, drone.ownerId, 'drone');
   }
 
   /** Shot down, crashed or the link lost: it drops and goes off where it lands. */
@@ -1245,18 +1250,22 @@ export class Sim {
       best = d;
     }
     this.noises.push({ x: actor.x, z: actor.z, radius: WEAPONS.knife.noise, time: this.time, ownerId: actor.id });
-    this.events.push({ type: 'stab', ownerId: actor.id, x: actor.x, z: actor.z });
     // The blade cuts barbed wire in front of you.
     const fx = actor.x + Math.cos(actor.ang) * 0.9;
     const fz = actor.z + Math.sin(actor.ang) * 0.9;
     const wire = this.props.find((p) => p.alive && p.kind === 'wire' && Math.abs(fx - p.x) < p.hw + 0.4 && Math.abs(fz - p.z) < p.hh + 0.4);
     if (wire) this.cutWire(wire, actor);
-    if (!victim) return;
+    if (!victim) {
+      this.events.push({ type: 'stab', ownerId: actor.id, x: actor.x, z: actor.z });
+      return;
+    }
     // Facing away from the attacker: a backstab.
     const fromVictim = Math.atan2(actor.z - victim.z, actor.x - victim.x);
     const behind = Math.cos(victim.ang - fromVictim) < -0.2;
+    // id: who was hit; text: 'backstab' from behind (achievements count these).
+    this.events.push({ type: 'stab', ownerId: actor.id, x: actor.x, z: actor.z, id: String(victim.id), text: behind ? 'backstab' : undefined });
     victim.shield = 0;
-    this.damageActor(victim, behind ? K.backstab : WEAPONS.knife.damage, actor.id);
+    this.damageActor(victim, behind ? K.backstab : WEAPONS.knife.damage, actor.id, 'knife', false, behind ? 'backstab' : 'knife');
   }
 
   /** Hidden while in a bush and quiet (not running, not just fired). */
@@ -1550,7 +1559,12 @@ export class Sim {
     }
   }
 
-  damageActor(actor: Actor, amount: number, sourceId: number, weapon?: WeaponId, critical = false): void {
+  /**
+   * `cause` says what did it, for the death event (quests and achievements):
+   * a weapon id for bullets, or knife, backstab, frag, mine, drone, mortar,
+   * barrel, blast, fire, wire, bleed, bomb, zone.
+   */
+  damageActor(actor: Actor, amount: number, sourceId: number, weapon?: WeaponId, critical = false, cause: string = weapon ?? ''): void {
     if (!actor.alive || actor.shield > 0) return;
     this.lastHurt.set(actor.id, this.time);
     // A hit makes you let go of a crate or the wire cutters.
@@ -1605,7 +1619,7 @@ export class Sim {
     actor.vx = 0;
     actor.vz = 0;
     actor.reloading = false;
-    this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id), weapon, text: critical ? 'critical' : undefined });
+    this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id), weapon, cause: cause || undefined, text: critical ? 'critical' : undefined });
     actor.streak = 0;
     actor.holdT = 0;
     const scorer = this.actors.get(sourceId);
@@ -1700,7 +1714,7 @@ export class Sim {
     }
   }
 
-  explode(x: number, z: number, radius: number, damage: number, sourceId: number): void {
+  explode(x: number, z: number, radius: number, damage: number, sourceId: number, cause = 'blast'): void {
     this.events.push({ type: 'explosion', x, z, y: 1 });
     for (const d of this.drones) if (dist(d.x, d.z, x, z) < radius) this.damageDrone(d, damage, sourceId);
     for (const actor of this.actors.values()) {
@@ -1713,7 +1727,7 @@ export class Sim {
       // Teams: your grenade spares your side (but not you).
       const thrower = this.actors.get(sourceId);
       const ally = this.teams && !!thrower && thrower !== actor && thrower.team === actor.team;
-      if (!ally) this.damageActor(actor, damage * falloff, sourceId);
+      if (!ally) this.damageActor(actor, damage * falloff, sourceId, undefined, false, cause);
       const dir = normalize(actor.x - x, actor.z - z);
       actor.vx += dir.x * 16 * falloff;
       actor.vz += dir.z * 16 * falloff;
@@ -1727,7 +1741,7 @@ export class Sim {
         p.hp -= damage * falloff;
         if (p.hp <= 0) {
           p.alive = false;
-          this.explode(p.x, p.z, radius, damage, sourceId);
+          this.explode(p.x, p.z, radius, damage, sourceId, 'barrel');
         }
       } else if (!p.fixed) {
         p.hp -= damage * falloff;
@@ -2162,7 +2176,7 @@ export class Sim {
     };
     this.grenades.push(g);
     this.noises.push({ x: actor.x, z: actor.z, radius: 8, time: this.time, ownerId: actor.id });
-    this.events.push({ type: 'throw', ownerId: actor.id, x: g.x, z: g.z });
+    this.events.push({ type: 'throw', ownerId: actor.id, x: g.x, z: g.z, text: kind });
   }
 
   private updateGrenades(dt: number): void {
@@ -2176,7 +2190,7 @@ export class Sim {
         else if (g.kind === 'flash') this.flashBang(g);
         else if (g.kind === 'molotov') this.shatterMolotov(g);
         else if (g.kind === 'flare') this.lightFlare(g.x, g.z);
-        else this.explode(g.x, g.z, G.radius, G.damage, g.ownerId);
+        else this.explode(g.x, g.z, G.radius, G.damage, g.ownerId, 'frag');
         continue;
       }
       g.vy -= G.gravity * dt;
@@ -2273,7 +2287,7 @@ export class Sim {
       if (flames) this.ignite(a, flames.ownerId);
       if (a.burnT <= 0) continue;
       a.burnT = Math.max(0, a.burnT - dt);
-      if (pulse) this.damageActor(a, (flames ? F.dps : F.burnDps) * F.pulse, a.burnBy);
+      if (pulse) this.damageActor(a, (flames ? F.dps : F.burnDps) * F.pulse, a.burnBy, undefined, false, 'fire');
     }
     for (const p of this.props) {
       if (!p.alive || !p.explosive) continue;
@@ -3179,7 +3193,7 @@ export class Sim {
           if (!a.alive || dist(a.x, a.z, bomb.x, bomb.z) > B.blastRadius) continue;
           a.shield = 0;
           a.armor = 0;
-          this.damageActor(a, 9999, a.id);
+          this.damageActor(a, 9999, a.id, undefined, false, 'bomb');
         }
         this.bomb = null;
         this.endTeamRound(this.attackTeam, 'Бомба взорвалась');
@@ -3593,7 +3607,7 @@ export class Sim {
       if (s.t > 0) continue;
       this.shells = this.shells.filter((x) => x !== s);
       this.events.push({ type: 'strike', id: 'shell', ownerId: s.ownerId, x: s.x, z: s.z });
-      this.explode(s.x, s.z, S.shellRadius, S.shellDamage, s.ownerId);
+      this.explode(s.x, s.z, S.shellRadius, S.shellDamage, s.ownerId, 'mortar');
     }
   }
 
@@ -3635,7 +3649,7 @@ export class Sim {
         continue;
       }
       if (pulse && this.inWire(a.x, a.z) && Math.hypot(a.vx, a.vz) > 0.3) {
-        this.damageActor(a, W.dps * 0.5, -1);
+        this.damageActor(a, W.dps * 0.5, -1, undefined, false, 'wire');
         this.events.push({ type: 'wire', id: 'hurt', ownerId: a.id, x: a.x, z: a.z });
       }
       // Holding E by the wire (and not at a crate) cuts a way through.
@@ -3704,8 +3718,8 @@ export class Sim {
   private blowProp(p: SimProp, sourceId: number): void {
     if (!p.alive) return;
     p.alive = false;
-    if (p.kind === 'mine') this.explode(p.x, p.z, CONFIG.mine.radius, CONFIG.mine.damage, p.ownerId ?? sourceId);
-    else this.explode(p.x, p.z, 7.5, 70, sourceId);
+    if (p.kind === 'mine') this.explode(p.x, p.z, CONFIG.mine.radius, CONFIG.mine.damage, p.ownerId ?? sourceId, 'mine');
+    else this.explode(p.x, p.z, 7.5, 70, sourceId, 'barrel');
   }
 
   /** Client: object, crate, shell and flare states from a snapshot. */

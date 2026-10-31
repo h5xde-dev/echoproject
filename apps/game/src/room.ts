@@ -11,7 +11,7 @@ import type { RoomOptions } from '@echo/shared/net/meta';
 import type { ClientMessage, HostMessage, LobbyMsg, RankedMsg } from '@echo/shared/net/protocol';
 import { sanitizeInput } from '@echo/shared/net/sanitize';
 import { buildSnapshot } from '@echo/shared/net/snapshot';
-import { newTally, outcomeFor, tallyEvent, type MatchTally } from '@echo/shared/progress';
+import { newTally, outcomeFor, statEvent, tallyEvent, type MatchStats, type MatchTally } from '@echo/shared/progress';
 import { GAME } from './config';
 import { encode, type PlayerConn } from './conn';
 
@@ -52,6 +52,7 @@ interface Seat {
   /** Score kept from the moment the seat was given up. */
   final: { kills: number; deaths: number } | null;
   tally: MatchTally;
+  stats: MatchStats;
   win: boolean | null;
 }
 
@@ -153,6 +154,7 @@ export class Room {
       ready: false,
       final: null,
       tally: newTally(),
+      stats: {},
       win: null,
     };
   }
@@ -238,6 +240,7 @@ export class Room {
     const { mode } = this.opts;
     const seed = (Math.random() * 0xffffffff) >>> 0;
     this.map = isArena(mode) ? buildArena(this.opts.arena, seed, mode) : generateMap(seed);
+    if (this.opts.mutators?.length) this.map.mutators = [...this.opts.mutators];
     this.sim = new Sim(this.map);
     if (this.opts.fighters) this.sim.fighters = this.opts.fighters;
     if (this.opts.difficulty) this.sim.difficulty = this.opts.difficulty;
@@ -246,6 +249,7 @@ export class Room {
     for (const seat of this.seats.values()) {
       if (seat.left) continue;
       seat.tally = newTally();
+      seat.stats = {};
       seat.win = null;
       seat.final = null;
       this.sim.addPlayer(`p${seat.playerId}`, seat.name, seat.playerId, seat.cls, seat.color);
@@ -353,7 +357,9 @@ export class Room {
       if (seat.left) continue;
       const me = this.sim.actors.get(seat.playerId);
       const team = me?.team ?? -1;
-      tallyEvent(seat.tally, event, seat.playerId, (id) => this.hostile(team, id));
+      const hostile = (id: number) => this.hostile(team, id);
+      tallyEvent(seat.tally, event, seat.playerId, hostile);
+      statEvent(seat.stats, event, seat.playerId, hostile);
       const won = outcomeFor(event, mode, seat.playerId, team);
       if (won !== null) {
         seat.win = won;
@@ -475,7 +481,8 @@ export class Room {
         arena: isArena(this.opts.mode) ? this.opts.arena : '',
         rated: this.ranked,
         startedAt: this.startedAt,
-        players: signedIn.map((r) => ({ userId: r.seat.userId, place: r.place, kills: r.kills, deaths: r.deaths, left: r.left, win: r.seat.win === true, tally: r.seat.tally })),
+        mutators: this.opts.mutators ?? [],
+        players: signedIn.map((r) => ({ userId: r.seat.userId, place: r.place, kills: r.kills, deaths: r.deaths, left: r.left, win: r.seat.win === true, tally: r.seat.tally, stats: r.seat.stats })),
       });
     } catch (err) {
       console.error(`room ${this.code}: could not save the match`, err instanceof Error ? err.message : err);

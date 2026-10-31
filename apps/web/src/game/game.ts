@@ -14,7 +14,7 @@ import { CONFIG, COLORS } from '@echo/shared/game/config';
 import { generateMap } from '@echo/shared/game/levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from '@echo/shared/game/modes';
 import { ARENA_DOOR_BASE, Sim, type PlayerInput } from '@echo/shared/game/sim';
-import type { Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem } from '@echo/shared/game/types';
+import type { Mutator, Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem } from '@echo/shared/game/types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
@@ -31,6 +31,8 @@ export interface MatchOptions {
   difficulty?: Difficulty;
   /** Network room: bots fill the arena (once two or more players are in). Default on. */
   bots?: boolean;
+  /** Match-wide rule changes. */
+  mutators?: Mutator[];
 }
 
 export interface DisplayActor {
@@ -234,7 +236,7 @@ export class Game {
 
   /** Open a room on the game server; resolves with its code once we are in. */
   async createRoom(name: string, opts: MatchOptions = {}): Promise<string> {
-    const o: RoomOptions = { mode: opts.mode ?? 'coop', arena: opts.arena ?? 'sklad', fighters: opts.fighters, difficulty: opts.difficulty, bots: opts.bots };
+    const o: RoomOptions = { mode: opts.mode ?? 'coop', arena: opts.arena ?? 'sklad', fighters: opts.fighters, difficulty: opts.difficulty, bots: opts.bots, mutators: opts.mutators };
     await this.goOnline(name, { t: 'create', opts: o });
     return this.roomCode;
   }
@@ -393,6 +395,7 @@ export class Game {
     this.matchMode = opts.mode ?? 'coop';
     this.arena = opts.arena ?? 'sklad';
     this.map = isArena(this.matchMode) ? buildArena(this.arena, seed, this.matchMode) : generateMap(seed);
+    if (opts.mutators?.length) this.map.mutators = [...opts.mutators];
     this.sim = new Sim(this.map);
     if (opts.fighters) this.sim.fighters = opts.fighters;
     if (opts.difficulty) this.sim.difficulty = opts.difficulty;

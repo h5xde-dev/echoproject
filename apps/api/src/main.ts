@@ -98,7 +98,8 @@ interface MatchReport {
   arena: string;
   rated: boolean;
   startedAt: number;
-  players: { userId: number; place: number; kills: number; deaths: number; left: boolean; win: boolean; tally: MatchTally }[];
+  mutators?: string[];
+  players: { userId: number; place: number; kills: number; deaths: number; left: boolean; win: boolean; tally: MatchTally; stats?: unknown }[];
 }
 
 const num = (v: unknown, max = 1e6) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(max, Math.floor(v))) : 0);

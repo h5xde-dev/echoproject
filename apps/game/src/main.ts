@@ -4,8 +4,9 @@ import { callService, handle, HttpError, isService, json, originAllowed, readJso
 import { onShutdown } from '@echo/node-kit/lifecycle';
 import { verifyTicket } from '@echo/node-kit/ticket';
 import { ARENAS } from '@echo/shared/game/arenas';
-import { isArena } from '@echo/shared/game/modes';
-import type { RoomOptions } from '@echo/shared/net/meta';
+import { isArena, MODE_IDS } from '@echo/shared/game/modes';
+import type { GameMode } from '@echo/shared/game/types';
+import { cleanMutators, type RoomOptions } from '@echo/shared/net/meta';
 import { GAME } from './config';
 import { PlayerConn } from './conn';
 import { Room } from './room';
@@ -19,10 +20,9 @@ import { Room } from './room';
 const rooms = new Map<string, Room>();
 let draining = false;
 
-const MODES = ['coop', 'dm', 'duel', 'gun', 'comp', 'tdm', 'waves', 'ctf', 'bomb'];
 
 function validOptions(raw: Partial<RoomOptions>): RoomOptions {
-  if (!MODES.includes(raw.mode as string)) throw new HttpError(400, 'mode');
+  if (!MODE_IDS.includes(raw.mode as GameMode)) throw new HttpError(400, 'mode');
   const mode = raw.mode!;
   const arena = isArena(mode) ? (ARENAS.some((a) => a.id === raw.arena) ? raw.arena! : ARENAS[0].id) : '';
   return {
@@ -31,6 +31,7 @@ function validOptions(raw: Partial<RoomOptions>): RoomOptions {
     fighters: typeof raw.fighters === 'number' ? Math.max(2, Math.min(8, Math.floor(raw.fighters))) : undefined,
     difficulty: raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal',
     bots: raw.bots !== false,
+    mutators: cleanMutators(raw.mutators),
   };
 }
 

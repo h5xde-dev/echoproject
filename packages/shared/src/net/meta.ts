@@ -1,4 +1,4 @@
-import type { Difficulty, GameMode, PlayerClass } from '../game/types';
+import { MUTATORS, type Difficulty, type GameMode, type Mutator, type PlayerClass } from '../game/types';
 import type { MatchmakingMsg } from './protocol';
 
 // The browser and the meta server (WebSocket /meta): who I am, open a room,
@@ -15,6 +15,13 @@ export interface RoomOptions {
   difficulty?: Difficulty;
   /** Bots in the room at all (they join once two people are in). */
   bots?: boolean;
+  /** Match-wide rule changes (see Mutator). */
+  mutators?: Mutator[];
+}
+
+/** Only known mutators, each once. */
+export function cleanMutators(raw: unknown): Mutator[] {
+  return Array.isArray(raw) ? MUTATORS.filter((m) => raw.includes(m)) : [];
 }
 
 export interface MetaHelloMsg {
