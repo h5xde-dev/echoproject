@@ -31,9 +31,11 @@ const a = await player('Альфа');
 const b = await player('Браво');
 check((await a.page.textContent('.account-name')) === 'Альфа', 'signed in: the account shows in the menu');
 
+await a.page.click('.menu-tab[data-tab="ranked"]');
 await a.page.click('#btn-ranked');
 await a.page.waitForFunction(() => /1 \/ 2/.test(document.querySelector('.ranked-count').textContent), null, { timeout: 15000 });
 check(true, 'first player waits in the queue (1 / 2)');
+await b.page.click('.menu-tab[data-tab="ranked"]');
 await b.page.click('#btn-ranked');
 
 for (const p of [a, b]) await p.page.waitForFunction(() => document.querySelector('#menu').classList.contains('hidden'), null, { timeout: 30000 });
@@ -56,9 +58,13 @@ check(sa.udp, 'snapshots and input run over the unreliable data channel');
 // B moves: A sees it through the server.
 const bId = (await state(b)).local;
 const before = (await state(a)).latest.find((x) => x.id === bId).x;
-await b.page.keyboard.down('KeyD');
-await a.page.waitForFunction(([id, x0]) => Math.abs(window.echo.game.latestActors.get(id).x - x0) > 1, [bId, before], { timeout: 30000 }).catch(() => undefined);
-await b.page.keyboard.up('KeyD');
+// Right, or left if the spawn is against the right wall.
+for (const key of ['KeyD', 'KeyA']) {
+  await b.page.keyboard.down(key);
+  await a.page.waitForFunction(([id, x0]) => Math.abs(window.echo.game.latestActors.get(id).x - x0) > 1, [bId, before], { timeout: 8000, polling: 250 }).catch(() => undefined);
+  await b.page.keyboard.up(key);
+  if (Math.abs((await state(a)).latest.find((x) => x.id === bId).x - before) > 1) break;
+}
 const after = (await state(a)).latest.find((x) => x.id === bId).x;
 check(Math.abs(after - before) > 1, `the other player's moves arrive (${before.toFixed(1)} → ${after.toFixed(1)})`);
 

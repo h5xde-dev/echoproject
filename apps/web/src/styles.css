@@ -1423,3 +1423,89 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
 .weekly-title { font-size: 17px; letter-spacing: 0.06em; }
 .weekly-desc { font-size: 12px; color: var(--ink-dim); }
 .open-room small { color: var(--accent-warm); font-size: 11px; }
+
+/* ============================================================ menu v3: tabs */
+/* Header across the top; the profile on the left; on the right three tabs —
+   online, own game, ranked — sharing one mode picker. Fits a 1366x768 screen. */
+.menu-card.wide {
+  width: min(1120px, calc((100vw - 32px) / var(--ui)));
+  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-areas: 'head head' 'left right';
+  gap: 18px 30px;
+  padding: 22px 28px 20px;
+}
+.menu-head { grid-area: head; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.menu-head .logo { margin: 0; }
+.menu-head .logo-main { font-size: 30px; }
+.menu-head-gap { flex: 1; }
+.menu-head .account { margin: 0; }
+.menu-head .btn-help { width: auto; margin: 0; padding: 8px 12px; }
+.menu-left { grid-area: left; gap: 10px; }
+.menu-left .field-label { margin-top: 4px; }
+.cls-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cls-row .diff-btn { padding: 7px 4px; }
+.section-title { font-size: 11px; letter-spacing: 0.22em; color: var(--ink-dim); }
+.menu-right { grid-area: right; gap: 12px; }
+
+.menu-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.menu-tab {
+  display: grid; gap: 2px; padding: 9px 12px; text-align: left; cursor: pointer;
+  background: rgba(255, 255, 255, 0.025); border: 1px solid rgba(255, 255, 255, 0.08); border-bottom: 2px solid transparent;
+  color: var(--ink-dim); font-family: var(--font);
+}
+.menu-tab b { font-size: 15px; letter-spacing: 0.14em; color: var(--ink); }
+.menu-tab small { font-size: 11px; letter-spacing: 0.04em; }
+.menu-tab:hover { border-color: rgba(63, 214, 200, 0.35); }
+.menu-tab.active { border-color: rgba(63, 214, 200, 0.45); border-bottom-color: var(--accent); background: rgba(63, 214, 200, 0.07); }
+.menu-tab.active b { color: var(--accent); }
+.menu-tab[data-tab='ranked'].active { border-bottom-color: var(--accent-warm); background: rgba(255, 176, 102, 0.07); }
+.menu-tab[data-tab='ranked'].active b { color: var(--accent-warm); }
+
+.tab-pane { display: none; flex-direction: column; gap: 12px; }
+.tab-pane.active { display: flex; }
+.mode-picker.hidden { display: none; }
+
+/* Modes as compact tiles: icon and name; the chosen one is described below. */
+.menu-right .mode-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.menu-right .mode-card { grid-template-columns: 22px 1fr; padding: 7px 9px; column-gap: 8px; }
+.menu-right .mode-card svg { grid-row: 1; width: 20px; height: 20px; }
+.menu-right .mode-card b { font-size: 12.5px; letter-spacing: 0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-right .mode-card small { display: none; }
+.menu-right .mode-detail { margin: 8px 0 0; min-height: 0; padding: 8px 12px; border-left: 2px solid var(--accent); background: rgba(63, 214, 200, 0.04); }
+.menu-right .mode-detail-title { font-size: 15px; margin-bottom: 2px; }
+.menu-right .mode-detail-desc { font-size: 12.5px; line-height: 1.45; margin: 0; }
+
+.btn.big { padding: 14px 18px; }
+.btn.big .btn-title { font-size: 18px; }
+.menu-right .menu-actions { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.menu-right .weekly { margin: 0; }
+.menu-right .open-rooms { margin: 0; }
+.menu-right .join-block { margin: 0; }
+.menu-right .mutators { margin-top: 0; }
+.menu-right .arena-row { grid-template-columns: 200px 1fr; }
+.menu-right .arena-preview { width: 200px; height: 106px; }
+.menu-right .difficulty { margin: 0; }
+.menu-right .room-bots { margin-top: 8px; }
+.ranked-about { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-dim); }
+.ranked-top { border: 1px solid var(--panel-line); background: rgba(10, 14, 21, 0.6); padding: 8px 10px; }
+.ranked-top-list { margin: 0; padding: 0 0 0 18px; display: grid; gap: 3px; font-size: 13px; }
+.ranked-top-list li span { color: var(--ink-dim); margin-left: 6px; font-family: var(--mono); font-size: 12px; }
+.menu-right .menu-keys { margin-top: auto; padding-top: 6px; }
+
+@media (max-width: 900px) {
+  .menu-card.wide { grid-template-columns: 1fr; grid-template-areas: 'head' 'right' 'left'; }
+}
+/* Arenas as a compact grid next to the preview, not a tall column. */
+.menu-right .arena-row .arena-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; align-content: start; }
+.menu-right .arena-row .arena-btn { padding: 5px 4px; font-size: 12px; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-right .fighters { margin-top: 8px; }
+.menu-card.wide { gap: 14px 28px; padding-top: 18px; }
+.menu-right { gap: 10px; }
+.menu-head { padding-bottom: 10px; }
+/* Own game: the buttons right under the arena, the finer settings below. */
+.match-settings { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.match-settings-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; align-items: end; }
+.match-settings .fighters { margin: 0; }
+.match-settings .difficulty-row .diff-btn { padding: 6px 4px; }
+.match-settings .room-bots { margin: 2px 0 0; }
+.ranked-top-list li.open-rooms-empty { list-style: none; margin-left: -18px; }

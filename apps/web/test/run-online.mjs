@@ -52,6 +52,7 @@ try {
 
   // A deathmatch room without bots: nobody shoots the joiner while a slow
   // software renderer loads the map.
+  await a.page.click('.menu-tab[data-tab="own"]');
   await a.page.click('.mode-card[data-mode="dm"]');
   await a.page.click('#btn-host');
   await inGame(a);
@@ -59,6 +60,7 @@ try {
   check(/^[A-Z2-9]{5}$/.test(code), `room opened on the server: ${code}`);
   check(await a.page.evaluate(() => window.echo.game.isHost && !document.querySelector('.panel-lobby').classList.contains('hidden')), 'the creator hosts the warm-up lobby');
 
+  await b.page.click('.menu-tab[data-tab="online"]');
   await b.page.fill('#room-code', code);
   await b.page.click('#btn-join');
   const took = await inGame(b).catch(async (e) => {
@@ -126,19 +128,20 @@ try {
   {
     let ok = false;
     let detail = '';
-    // Cursor in four places; a wall may stop S on one of them, not on all.
-    for (const [cx, cy] of [[1, 0], [0, -1], [-1, 0], [0, 1]]) {
-      const p0 = await me();
-      await b.page.mouse.move(p0.screen.x + cx * 220, p0.screen.y + cy * 220);
-      await hold('KeyS');
-      const p1 = await me();
-      detail = `cursor ${cx},${cy}: dz ${(p1.z - p0.z).toFixed(1)}, dx ${(p1.x - p0.x).toFixed(1)}`;
-      if (p1.z - p0.z > 1 && Math.abs(p1.x - p0.x) < 0.5) {
-        ok = true;
-        break;
+    // The cursor off to the side; S down the screen, or W up it if a wall is below.
+    for (const [key, sign] of [['KeyS', 1], ['KeyW', -1]]) {
+      for (const cx of [1, -1]) {
+        const p0 = await me();
+        await b.page.mouse.move(p0.screen.x + cx * 220, p0.screen.y);
+        await hold(key);
+        const p1 = await me();
+        detail = `${key} with the cursor ${cx > 0 ? 'right' : 'left'}: dz ${(p1.z - p0.z).toFixed(1)}, dx ${(p1.x - p0.x).toFixed(1)}`;
+        if ((p1.z - p0.z) * sign > 1 && Math.abs(p1.x - p0.x) < 0.5) ok = true;
+        if (ok) break;
       }
+      if (ok) break;
     }
-    check(ok && (await me()).controls === 'screen', `controls by the screen: S runs down the screen, not away from the cursor (${detail})`);
+    check(ok && (await me()).controls === 'screen', `controls by the screen: W/S run up/down the screen, not toward the cursor (${detail})`);
   }
   // Controls «по прицелу» (pause menu): W runs toward the cursor. Tried in four
   // directions, since a wall may stand on one side. The camera leads toward the
@@ -188,6 +191,7 @@ try {
 
   // Quick play: a public room with bots, and it shows in the open-room list.
   const e = await player('Эхо');
+  await e.page.click('.menu-tab[data-tab="online"]');
   await e.page.click('.mode-card[data-mode="dm"]');
   await e.page.click('#btn-quick');
   await inGame(e);
@@ -199,6 +203,7 @@ try {
 
   // A wrong code: a clear message, back in the menu.
   const c = await player('Чарли');
+  await c.page.click('.menu-tab[data-tab="online"]');
   await c.page.fill('#room-code', 'ZZZZZ');
   await c.page.click('#btn-join');
   await c.page.waitForSelector('.menu-error', { timeout: 10000, polling: 250 });

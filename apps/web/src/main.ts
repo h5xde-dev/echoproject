@@ -96,6 +96,7 @@ function selectMode(mode: GameMode): void {
   fightersRange.closest('.fighters')?.classList.toggle('hidden', ownGuards);
   document.querySelector('.room-bots')?.classList.toggle('hidden', ownGuards);
   btnSolo.querySelector('.btn-desc')!.textContent = SOLO_DESC[mode];
+  btnQuick.querySelector('.btn-desc')!.textContent = `${info.title}: сразу в бой с людьми, боты добирают состав`;
   if (info.arena) drawPreview();
 }
 
@@ -519,6 +520,7 @@ game.onQueue = (msg) => {
 };
 
 btnRanked.addEventListener('click', async () => {
+  showTab('ranked');
   if (!account) {
     location.href = '/auth/yandex?next=/play';
     return;
@@ -593,7 +595,7 @@ async function refreshOpenRooms(): Promise<void> {
   openRoomsCount.textContent = rooms.length ? `${rooms.reduce((n, r) => n + r.players, 0)} в игре` : '';
   openRoomsList.innerHTML = '';
   if (rooms.length === 0) {
-    openRoomsList.innerHTML = '<div class="open-rooms-empty">Пока никого — нажмите «Быстрая игра», и комната появится здесь.</div>';
+    openRoomsList.innerHTML = '<div class="open-rooms-empty">Пока никого — нажмите «Играть онлайн», и комната появится здесь.</div>';
     return;
   }
   for (const r of rooms.slice(0, 8)) {
@@ -748,3 +750,57 @@ weeklyBtn.addEventListener('click', async () => {
     weeklyBtn.disabled = false;
   }
 });
+
+// ---------------------------------------------------------------- menu tabs
+
+type MenuTab = 'online' | 'own' | 'ranked';
+const TAB_KEY = 'echo.menuTab';
+const modePicker = must<HTMLElement>('.mode-picker');
+
+/** Online, own game or ranked: one scenario at a time (remembered in this browser). */
+function showTab(tab: MenuTab): void {
+  document.querySelectorAll<HTMLButtonElement>('.menu-tab').forEach((b) => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+  });
+  document.querySelectorAll<HTMLElement>('.tab-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === tab));
+  // Ranked is always a deathmatch on the server: no mode to pick.
+  modePicker.classList.toggle('hidden', tab === 'ranked');
+  if (tab === 'ranked') void refreshTopPlayers();
+  try {
+    localStorage.setItem(TAB_KEY, tab);
+  } catch {
+    /* no storage: the tab is not remembered */
+  }
+}
+
+document.querySelectorAll<HTMLButtonElement>('.menu-tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab as MenuTab)));
+let savedTab: string | null = null;
+try {
+  savedTab = localStorage.getItem(TAB_KEY);
+} catch {
+  /* no storage */
+}
+showTab(savedTab === 'own' || savedTab === 'ranked' ? savedTab : 'online');
+
+/** The rating tab: the five best, from the API. */
+async function refreshTopPlayers(): Promise<void> {
+  const list = must<HTMLElement>('.ranked-top-list');
+  try {
+    const res = await fetch('/api/leaderboard?limit=5', { cache: 'no-store' });
+    const rows = res.ok ? ((await res.json()) as { rows: { name: string; rating: number }[] }).rows : [];
+    if (!rows.length) return;
+    list.innerHTML = '';
+    for (const r of rows) {
+      const li = document.createElement('li');
+      li.textContent = r.name;
+      const span = document.createElement('span');
+      span.textContent = String(r.rating);
+      li.appendChild(span);
+      list.appendChild(li);
+    }
+  } catch {
+    /* no API: the placeholder stays */
+  }
+}

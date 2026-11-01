@@ -164,35 +164,33 @@
       <div id="menu" class="menu">
         <div class="menu-bg"></div>
         <div class="menu-card wide">
-          <section class="menu-left">
+          <header class="menu-head">
             <a class="logo" href="/" title="North Echo — на главную">
-              <img class="logo-mark" src="/logo.svg" alt="" width="54" height="54" />
+              <img class="logo-mark" src="/logo.svg" alt="" width="44" height="44" />
               <span class="logo-text">
                 <span class="logo-main">NORTH ECHO</span>
                 <span class="logo-sub">ТАКТИЧЕСКИЙ ШУТЕР · СВЕТ И ТЕНИ</span>
               </span>
             </a>
-
+            <span class="menu-head-gap"></span>
             <!-- Filled from /api/me in main.ts. -->
-            <div class="account hidden">
-              <a class="btn-yandex" href="/auth/yandex?next=/play">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#fc3f1d"/><path fill="#fff" d="M13.6 6.2h-1.1c-2 0-3 1-3 2.5 0 1.7.8 2.5 2.3 3.5l1.2.8-3.5 5.2H7.2l3.2-4.7C8.6 12.3 7.5 11 7.5 8.8c0-2.8 1.9-4.6 5-4.6h3.1v14.3h-2V6.2z"/></svg>
-                Войти через Яндекс
-              </a>
-              <div class="account-user hidden">
-                <img class="account-avatar" alt="" width="34" height="34" />
-                <span class="account-info"><b class="account-name"></b><small class="account-rating"></small></span>
-                <a class="account-link" href="/rating">Рейтинг</a>
-                <button class="account-link account-logout" type="button">Выйти</button>
-              </div>
+          <div class="account hidden">
+            <a class="btn-yandex" href="/auth/yandex?next=/play">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#fc3f1d"/><path fill="#fff" d="M13.6 6.2h-1.1c-2 0-3 1-3 2.5 0 1.7.8 2.5 2.3 3.5l1.2.8-3.5 5.2H7.2l3.2-4.7C8.6 12.3 7.5 11 7.5 8.8c0-2.8 1.9-4.6 5-4.6h3.1v14.3h-2V6.2z"/></svg>
+              Войти через Яндекс
+            </a>
+            <div class="account-user hidden">
+              <img class="account-avatar" alt="" width="34" height="34" />
+              <span class="account-info"><b class="account-name"></b><small class="account-rating"></small></span>
+              <a class="account-link" href="/rating">Рейтинг</a>
+              <button class="account-link account-logout" type="button">Выйти</button>
             </div>
-            <button class="btn-help" type="button"><span>?</span> Справка: классы, режимы, оружие, бонусы, управление</button>
+          </div>
+            <button class="btn-help" type="button" title="Справка: классы, режимы, оружие, бонусы, управление"><span>?</span> Справка</button>
+          </header>
 
-            <p class="tagline">
-              Пули летят по-настоящему. В темноте тебя не видно — но и ты не видишь никого.
-              Включённый фонарь даёт обзор, но выдаёт тебя.
-            </p>
-
+          <section class="menu-left">
+            <span class="section-title">ПРОФИЛЬ</span>
             <label class="field">
               <span>Позывной</span>
               <input id="player-name" type="text" maxlength="14" value="оператор" autocomplete="off" />
@@ -202,11 +200,43 @@
               <div class="rank-track"><i class="rank-fill"></i></div>
               <div class="ring-colors" role="radiogroup" aria-label="Цвет кольца"></div>
             </div>
+            <span class="field-label">Класс</span>
+            <div class="difficulty-row cls-row" role="radiogroup" aria-label="Класс бойца">
+              <button class="cls-btn diff-btn" data-cls="assault" title="+1 осколочная, быстрее перезарядка">Штурмовик</button>
+              <button class="cls-btn diff-btn" data-cls="scout" title="Тише шаги, быстрее присед, ПНВ на старте">Разведчик</button>
+              <button class="cls-btn diff-btn" data-cls="medic" title="Поднимает вдвое быстрее, лечит союзников рядом">Медик</button>
+              <button class="cls-btn diff-btn" data-cls="engineer" title="Ставит переносной щит (V), запускает FPV-дрон (X)">Инженер</button>
+            </div>
+            <div class="cls-card"></div>
             <!-- Filled from /api/me/quests in main.ts. -->
             <div class="quests-box"></div>
+          </section>
 
-            <span class="field-label">Режим</span>
-            <div class="mode-grid" role="radiogroup" aria-label="Режим">
+          <section class="menu-right">
+            <nav class="menu-tabs" role="tablist" aria-label="Как играть">
+              <button class="menu-tab" role="tab" data-tab="online"><b>ОНЛАЙН</b><small>с людьми</small></button>
+              <button class="menu-tab" role="tab" data-tab="own"><b>СВОЯ ИГРА</b><small>одному или с друзьями</small></button>
+              <button class="menu-tab" role="tab" data-tab="ranked"><b>РЕЙТИНГ</b><small>бои на очки</small></button>
+            </nav>
+
+            <div class="loading" id="loading">
+              <div class="loading-track"><i id="loading-fill"></i></div>
+              <span id="loading-text">Загрузка снаряжения… 0%</span>
+            </div>
+
+            <!-- ОНЛАЙН -->
+            <div class="tab-pane" data-pane="online">
+              <button class="weekly" type="button" hidden>
+                <span class="weekly-label">ПОДБОРКА НЕДЕЛИ · ОПЫТ ×1,5</span>
+                <b class="weekly-title"></b>
+                <small class="weekly-desc"></small>
+              </button>
+            </div>
+
+            <!-- Режим: общий для «Онлайн» и «Своя игра». -->
+            <div class="mode-picker">
+              <span class="field-label">Режим</span>
+              <div class="mode-grid" role="radiogroup" aria-label="Режим">
               <button class="mode-card active" data-mode="coop" role="radio" aria-checked="true">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 5-5s5 2 5 5M11 20c0-3 2.5-5 5-5s5 2 5 5"/></svg>
                 <b>Кооператив</b><small>Зачистка объекта</small>
@@ -259,112 +289,108 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" stroke-dasharray="2 2"/></svg>
                 <b>Сужающаяся зона</b><small>Последний выживший</small>
               </button>
-            </div>
-          </section>
-
-          <section class="menu-right">
-            <div class="mode-detail">
-              <div class="mode-detail-title">Кооператив</div>
-              <p class="mode-detail-desc"></p>
-            </div>
-
-            <div class="arena-select hidden">
-              <span class="field-label">Арена</span>
-              <div class="arena-row">
-                <canvas class="arena-preview" width="246" height="130"></canvas>
-                <!-- Filled from ARENAS in main.ts. -->
-                <div class="arena-list"></div>
               </div>
-              <label class="fighters">
-                <span class="field-label">Бойцов на арене: <b class="fighters-value">6</b></span>
-                <input class="fighters-range" type="range" min="2" max="8" value="6" />
-              </label>
-              <label class="room-bots">
-                <input class="room-bots-input" type="checkbox" checked />
-                <span>Боты в сетевой комнате <small>— появляются, когда подключились 2 игрока и больше</small></span>
-              </label>
-              <div class="mutators" role="group" aria-label="Модификаторы"></div>
-            </div>
-
-            <div class="difficulty">
-              <span class="field-label">Класс</span>
-              <div class="difficulty-row" role="radiogroup" aria-label="Класс бойца">
-                <button class="cls-btn diff-btn" data-cls="assault" title="+1 осколочная, быстрее перезарядка">Штурмовик</button>
-                <button class="cls-btn diff-btn" data-cls="scout" title="Тише шаги, быстрее присед, ПНВ на старте">Разведчик</button>
-                <button class="cls-btn diff-btn" data-cls="medic" title="Поднимает вдвое быстрее, лечит союзников рядом">Медик</button>
-                <button class="cls-btn diff-btn" data-cls="engineer" title="Ставит переносной щит (V), запускает FPV-дрон (X)">Инженер</button>
-              </div>
-              <div class="cls-card"></div>
-              <span class="field-label">Боты</span>
-              <div class="difficulty-row" role="radiogroup" aria-label="Сложность ботов">
-                <button class="diff-btn" data-difficulty="easy">Лёгкие</button>
-                <button class="diff-btn" data-difficulty="normal">Обычные</button>
-                <button class="diff-btn" data-difficulty="hard">Тяжёлые</button>
+              <div class="mode-detail">
+                <div class="mode-detail-title">Кооператив</div>
+                <p class="mode-detail-desc"></p>
               </div>
             </div>
 
-            <div class="loading" id="loading">
-              <div class="loading-track"><i id="loading-fill"></i></div>
-              <span id="loading-text">Загрузка снаряжения… 0%</span>
+            <div class="tab-pane" data-pane="online">
+              <button id="btn-quick" class="btn primary big" disabled>
+                <span class="btn-title">ИГРАТЬ ОНЛАЙН</span>
+                <span class="btn-desc">Сразу в бой с людьми, боты добирают состав</span>
+              </button>
+              <div class="open-rooms">
+                <div class="open-rooms-head"><span>ОТКРЫТЫЕ КОМНАТЫ</span><em class="open-rooms-count"></em></div>
+                <div class="open-rooms-list"><div class="open-rooms-empty">Пока никого — нажмите «Играть онлайн», и комната появится здесь.</div></div>
+              </div>
+              <div class="join-block">
+                <label class="field">
+                  <span>Код комнаты друга</span>
+                  <input id="room-code" type="text" maxlength="8" placeholder="ABCDE" autocomplete="off" />
+                </label>
+                <button id="btn-join" class="btn" disabled>
+                  <span class="btn-title">ВОЙТИ</span>
+                </button>
+              </div>
             </div>
 
-            <button class="weekly" type="button" hidden>
-              <span class="weekly-label">ПОДБОРКА НЕДЕЛИ · ОПЫТ ×1,5</span>
-              <b class="weekly-title"></b>
-              <small class="weekly-desc"></small>
-            </button>
+            <!-- СВОЯ ИГРА -->
+            <div class="tab-pane" data-pane="own">
+              <div class="arena-select hidden">
+                <span class="field-label">Арена</span>
+                <div class="arena-row">
+                  <canvas class="arena-preview" width="246" height="130"></canvas>
+                  <!-- Filled from ARENAS in main.ts. -->
+                  <div class="arena-list"></div>
+                </div>
+              </div>
+              <div class="menu-actions">
+                <button id="btn-solo" class="btn primary" disabled>
+                  <span class="btn-title">ИГРАТЬ ОДНОМУ</span>
+                  <span class="btn-desc">Пройти объект в одиночку</span>
+                </button>
+                <button id="btn-host" class="btn" disabled>
+                  <span class="btn-title">СОЗДАТЬ КОМНАТУ</span>
+                  <span class="btn-desc">Позвать друзей по коду или ссылке</span>
+                </button>
+              </div>
+              <div id="room-result" class="room-result hidden">
+                <div class="room-code-label">КОД КОМНАТЫ</div>
+                <div id="room-code-value" class="room-code-value">-----</div>
+                <div class="room-hint">Отправьте код или ссылку — друг попадёт прямо в комнату.</div>
+                <button class="btn room-link" type="button"><span class="btn-title">СКОПИРОВАТЬ ССЫЛКУ</span></button>
+              </div>
+              <div class="match-settings">
+                <span class="field-label">Настройки матча</span>
+                <div class="match-settings-row">
+                  <label class="fighters">
+                    <span class="field-label">Бойцов: <b class="fighters-value">6</b></span>
+                    <input class="fighters-range" type="range" min="2" max="8" value="6" />
+                  </label>
+                  <div class="difficulty">
+                    <span class="field-label">Боты</span>
+                    <div class="difficulty-row" role="radiogroup" aria-label="Сложность ботов">
+                      <button class="diff-btn" data-difficulty="easy">Лёгкие</button>
+                      <button class="diff-btn" data-difficulty="normal">Обычные</button>
+                      <button class="diff-btn" data-difficulty="hard">Тяжёлые</button>
+                    </div>
+                  </div>
+                </div>
+                <label class="room-bots">
+                  <input class="room-bots-input" type="checkbox" checked />
+                  <span>Боты в комнате с друзьями <small>— когда вас двое и больше</small></span>
+                </label>
+                <div class="mutators" role="group" aria-label="Модификаторы"></div>
+              </div>
+            </div>
 
-            <div class="menu-actions">
-              <button id="btn-solo" class="btn primary" disabled>
-                <span class="btn-title">ИГРАТЬ</span>
-                <span class="btn-desc">Пройти объект в одиночку</span>
-              </button>
-              <button id="btn-quick" class="btn quick" disabled>
-                <span class="btn-title">БЫСТРАЯ ИГРА</span>
-                <span class="btn-desc">Онлайн с людьми прямо сейчас, боты добирают состав</span>
-              </button>
-              <button id="btn-host" class="btn" disabled>
-                <span class="btn-title">СОЗДАТЬ КОМНАТУ</span>
-                <span class="btn-desc">Позвать друзей по коду</span>
-              </button>
-              <button id="btn-ranked" class="btn ranked" disabled>
-                <span class="btn-title">РЕЙТИНГОВЫЙ БОЙ</span>
+            <!-- РЕЙТИНГ -->
+            <div class="tab-pane" data-pane="ranked">
+              <p class="ranked-about">
+                Deathmatch на сервере против живых игроков: без ботов, от 2 до 6 бойцов. Место в бою меняет
+                рейтинг Эло, лучшие — в общей таблице. Нужен вход через Яндекс.
+              </p>
+              <button id="btn-ranked" class="btn ranked big" disabled>
+                <span class="btn-title">НАЙТИ РЕЙТИНГОВЫЙ БОЙ</span>
                 <span class="btn-desc">Онлайн-арена, только люди, рейтинг Эло</span>
               </button>
-            </div>
-
-            <div id="ranked-queue" class="room-result ranked-queue hidden">
-              <div class="room-code-label">ПОИСК СОПЕРНИКОВ</div>
-              <div class="room-code-value ranked-count">1 / 2</div>
-              <div class="room-hint ranked-hint">Deathmatch на сервере: без ботов, итог меняет рейтинг.</div>
-              <button class="btn ranked-cancel" type="button"><span class="btn-title">ОТМЕНА</span></button>
-            </div>
-
-            <div class="join-block">
-              <label class="field">
-                <span>Код комнаты друга</span>
-                <input id="room-code" type="text" maxlength="8" placeholder="ABCDE" autocomplete="off" />
-              </label>
-              <button id="btn-join" class="btn" disabled>
-                <span class="btn-title">ВОЙТИ</span>
-              </button>
-            </div>
-
-            <div class="open-rooms">
-              <div class="open-rooms-head"><span>ОТКРЫТЫЕ КОМНАТЫ</span><em class="open-rooms-count"></em></div>
-              <div class="open-rooms-list"><div class="open-rooms-empty">Пока никого — нажмите «Быстрая игра», и комната появится здесь.</div></div>
-            </div>
-
-            <div id="room-result" class="room-result hidden">
-              <div class="room-code-label">КОД КОМНАТЫ</div>
-              <div id="room-code-value" class="room-code-value">-----</div>
-              <div class="room-hint">Отправьте код или ссылку — друг попадёт прямо в комнату.</div>
-              <button class="btn room-link" type="button"><span class="btn-title">СКОПИРОВАТЬ ССЫЛКУ</span></button>
+              <div id="ranked-queue" class="room-result ranked-queue hidden">
+                <div class="room-code-label">ПОИСК СОПЕРНИКОВ</div>
+                <div class="room-code-value ranked-count">1 / 2</div>
+                <div class="room-hint ranked-hint">Deathmatch на сервере: без ботов, итог меняет рейтинг.</div>
+                <button class="btn ranked-cancel" type="button"><span class="btn-title">ОТМЕНА</span></button>
+              </div>
+              <div class="ranked-top">
+                <div class="open-rooms-head"><span>ЛУЧШИЕ ИГРОКИ</span><a class="account-link" href="/rating">вся таблица →</a></div>
+                <ol class="ranked-top-list"><li class="open-rooms-empty">Таблица появится после первых боёв.</li></ol>
+              </div>
             </div>
 
             <div class="menu-keys">
               <span><kbd>WASD</kbd> движение</span><span><kbd>ЛКМ</kbd> огонь</span><span><kbd>F</kbd> фонарь</span>
-              <span><kbd>G</kbd> граната</span><span><kbd>R</kbd> перезарядка</span><span><kbd>E</kbd> использовать</span><span><kbd>T</kbd> миномёт</span><span><kbd>B</kbd> магазин</span><span><kbd>Tab</kbd> счёт</span>
+              <span><kbd>G</kbd> граната</span><span><kbd>R</kbd> перезарядка</span><span><kbd>E</kbd> использовать</span><span><kbd>Tab</kbd> счёт</span><span><kbd>Esc</kbd> пауза</span>
             </div>
           </section>
         </div>
