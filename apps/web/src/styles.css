@@ -28,13 +28,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* The system pointer hides only while aiming over the game; menus, pause,
-   results, help, lobby and the shop keep it. */
+/* The system pointer hides only while aiming over the game (body.aiming, set by
+   the HUD each frame); menus, pause, results, help, lobby and the shop keep it.
+   A class, not :has(): the HUD changes every frame, and :has() on body made the
+   browser restyle the whole page each time. */
 body {
   cursor: default;
 }
-body:has(.hud:not(.hidden)) #viewport,
-.hud {
+body.aiming #viewport,
+body.aiming .hud {
   cursor: none;
 }
 .hud .pause,
@@ -428,10 +430,7 @@ body:has(.hud:not(.hidden)) #viewport,
   will-change: transform;
 }
 /* Only while aiming: not in the menu, the pause, the results or the shop. */
-.hud.hidden ~ .crosshair,
-.hud.shopping ~ .crosshair,
-.hud:has(.pause.visible, .gameover.visible) ~ .crosshair,
-body:has(.help:not(.hidden)) .crosshair {
+body:not(.aiming) .crosshair {
   display: none;
 }
 

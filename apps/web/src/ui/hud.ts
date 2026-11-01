@@ -737,7 +737,27 @@ export class Hud {
     this.pipsEl.innerHTML = html;
   }
 
+  private aiming = false;
+
+  /**
+   * In the game with nothing over it (pause, results, shop, a help or quests
+   * window): the crosshair shows and the system pointer hides. Toggled only on
+   * change.
+   */
+  private syncAiming(): void {
+    const on =
+      !this.hudRoot().classList.contains('hidden') &&
+      !this.pauseEl.classList.contains('visible') &&
+      !this.overEl.classList.contains('visible') &&
+      !this.hudRoot().classList.contains('shopping') &&
+      !document.body.classList.contains('modal-open');
+    if (on === this.aiming) return;
+    this.aiming = on;
+    document.body.classList.toggle('aiming', on);
+  }
+
   tick(dt: number): void {
+    this.syncAiming();
     // Frame rate, smoothed, shown a few times a second.
     if (dt > 0) this.fps += (1 / dt - this.fps) * 0.05;
     this.statsT -= dt;
@@ -870,11 +890,19 @@ export class Hud {
   /** Show the pause overlay. */
   showPause(): void {
     this.pauseEl.classList.add('visible');
+    this.syncAiming();
   }
 
   /** Hide the pause overlay. */
   hidePause(): void {
     this.pauseEl.classList.remove('visible');
+    this.syncAiming();
+  }
+
+  /** Leaving the game for the menu: the pointer comes back at once. */
+  leaveGame(): void {
+    this.aiming = false;
+    document.body.classList.remove('aiming');
   }
 
   drawMinimap(

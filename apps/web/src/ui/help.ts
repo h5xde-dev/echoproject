@@ -57,10 +57,12 @@ export class HelpPanel {
   open(tab?: Tab): void {
     this.show(tab ?? this.tab);
     this.root.classList.remove('hidden');
+    document.body.classList.add('modal-open');
   }
 
   close(): void {
     this.root.classList.add('hidden');
+    document.body.classList.remove('modal-open');
   }
 
   private show(tab: Tab): void {

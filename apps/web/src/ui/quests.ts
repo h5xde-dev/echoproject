@@ -91,11 +91,13 @@ export class QuestsPanel {
 
   close(): void {
     this.root.classList.add('hidden');
+    document.body.classList.remove('modal-open');
   }
 
   open(data: QuestsData, current: { camo?: string; badge?: string }): void {
     this.render(data, current);
     this.root.classList.remove('hidden');
+    document.body.classList.add('modal-open');
   }
 
   render(data: QuestsData, current: { camo?: string; badge?: string }): void {

@@ -186,6 +186,7 @@ function enterGame(): void {
 /** Leave the session and show the main menu again. */
 function backToMenu(): void {
   game.returnToMenu();
+  hud.leaveGame();
   refreshRank();
   hideQueue();
   void refreshAccount();
