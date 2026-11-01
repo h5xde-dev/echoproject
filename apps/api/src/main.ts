@@ -64,7 +64,7 @@ interface ProfileSettings {
   color?: number;
   difficulty?: string;
   roomBots?: boolean;
-  controls?: string;
+  move?: string;
   camo?: string;
   badge?: string;
 }
@@ -90,7 +90,7 @@ function cleanSettings(raw: Record<string, unknown>, xp: number, owned: { camos:
   if (typeof raw.cls === 'string' && CLASSES.includes(raw.cls)) out.cls = raw.cls;
   if (typeof raw.difficulty === 'string' && DIFFICULTIES.includes(raw.difficulty)) out.difficulty = raw.difficulty;
   if (typeof raw.roomBots === 'boolean') out.roomBots = raw.roomBots;
-  if (raw.controls === 'aim' || raw.controls === 'screen') out.controls = raw.controls;
+  if (raw.move === 'aim' || raw.move === 'screen') out.move = raw.move;
   if (typeof raw.camo === 'string' && (raw.camo === '' || (camoById(raw.camo) && (!owned || owned.camos.includes(raw.camo))))) out.camo = raw.camo;
   if (typeof raw.badge === 'string' && (raw.badge === '' || (badgeById(raw.badge) && (!owned || owned.badges.includes(raw.badge))))) out.badge = raw.badge;
   if (typeof raw.color === 'number') {

@@ -111,22 +111,46 @@ try {
   });
   check(gap < 0.5, `prediction agrees with the server (gap ${gap.toFixed(2)} m)`);
 
-  // Controls «по прицелу» (the default): W runs toward the cursor. Tried in four
-  // directions, since a wall may stand on one side of the spawn. The camera leads
-  // toward the cursor, so the heading drifts a little as the soldier runs.
+  // Controls «по экрану» (the default): S runs down the screen wherever the cursor is.
   const me = () => b.page.evaluate(() => {
     const g = window.echo.game;
     const a = g.latestActors.get(g.localId);
     return { x: a.x, z: a.z, controls: g.controls, screen: g.renderer.project(a.x, 0, a.z) };
   });
+  const hold = async (key, ms = 700) => {
+    await b.page.keyboard.down(key);
+    await b.page.waitForTimeout(ms);
+    await b.page.keyboard.up(key);
+    await b.page.waitForTimeout(300);
+  };
+  {
+    let ok = false;
+    let detail = '';
+    // Cursor in four places; a wall may stop S on one of them, not on all.
+    for (const [cx, cy] of [[1, 0], [0, -1], [-1, 0], [0, 1]]) {
+      const p0 = await me();
+      await b.page.mouse.move(p0.screen.x + cx * 220, p0.screen.y + cy * 220);
+      await hold('KeyS');
+      const p1 = await me();
+      detail = `cursor ${cx},${cy}: dz ${(p1.z - p0.z).toFixed(1)}, dx ${(p1.x - p0.x).toFixed(1)}`;
+      if (p1.z - p0.z > 1 && Math.abs(p1.x - p0.x) < 0.5) {
+        ok = true;
+        break;
+      }
+    }
+    check(ok && (await me()).controls === 'screen', `controls by the screen: S runs down the screen, not away from the cursor (${detail})`);
+  }
+  // Controls «по прицелу» (pause menu): W runs toward the cursor. Tried in four
+  // directions, since a wall may stand on one side. The camera leads toward the
+  // cursor, so the heading drifts a little as the soldier runs.
+  await b.page.evaluate(() => {
+    window.echo.game.controls = 'aim';
+  });
   let best = { along: 0, across: 0, dir: '' };
   for (const [name, ux, uz] of [['right', 1, 0], ['down', 0, 1], ['left', -1, 0], ['up', 0, -1]]) {
     const p0 = await me();
     await b.page.mouse.move(p0.screen.x + ux * 220, p0.screen.y + uz * 220);
-    await b.page.keyboard.down('KeyW');
-    await b.page.waitForTimeout(700);
-    await b.page.keyboard.up('KeyW');
-    await b.page.waitForTimeout(300);
+    await hold('KeyW');
     const p1 = await me();
     const along = (p1.x - p0.x) * ux + (p1.z - p0.z) * uz;
     const across = Math.abs((p1.x - p0.x) * -uz + (p1.z - p0.z) * ux);
@@ -134,6 +158,9 @@ try {
     if (along > 1) break;
   }
   check(best.along > 1 && best.across < best.along, `controls by the aim: W runs toward the cursor (${best.dir}: ${best.along.toFixed(1)} m along, ${best.across.toFixed(1)} m across)`);
+  await b.page.evaluate(() => {
+    window.echo.game.controls = 'screen';
+  });
 
   // Only the host starts the match.
   const seed0 = await b.page.evaluate(() => window.echo.game.map.seed);

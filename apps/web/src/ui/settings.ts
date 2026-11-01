@@ -21,13 +21,17 @@ export interface Settings {
   color: number;
   /** Rooms you host: bots on the arena (with two or more players). */
   roomBots: boolean;
-  /** WASD: 'aim' — W runs toward the cursor; 'screen' — W is up on the screen. */
-  controls: 'aim' | 'screen';
+  /**
+   * WASD: 'screen' (default) — W is up on the screen, S down, whatever the aim;
+   * 'aim' — W runs toward the cursor, S away from it. A new key: the old
+   * `controls` defaulted to 'aim' and was saved for everyone without a choice.
+   */
+  move: 'screen' | 'aim';
 }
 
 const KEY = 'echo.settings';
 
-export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault', color: -1, roomBots: true, controls: 'aim' };
+export const DEFAULT_SETTINGS: Settings = { volume: 0.8, quality: 'high', shake: true, stats: false, difficulty: 'normal', cls: 'assault', color: -1, roomBots: true, move: 'screen' };
 
 export function loadSettings(): Settings {
   try {
@@ -43,7 +47,7 @@ export function loadSettings(): Settings {
       cls: s.cls === 'scout' || s.cls === 'medic' || s.cls === 'engineer' ? s.cls : 'assault',
       color: typeof s.color === 'number' ? s.color : -1,
       roomBots: typeof s.roomBots === 'boolean' ? s.roomBots : true,
-      controls: s.controls === 'screen' ? 'screen' : 'aim',
+      move: s.move === 'aim' ? 'aim' : 'screen',
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

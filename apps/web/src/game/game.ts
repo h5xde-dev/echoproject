@@ -1256,8 +1256,8 @@ export class Game {
     }
   }
 
-  /** WASD follows the aim (default) or the screen axes (pause → Управление). */
-  controls: 'aim' | 'screen' = 'aim';
+  /** WASD by the screen axes (default) or by the aim (pause → Управление). */
+  controls: 'aim' | 'screen' = 'screen';
   /** Last heading WASD followed: kept while the cursor sits on the soldier. */
   private moveHeading = -Math.PI / 2;
 

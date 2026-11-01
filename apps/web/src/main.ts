@@ -238,15 +238,15 @@ function applySettings(): void {
   game.audio.setVolume(settings.volume);
   game.renderer.setQuality(settings.quality);
   game.renderer.shakeScale = settings.shake ? 1 : 0;
-  game.controls = settings.controls;
+  game.controls = settings.move;
   hud.showStats(settings.stats);
 }
 setVolume.value = String(Math.round(settings.volume * 100));
 setQuality.value = settings.quality;
-setControls.value = settings.controls;
+setControls.value = settings.move;
 setControls.addEventListener('change', () => {
-  settings.controls = setControls.value === 'screen' ? 'screen' : 'aim';
-  game.controls = settings.controls;
+  settings.move = setControls.value === 'aim' ? 'aim' : 'screen';
+  game.controls = settings.move;
   saveSettings(settings);
   syncProfile();
 });
@@ -663,10 +663,10 @@ function applyProfile(a: Account): void {
   if (typeof p.color === 'number') settings.color = p.color;
   if (p.difficulty) settings.difficulty = p.difficulty;
   if (typeof p.roomBots === 'boolean') settings.roomBots = p.roomBots;
-  if (p.controls === 'aim' || p.controls === 'screen') {
-    settings.controls = p.controls;
-    setControls.value = p.controls;
-    game.controls = p.controls;
+  if (p.move === 'aim' || p.move === 'screen') {
+    settings.move = p.move;
+    setControls.value = p.move;
+    game.controls = p.move;
   }
   saveSettings(settings);
   roomBotsInput.checked = settings.roomBots;
@@ -681,7 +681,7 @@ function syncProfile(): void {
   window.clearTimeout(profileTimer);
   profileTimer = window.setTimeout(() => {
     // The whole profile goes each time: camouflage and badge too.
-    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls, camo: cosmetics.camo, badge: cosmetics.badge });
+    void saveProfile({ cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, move: settings.move, camo: cosmetics.camo, badge: cosmetics.badge });
   }, 600);
 }
 
@@ -706,7 +706,7 @@ questsPanel.onPick = (kind, id) => {
   if (!account || !quests) return;
   cosmetics = { ...cosmetics, [kind]: id };
   account.settings = { ...account.settings, [kind]: id };
-  void saveProfile({ ...account.settings, cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, controls: settings.controls });
+  void saveProfile({ ...account.settings, cls: settings.cls, color: settings.color, difficulty: settings.difficulty, roomBots: settings.roomBots, move: settings.move });
   questsPanel.render(quests, cosmetics);
 };
 
