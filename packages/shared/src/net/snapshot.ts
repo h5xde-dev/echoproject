@@ -33,7 +33,7 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
   const creeps: CreepState[] = [];
   for (const a of sim.actors.values()) {
     if (isCreep(a)) {
-      creeps.push([a.id, CREEP_ROLES.indexOf(a.role), a.team, r3(a.x), r3(a.z), Math.round(a.ang * 100) / 100, Math.round(a.hp), a.maxHp, a.alive ? 1 : 0]);
+      creeps.push([a.id, CREEP_ROLES.indexOf(a.role), a.team, r3(a.x), r3(a.z), Math.round(a.ang * 100) / 100, Math.round(a.hp), a.maxHp, a.alive ? 1 : 0, a.weapon === 'smg' ? 1 : 0, Math.round(a.armor)]);
       continue;
     }
     actors.push({
@@ -92,6 +92,8 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
       wires: a.wires || undefined,
       droneExt: a.droneExt || undefined,
       mortarCd: a.mortarCd ? Math.ceil(a.mortarCd) : undefined,
+      aa: a.aa || undefined,
+      atgm: a.atgm || undefined,
     });
   }
   const bullets = sim.bullets.map((b) => ({ id: b.id, x: r3(b.x), z: r3(b.z), vx: r3(b.vx), vz: r3(b.vz), color: b.color }));
@@ -163,14 +165,15 @@ export function roundStateOf(sim: Sim): RoundState | null {
   return { n: sim.round, phase: sim.roundPhase, t: Math.max(0, sim.roundT), canBuy: sim.canBuy };
 }
 
-const CREEP_ROLES: EnemyRole[] = ['creep', 'shieldman', 'kamikaze'];
+const CREEP_ROLES: EnemyRole[] = ['creep', 'shieldman'];
 
 /** A packed creep back as an ordinary actor state (clients draw it like any other). */
 export function expandCreep(c: CreepState): ActorState {
-  const [id, role, team, x, z, ang, hp, maxHp, alive] = c;
+  const [id, role, team, x, z, ang, hp, maxHp, alive, gun, armor] = c;
+  const weapon = gun === 1 ? 'smg' : 'pistol';
   return {
-    id, kind: 'enemy', peerId: '', name: '', x, z, ang, hp, maxHp, armor: 0, alive: alive === 1,
-    weapon: 'pistol', weapons: ['pistol'],
+    id, kind: 'enemy', peerId: '', name: '', x, z, ang, hp, maxHp, armor, alive: alive === 1,
+    weapon, weapons: [weapon],
     buffs: { damage: 0, speed: 0, rapid: 0, nv: 0, regen: 0, stealth: 0, radar: 0, overshield: 0 },
     shield: 0, grenades: 0, money: 0, tier: 0, tierKills: 0, ammo: 1, reloading: false, flashOn: false, slot: 0,
     team, role: CREEP_ROLES[role] ?? 'creep',

@@ -17,7 +17,7 @@ import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, SIEGE_ROLE
 import { ARENA_DOOR_BASE, isCreep, Sim, type PlayerInput } from '@echo/shared/game/sim';
 import type { Mutator, Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem, SiegeRole } from '@echo/shared/game/types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
-import type { Hud, HudPlate, HudScore } from '../ui/hud';
+import type { Hud, HudPlate, HudScore, SiegeShopRow } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
 import { newTally, tallyEvent } from '@echo/shared/progress';
 
@@ -94,6 +94,8 @@ export interface DisplayActor {
   wires?: number;
   mortarCd?: number;
   droneExt?: boolean;
+  aa?: number;
+  atgm?: number;
 }
 
 interface PendingInput {
@@ -160,7 +162,7 @@ class EntityLerp {
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
 /** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
-const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a, creep: COLORS.enemy, shieldman: 0x9a1420, kamikaze: 0xff8a2a };
+const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a, creep: COLORS.enemy, shieldman: 0x9a1420 };
 /** Team modes: blue and red, for humans and bots alike. */
 const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
@@ -244,6 +246,7 @@ export class Game {
     drone: false,
     strike: false,
     mine: false,
+    atgm: false,
   };
   /** Minimap: recent noises of unseen enemies and team markers (ms timestamps). */
   private noiseBlips: { x: number; z: number; at: number }[] = [];
@@ -1126,7 +1129,7 @@ export class Game {
           this.markBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
         } else if (event.text === 'taken') {
           const buff = event.cause === 'reload' ? 'башни стреляют чаще' : 'щит всей команде';
-          this.hud.banner(ours ? 'ГРУЗОВИК НАШ' : 'ГРУЗОВИК У ВРАГА', `+${CONFIG.siege.reward.truck} · ${buff} на ${CONFIG.siege.buffTime} с`);
+          this.hud.banner(ours ? 'ГРУЗОВИК НАШ' : 'ГРУЗОВИК У ВРАГА', `+${CONFIG.siege.reward.truck} · ${buff} на ${CONFIG.siege.buffTime} с${ours ? ' · взявшим — ПТУР (H)' : ''}`);
           if (ours) this.audio.powerup();
         } else if (event.text === 'gone') this.hud.message('Грузовик уехал', 'info');
         break;
@@ -1138,6 +1141,24 @@ export class Game {
         break;
       case 'ewPulse':
         this.renderer.ewPulse(event.x ?? 0, event.z ?? 0, CONFIG.siege.ewRadius, ours);
+        break;
+      case 'waveUp': {
+        const names: Record<string, string> = { guns: 'с автоматами', armor: 'в броне', more: 'с подкреплением' };
+        const what = (event.text ?? '').split(',').map((k) => names[k]).filter(Boolean).join(', ');
+        this.hud.message(ours ? `Наша волна крипов ${what}` : `Вражеские крипы идут ${what}`, ours ? 'good' : 'warn');
+        break;
+      }
+      case 'aa':
+        this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.door());
+        if (event.ownerId === this.localId) this.hud.message('Пост ПВО на месте: сбивает дроны и мины миномёта', 'good');
+        break;
+      case 'intercept':
+        this.renderer.ewPulse(event.x ?? 0, event.z ?? 0, 2, ours);
+        if (ours) this.hud.message('ПВО сбило мину миномёта', 'good');
+        break;
+      case 'atgm':
+        this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.whistle(d));
+        if (event.ownerId === this.localId) this.hud.message('ПТУР пошёл', 'good');
         break;
       default:
         break;
@@ -1411,6 +1432,7 @@ export class Game {
     if (this.input.consume('drone')) this.pending.drone = true;
     if (this.input.consume('strike')) this.pending.strike = true;
     if (this.input.consume('mine')) this.pending.mine = true;
+    if (this.input.consume('atgm')) this.pending.atgm = true;
     if (this.input.consume('mark')) {
       const g = this.renderer.screenToGround(this.input.mouseX, this.input.mouseY);
       this.pending.mark = { x: g.x, z: g.z };
@@ -1492,7 +1514,9 @@ export class Game {
       drone: this.pending.drone,
       strike: this.pending.strike,
       mine: this.pending.mine,
+      atgm: this.pending.atgm || undefined,
     };
+    this.pending.atgm = false;
     this.pending.strike = false;
     this.pending.mine = false;
     this.pending.mark = null;
@@ -1653,6 +1677,8 @@ export class Game {
           wires: a.wires,
           mortarCd: a.mortarCd,
           droneExt: a.droneExt,
+          aa: a.aa,
+          atgm: a.atgm,
         });
       }
       for (const id of this.prevTick.keys()) if (!this.sim.actors.has(id)) this.prevTick.delete(id);
@@ -1835,6 +1861,8 @@ export class Game {
         wires: b.wires,
         mortarCd: b.mortarCd,
         droneExt: b.droneExt,
+        aa: b.aa,
+        atgm: b.atgm,
       };
       if (d.isLocal) {
         const mirror = this.sim.actors.get(this.localId);
@@ -1886,15 +1914,22 @@ export class Game {
   private siegeBuys: { item: string; at: number }[] = [];
 
   /** The team shop as this fighter sees it: their price, the bank, what is out of reach. */
-  private siegeShopRows(): { bank: number; role: string; rows: { item: ShopItem; name: string; price: number; note: string; own: boolean; locked: boolean }[] } {
+  private siegeShopRows(): { bank: number; role: string; rows: SiegeShopRow[] } {
     const me = this.localDisplay();
     const team = this.localTeam();
-    const bank = this.sim.modeState.bank?.[team] ?? 0;
+    const ms = this.sim.modeState;
+    const bank = ms.bank?.[team] ?? 0;
+    // The match clock counts down from the limit: what is on sale yet.
+    const elapsed = CONFIG.siege.timeLimit - ms.t;
+    const pending = (ms.waveUp?.[team] ?? '').split(',');
     const now = performance.now();
     this.siegeBuys = this.siegeBuys.filter((b) => now - b.at < CONFIG.siege.repeatWindow * 1000);
     const rows = SIEGE_SHOP.map((e) => {
       const price = siegePrice(e, me?.srole, this.siegeBuys.filter((b) => b.item === e.item).length);
-      return { item: e.item, name: e.name, price, note: e.note, own: !e.role || e.role === me?.srole, locked: bank < price || (e.item === `role_${me?.srole}`) };
+      const wait = (e.from ?? 0) - elapsed;
+      const owned = (me?.weapons.includes(e.item as WeaponId) ?? false) || pending.includes(e.item.slice(3)) || e.item === `role_${me?.srole}`;
+      const note = wait > 0 ? `с ${Math.floor((e.from ?? 0) / 60)}:${String((e.from ?? 0) % 60).padStart(2, '0')}` : owned ? (e.group === 'self' ? 'уже есть' : 'уже куплено') : e.note;
+      return { item: e.item, name: e.name, price, note, own: !e.role || e.role === me?.srole, locked: bank < price || wait > 0 || owned, group: e.group };
     });
     return { bank, role: me?.srole ? SIEGE_ROLES[me.srole].name : '', rows };
   }
@@ -2298,7 +2333,7 @@ export class Game {
       tierKills: self.tierKills,
       round: this.localRoundState(),
       modeTitle: modeInfo(this.matchMode).title,
-      siege: this.matchMode === 'siege' ? { role: self.srole, lane: self.lane ?? 0, wires: self.wires ?? 0, mortarCd: self.mortarCd ?? 0 } : undefined,
+      siege: this.matchMode === 'siege' ? { role: self.srole, lane: self.lane ?? 0, wires: self.wires ?? 0, mortarCd: self.mortarCd ?? 0, aa: self.aa ?? 0, atgm: self.atgm ?? 0 } : undefined,
     });
 
     // Fog of war applies to the minimap too: only hostiles that are seen,

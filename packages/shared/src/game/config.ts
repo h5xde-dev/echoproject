@@ -385,7 +385,6 @@ export const CONFIG = {
     /** «Осада» lane creeps (never rolled; hit points come from CONFIG.siege). */
     creep: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.78 },
     shieldman: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.62 },
-    kamikaze: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 1.05 },
   },
 
   /** Match mutators (the host picks them, or the week's playlist). */
@@ -566,13 +565,15 @@ export const CONFIG = {
     /** The throne opens to damage this late even with every tower up. */
     throneOpenAt: 720,
     /** Creeps: a wave per lane per team every `waveEvery` s. */
-    firstWave: 4,
+    firstWave: 15,
     waveEvery: 30,
     waveCreeps: 3,
+    /** The opening: smaller waves, so the first minutes are a fight over lanes, not a brawl. */
+    earlyUntil: 180,
+    earlyCreeps: 2,
     /** After this many seconds a wave is half again as big. */
     bigWavesAt: 600,
-    shieldFrom: 60,
-    kamikazeFrom: 300,
+    shieldFrom: 180,
     creepCap: 18,
     /** Creeps' guns hit for this share (they come in numbers). */
     creepDamageMul: 0.35,
@@ -582,18 +583,18 @@ export const CONFIG = {
     throneMul: 0.6,
     creepHp: 90,
     shieldHp: 220,
-    kamikazeHp: 45,
-    /** Creeps see and shoot this far; kamikazes sprint from `kamikazeSprint`. */
+    /** Creeps see and shoot this far. */
     creepAggro: 9,
-    kamikazeSprint: 8,
-    kamikazeRadius: 3.2,
-    kamikazeDamage: 70,
+    /** Upgrades of the next wave: armour on each creep, creeps added per lane, the gun they get. */
+    cwArmor: 50,
+    cwMore: 2,
+    cwGun: 'smg' as const,
     /** A shieldman's shield: hits from the front do this share. */
     shieldFront: 0.15,
     /** Income: per second per team; the side with fewer towers gets more. */
     income: 2,
     comebackMul: 1.3,
-    reward: { creep: 10, shieldman: 20, kamikaze: 15, kill: 60, bountyPer2: 20, truck: 150, tower: 200, throne: 0 },
+    reward: { creep: 10, shieldman: 20, kill: 60, bountyPer2: 20, truck: 150, tower: 200, throne: 0 },
     /** Shop rules: off-role price, and each repeat buy of the same item within a minute. */
     offRoleMul: 1.5,
     repeatMul: 0.25,
@@ -635,6 +636,10 @@ export const CONFIG = {
     /** An operator this long near home is shown on the enemy minimap. */
     campRadius: 15,
     campTime: 20,
+    /** Air defence (V): posts per team, hit points, reach, fire rate, damage to a drone, shells caught. */
+    aa: { max: 2, hp: 250, range: 13, cd: 0.45, droneDamage: 30, intercept: 12, interceptChance: 0.6 },
+    /** Anti-tank missile from the truck (H): one shot, flies straight, blast and a big hit on a structure. */
+    atgm: { speed: 30, range: 60, radius: 3, damage: 130, structure: 650 },
     /** Barbed wire: coils carried, coils laid at once, the alarm's reach. */
     maxWires: 3,
     wireLen: 3,

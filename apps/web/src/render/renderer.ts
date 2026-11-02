@@ -1568,6 +1568,8 @@ export class Renderer {
     const model = turned ? assets.prop(p.kind, p.hh * 2, p.hw * 2) : assets.prop(p.kind, p.hw * 2, p.hh * 2);
     if (p.kind === 'wire') {
       group.add(wireVisual(p.hw, p.hh));
+    } else if (p.kind === 'aa') {
+      group.add(airDefenceVisual());
     } else if (p.kind === 'tower' || p.kind === 'throne') {
       const m = this.map;
       const team = m && p.x > (m.minX + m.maxX) / 2 ? 1 : 0;
@@ -2731,5 +2733,24 @@ function structureVisual(kind: 'tower' | 'throne', team: number): THREE.Group {
     dome.name = 'dome';
     g.add(plinth, core, dome);
   }
+  return g;
+}
+
+/** «Осада»: an air-defence post — a sandbagged base and a twin barrel pointing up. */
+function airDefenceVisual(): THREE.Group {
+  const g = new THREE.Group();
+  const bags = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.45, 10), new THREE.MeshStandardMaterial({ color: 0x6a5f44, roughness: 0.95 }));
+  bags.position.y = 0.22;
+  const metal = new THREE.MeshStandardMaterial({ color: 0x3a4036, roughness: 0.6, metalness: 0.5 });
+  const mount = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.3, 0.45), metal);
+  mount.position.y = 0.6;
+  g.add(bags, mount);
+  for (const side of [-0.1, 0.1]) {
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.1, 8), metal);
+    barrel.rotation.z = -0.9;
+    barrel.position.set(0.32, 1.0, side);
+    g.add(barrel);
+  }
+  g.traverse((o) => ((o as THREE.Mesh).castShadow = true));
   return g;
 }

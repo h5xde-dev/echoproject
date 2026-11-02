@@ -2100,7 +2100,8 @@ for (const info of ARENAS) {
   s.fillBots();
   const fighters = [...s.actors.values()];
   check(fighters.length === CONFIG.siege.fighters, `four a side whatever the room asked for (${fighters.length})`);
-  check(p.siegeRole === 'line' && p.lane === 0 && p.weapons.includes('rifle'), `a person gets the first seat: line, top lane (${p.siegeRole}${p.lane})`);
+  check(p.siegeRole === 'line' && p.lane === 0, `a person gets the first seat: line, top lane (${p.siegeRole}${p.lane})`);
+  check(p.weapons.join() === 'pistol,knife' && p.grenades === 0 && p.armor === 0, `everyone starts with a pistol (${p.weapons.join()}, ${p.grenades} grenades)`);
   const roles = [0, 1].map((t) => fighters.filter((a) => a.team === t).map((a) => `${a.siegeRole}${a.siegeRole === 'line' ? a.lane : ''}`).sort().join(','));
   check(roles.every((r) => r === 'line0,line1,op,sab'), `each side: two lines, an operator, a saboteur (${roles.join(' | ')})`);
 
@@ -2108,7 +2109,8 @@ for (const info of ARENAS) {
   priv.siegeWaveT = 0;
   s.step(dt);
   const creeps = [...s.actors.values()].filter(isCreep);
-  check(creeps.length === 4 * CONFIG.siege.waveCreeps, `a wave: ${creeps.length} creeps on both lanes for both sides`);
+  check(creeps.length === 4 * CONFIG.siege.earlyCreeps, `an early wave is small: ${creeps.length} creeps on both lanes for both sides`);
+  check(!creeps.some((c) => (c.role as string) === 'kamikaze'), 'no kamikazes among the creeps');
   const blue = creeps.find((c) => c.team === 0)!;
   const x0 = blue.x;
   for (let i = 0; i < Math.round(8 / dt); i++) s.step(dt);
@@ -2163,8 +2165,28 @@ for (const info of ARENAS) {
   p.z = own.prop.z;
   check(s.buy(p, 'tw_mg') && own.up === 'mg' && s.bank[0] === 800, `the line upgrades the tower it stands by (${own.up}, bank ${s.bank[0]})`);
   const b1 = s.bank[0];
-  s.buy(p, 'drone');
-  check(b1 - s.bank[0] === Math.round(80 * CONFIG.siege.offRoleMul), `off-role items cost more (${b1 - s.bank[0]})`);
+  s.buy(p, 'shotgun');
+  check(b1 - s.bank[0] === Math.round(110 * CONFIG.siege.offRoleMul), `off-role items cost more (${b1 - s.bank[0]})`);
+  check(!s.buy(p, 'drone') || s.time >= 60, 'drones are not on sale in the first minute');
+  // A gun of one's own: bought from the bank, kept after death, never dropped.
+  s.bank[0] = 1000;
+  check(s.buy(p, 'rifle') && p.weapon === 'rifle', 'a rifle bought goes straight to hand');
+  const pickupsBefore = s.pickups.length;
+  p.shield = 0;
+  s.damageActor(p, 999, -1);
+  check(s.pickups.length === pickupsBefore, 'no gun falls from the dead');
+  (s as unknown as { respawn(a: unknown): void }).respawn(p);
+  check(p.weapons.includes('rifle') && p.weapons.includes('shotgun') && p.weapons.includes('pistol'), `bought guns come back with the next life (${p.weapons.join()})`);
+  // Upgrades for the next wave of creeps.
+  check(s.buy(p, 'cw_guns') && s.buy(p, 'cw_armor') && !s.buy(p, 'cw_guns'), 'creep upgrades: bought once per wave');
+  priv.siegeWaveT = 0;
+  s.drainEvents();
+  const before = new Set(s.actors.keys());
+  s.step(dt);
+  const fresh = [...s.actors.values()].filter((c) => isCreep(c) && c.team === 0 && !before.has(c.id));
+  check(fresh.length > 0 && fresh.every((c) => c.weapon === 'smg' && c.armor === CONFIG.siege.cwArmor), `the next wave comes with SMGs and armour (${fresh.length})`);
+  const red2 = [...s.actors.values()].filter((c) => isCreep(c) && c.team === 1 && !before.has(c.id) && c.weapon === 'smg');
+  check(red2.length === 0, 'the other side’s creeps are not upgraded');
   s.buy(p, 'wire');
   const b2 = s.bank[0];
   s.buy(p, 'wire');
@@ -2192,11 +2214,58 @@ for (const info of ARENAS) {
     p.z = tr.z;
     p.alive = true;
     p.hp = p.maxHp;
-    for (const a of s.actors.values()) if (a !== p && !isCreep(a) && a.ai) a.alive = false;
+    for (const a of s.actors.values()) {
+      if (a === p || isCreep(a) || !a.ai) continue;
+      // Out of the way, and not back (bots would shop from the same bank meanwhile).
+      a.alive = false;
+      a.respawnT = 99;
+    }
     s.step(dt);
     taken = s.drainEvents().some((e) => e.type === 'siege' && e.id === 'truck' && e.text === 'taken' && e.team === p.team);
   }
   check(taken && s.bank[0] >= bankBefore + CONFIG.siege.reward.truck - 1, `held alone: taken, +${Math.round(s.bank[0] - bankBefore)} to the bank`);
+
+  // The truck holds an anti-tank missile; it breaks a good part of a tower.
+  check(p.atgm === 1, 'whoever took the truck carries an ATGM');
+  const target = priv.towers.find((t) => !t.throne && t.team === 1 && t.prop.alive)!;
+  p.x = target.prop.x - 8;
+  p.z = target.prop.z;
+  p.ang = 0;
+  const thp = target.prop.hp;
+  s.applyInput(p, { seq: 1, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt, atgm: true });
+  for (let i = 0; i < Math.round(1 / dt); i++) s.step(dt);
+  check(p.atgm === 0 && target.prop.hp <= thp - CONFIG.siege.atgm.structure + 1, `the missile hits the tower (${thp} → ${Math.round(target.prop.hp)})`);
+
+  // Air defence: an enemy drone in reach is shot down.
+  p.aa = 1;
+  p.x = 46;
+  p.z = 21.75;
+  p.ang = 0;
+  s.applyInput(p, { seq: 2, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt, deploy: true });
+  const post = s.props.find((x) => x.kind === 'aa' && x.alive);
+  check(!!post && p.aa === 0, 'an air-defence post goes down where you look (V)');
+  const pilot = [...s.actors.values()].find((a) => a.team === 1 && a.siegeRole === 'op')!;
+  pilot.alive = true;
+  pilot.x = 60;
+  pilot.z = 21.75;
+  pilot.drones = 1;
+  s.applyInput(pilot, { seq: 1, moveX: 0, moveZ: 0, aim: Math.PI, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt, drone: true });
+  const drone = s.drones.find((d) => d.ownerId === pilot.id);
+  if (drone && post) {
+    drone.x = post.x + 6;
+    drone.z = post.z;
+  }
+  let downed = false;
+  for (let i = 0; i < Math.round(3 / dt) && !downed; i++) {
+    if (drone && !drone.down && post) {
+      drone.x = post.x + 6;
+      drone.z = post.z;
+      drone.vx = drone.vz = 0;
+    }
+    s.step(dt);
+    downed = !!drone && (drone.down || !s.drones.includes(drone));
+  }
+  check(downed, 'the post shoots down an enemy drone');
 
   // The saboteur's wire rings when an enemy wades into it.
   const sab = [...s.actors.values()].find((a) => a.team === 1 && a.siegeRole === 'sab')!;

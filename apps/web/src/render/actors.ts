@@ -238,11 +238,11 @@ export class ActorVisual {
     const low = !actor.alive ? 0 : actor.downed ? 2.5 : actor.crouched ? 1 : 0;
     this.crouch += (low - this.crouch) * Math.min(1, dt * 10);
     const big =
-      actor.role === 'boss' ? 1.4 : actor.role === 'heavy' || actor.role === 'shieldman' ? 1.15 : actor.role === 'creep' ? 0.85 : actor.role === 'kamikaze' ? 0.78 : 1;
+      actor.role === 'boss' ? 1.4 : actor.role === 'heavy' || actor.role === 'shieldman' ? 1.15 : actor.role === 'creep' ? 0.85 : 1;
     // «Осада»: creeps come by the dozen — no shadows of their own.
     if (!this.shadowsChecked) {
       this.shadowsChecked = true;
-      if (actor.role === 'creep' || actor.role === 'shieldman' || actor.role === 'kamikaze') this.group.traverse((o) => ((o as THREE.Mesh).castShadow = false));
+      if (actor.role === 'creep' || actor.role === 'shieldman') this.group.traverse((o) => ((o as THREE.Mesh).castShadow = false));
     }
     // «Осада»: a shieldman carries a slab of a shield in front of him.
     if (actor.role === 'shieldman' && !this.bodyGroup.getObjectByName('slab')) {

@@ -62,6 +62,7 @@ export const PROP_TABLE: Record<PropKind, PropSpec> = {
   // «Осада»: hit points live in CONFIG.siege (structures take damage their own way).
   tower: { hw: 0.9, hh: 0.9, hp: 1600, explosive: false, fixed: true },
   throne: { hw: 1.5, hh: 1.5, hp: 3000, explosive: false, fixed: true },
+  aa: { hw: 0.55, hh: 0.55, hp: 250, explosive: false, fixed: true },
 };
 
 /** Prop mix per theme: [kind, min, max]. */

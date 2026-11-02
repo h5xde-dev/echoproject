@@ -45,6 +45,8 @@ export interface ModeState {
   exposed?: number[];
   /** Seconds left on each team's truck buff, and which ('reload' | 'shield'). */
   buff?: [string, number, string, number];
+  /** Upgrades bought for each team's next creep wave ('guns,armor,more'). */
+  waveUp?: [string, string];
 }
 
 export interface StaticBody {
@@ -102,7 +104,9 @@ export type PropKind =
   | 'mine'
   /** «Осада»: a lane tower and the throne (bodies of the structures). */
   | 'tower'
-  | 'throne';
+  | 'throne'
+  /** «Осада»: an air-defence post a fighter puts down (V); shoots enemy drones and shells. */
+  | 'aa';
 
 /** Things to use with E. */
 export type InteractKind = 'switch' | 'ammo' | 'med';
@@ -300,8 +304,8 @@ export type ActorKind = 'player' | 'enemy';
 
 /** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
 /** zombie: the infected in «Заражение» — knife only, fast, tough, no light. */
-/** creep, shieldman, kamikaze: «Осада» lane creeps. */
-export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie' | 'creep' | 'shieldman' | 'kamikaze';
+/** creep, shieldman: «Осада» lane creeps. */
+export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie' | 'creep' | 'shieldman';
 
 /** A player's speciality (bots have none). */
 export type PlayerClass = 'assault' | 'scout' | 'medic' | 'engineer';
@@ -483,6 +487,10 @@ export interface Actor {
   wires?: number;
   droneExt?: boolean;
   mortarCd?: number;
+  /** «Осада»: guns bought (kept from life to life), air-defence posts and anti-tank missiles carried. */
+  guns?: WeaponId[];
+  aa?: number;
+  atgm?: number;
 }
 
 /** A kamikaze FPV drone: flown by a soldier who stands still meanwhile. */
@@ -553,6 +561,8 @@ export interface FlagState {
 export interface Bullet {
   /** Fired by a tower: its team (towers are not actors). */
   team?: number;
+  /** An anti-tank missile: goes off on whatever it hits (see Sim.rocketHit). */
+  rocket?: boolean;
   /** Already punched through a thin wall (one per bullet, at reduced damage). */
   pierced?: boolean;
   id: string;
@@ -610,7 +620,9 @@ export interface FireZone {
 export type ShopItem =
   | 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov' | 'drone' | 'flare' | 'mine'
   /** «Осада»: the team shop. */
-  | 'droneExt' | 'mortar' | 'wire' | 'tw_mg' | 'tw_flame' | 'tw_ew' | 'role_line' | 'role_sab' | 'role_op';
+  | 'droneExt' | 'mortar' | 'wire' | 'tw_mg' | 'tw_flame' | 'tw_ew' | 'role_line' | 'role_sab' | 'role_op'
+  /** Creeps of the team's next wave: guns, armour, two more per lane; an air-defence post. */
+  | 'cw_guns' | 'cw_armor' | 'cw_more' | 'aa';
 
 export interface NoiseEvent {
   x: number;

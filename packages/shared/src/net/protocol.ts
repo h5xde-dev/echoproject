@@ -65,13 +65,15 @@ export interface ActorState {
   wires?: number;
   droneExt?: boolean;
   mortarCd?: number;
+  aa?: number;
+  atgm?: number;
 }
 
 /**
- * «Осада» lane creeps, many and simple: [id, role, team, x, z, ang, hp, maxHp, alive]
- * with role 0 creep, 1 shieldman, 2 kamikaze (see expandCreep).
+ * «Осада» lane creeps, many and simple: [id, role, team, x, z, ang, hp, maxHp, alive, gun, armor]
+ * with role 0 creep, 1 shieldman; gun 0 pistol, 1 SMG (an upgraded wave) — see expandCreep.
  */
-export type CreepState = [number, number, number, number, number, number, number, number, number];
+export type CreepState = [number, number, number, number, number, number, number, number, number, number, number];
 
 export interface BulletState {
   id: string;

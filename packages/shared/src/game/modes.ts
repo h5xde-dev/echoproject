@@ -172,7 +172,7 @@ export const SHOP: ShopEntry[] = [
 /** «Осада»: names of the roles. */
 export const SIEGE_ROLES: Record<SiegeRole, { name: string; short: string; desc: string }> = {
   line: { name: 'Линейный', short: 'ЛИНИЯ', desc: 'Держит свою линию с крипами, ломает башни, ставит улучшения на свои.' },
-  sab: { name: 'Диверсант', short: 'ДИВЕРСАНТ', desc: 'Лес: грузовики, колючая проволока (N), удары во фланг.' },
+  sab: { name: 'Диверсант', short: 'ДИВЕРСАНТ', desc: 'Лес: грузовики (в них ПТУР — H), колючая проволока (N), удары во фланг.' },
   op: { name: 'Оператор', short: 'ОПЕРАТОР', desc: 'FPV-дроны (X) и миномёт (T) по отметкам команды (Z).' },
 };
 
@@ -183,20 +183,39 @@ export interface SiegeShopEntry {
   /** The role it belongs to: everyone else pays CONFIG.siege.offRoleMul. */
   role?: SiegeRole;
   note: string;
+  /** Shop section: a gun or gear for yourself, something for the team, a role. */
+  group: 'self' | 'team' | 'role';
+  /** On sale only from this second of the match (the opening stays a fight of guns). */
+  from?: number;
 }
 
 /** «Осада»: the team shop. Prices from the design: drones and the mortar the operator's, wire the saboteur's, towers the line's. */
 export const SIEGE_SHOP: SiegeShopEntry[] = [
-  { item: 'drone', name: 'FPV-дрон', price: 80, role: 'op', note: 'до 2 в запасе' },
-  { item: 'droneExt', name: 'Батарея дрона +10 с', price: 120, role: 'op', note: '15 → 25 с полёта' },
-  { item: 'mortar', name: 'Залп миномёта', price: 150, role: 'op', note: 'T, по отметке или дрону' },
-  { item: 'wire', name: 'Катушка проволоки', price: 40, role: 'sab', note: 'N, до 3 на земле' },
-  { item: 'tw_mg', name: 'Башня: пулемёт', price: 200, role: 'line', note: 'ближайшая своя башня' },
-  { item: 'tw_flame', name: 'Башня: огнемёт', price: 250, role: 'line', note: 'ближняя, поджигает' },
-  { item: 'tw_ew', name: 'Башня: РЭБ', price: 300, role: 'line', note: 'глушит дроны, подсвечивает лес' },
-  { item: 'role_line', name: 'Роль: линейный', price: 0, note: 'со следующего возрождения' },
-  { item: 'role_sab', name: 'Роль: диверсант', price: 0, note: 'со следующего возрождения' },
-  { item: 'role_op', name: 'Роль: оператор', price: 0, note: 'со следующего возрождения' },
+  // For yourself: everyone starts with a pistol; guns bought stay with you from life to life.
+  { item: 'rifle', name: 'Винтовка «Вектор»', price: 200, role: 'line', note: 'остаётся после смерти', group: 'self' },
+  { item: 'lmg', name: 'Пулемёт «Рой»', price: 260, role: 'line', note: 'остаётся после смерти', group: 'self' },
+  { item: 'shotgun', name: 'Дробовик «Кром»', price: 110, role: 'sab', note: 'остаётся после смерти', group: 'self' },
+  { item: 'silenced', name: 'Пистолет с глушителем', price: 60, role: 'sab', note: 'остаётся после смерти', group: 'self' },
+  { item: 'flamer', name: 'Огнемёт «Пал»', price: 180, role: 'sab', note: 'остаётся после смерти', group: 'self' },
+  { item: 'smg', name: 'ПП «Грант»', price: 120, role: 'op', note: 'остаётся после смерти', group: 'self' },
+  { item: 'sniper', name: 'Снайперка «Стриж»', price: 300, role: 'op', note: 'остаётся после смерти', group: 'self' },
+  { item: 'armor', name: 'Бронежилет', price: 80, note: 'до смерти', group: 'self' },
+  { item: 'grenade', name: 'Осколочная граната', price: 40, note: 'G', group: 'self' },
+  // For the team.
+  { item: 'cw_guns', name: 'Крипы: автоматы', price: 120, role: 'line', note: 'следующая волна с ПП', group: 'team' },
+  { item: 'cw_armor', name: 'Крипы: броня', price: 100, role: 'line', note: 'следующая волна в броне', group: 'team' },
+  { item: 'cw_more', name: 'Крипы: подкрепление', price: 150, role: 'line', note: '+2 крипа на линию в следующей волне', group: 'team' },
+  { item: 'tw_mg', name: 'Башня: пулемёт', price: 200, role: 'line', note: 'ближайшая своя башня', group: 'team' },
+  { item: 'tw_flame', name: 'Башня: огнемёт', price: 250, role: 'line', note: 'ближняя, поджигает', group: 'team' },
+  { item: 'tw_ew', name: 'Башня: РЭБ', price: 300, role: 'line', note: 'глушит дроны, подсвечивает лес', group: 'team' },
+  { item: 'aa', name: 'Пост ПВО', price: 180, note: 'V: сбивает дроны и мины миномёта', group: 'team', from: 60 },
+  { item: 'drone', name: 'FPV-дрон', price: 80, role: 'op', note: 'X, до 2 в запасе', group: 'team', from: 60 },
+  { item: 'droneExt', name: 'Батарея дрона +10 с', price: 120, role: 'op', note: '15 → 25 с полёта', group: 'team', from: 60 },
+  { item: 'mortar', name: 'Залп миномёта', price: 150, role: 'op', note: 'T, по отметке или дрону', group: 'team', from: 120 },
+  { item: 'wire', name: 'Катушка проволоки', price: 40, role: 'sab', note: 'N, до 3 на земле', group: 'team' },
+  { item: 'role_line', name: 'Роль: линейный', price: 0, note: 'снаряжение — со следующей жизни', group: 'role' },
+  { item: 'role_sab', name: 'Роль: диверсант', price: 0, note: 'снаряжение — со следующей жизни', group: 'role' },
+  { item: 'role_op', name: 'Роль: оператор', price: 0, note: 'снаряжение — со следующей жизни', group: 'role' },
 ];
 
 /** What an item costs this fighter: off-role and repeat purchases cost more. */

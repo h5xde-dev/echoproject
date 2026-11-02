@@ -2,7 +2,7 @@ import { Rng } from '../core/rng';
 import { clamp, dist, normalize, segCircleHit } from '../core/math';
 import { CONFIG, TILE } from './config';
 import { updateBullets, type BulletCtx } from './bullets';
-import { pickPowerup } from './levelgen';
+import { pickPowerup, PROP_TABLE } from './levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, SHOP, SIEGE_SHOP, siegePrice, TEAM_NAMES } from './modes';
 import { NavGrid } from './nav';
 import { PhysicsWorld, resolveCircleBox, type DoorBody } from './physics';
@@ -91,6 +91,8 @@ export interface PlayerInput {
   strike?: boolean;
   /** Engineer: lay a mine underfoot (N). */
   mine?: boolean;
+  /** «Осада»: fire the anti-tank missile from the truck (H). */
+  atgm?: boolean;
 }
 
 /** A prop as snapshots carry it; shape only for props placed mid-match. */
@@ -168,7 +170,7 @@ export function towerOwnerId(propId: number): number {
 
 /** «Осада» lane creeps: no score, no seat, simple minds. */
 export function isCreep(a: { role?: EnemyRole }): boolean {
-  return a.role === 'creep' || a.role === 'shieldman' || a.role === 'kamikaze';
+  return a.role === 'creep' || a.role === 'shieldman';
 }
 
 /** A tower or throne: the body is a map prop, the rest lives here. */
@@ -269,6 +271,11 @@ export class Sim {
   private wireIn = new Set<number>();
   private ewPulse = 0;
   private laneZ: [number, number] = [0, 0];
+  /** Upgrades bought for each team's next creep wave. */
+  private waveUp: Set<string>[] = [new Set(), new Set()];
+  /** Air-defence posts: seconds to the next shot; shells already tried. */
+  private aaCd = new Map<number, number>();
+  private shellsTried = new Set<number>();
   /** Bot and guard sharpness (host setting). */
   difficulty: Difficulty = 'normal';
   /**
@@ -768,7 +775,11 @@ export class Sim {
       return;
     }
     actor.using = !!input.use;
-    if (input.deploy) this.deployShield(actor);
+    if (input.deploy) {
+      if (this.mode === 'siege') this.placeAirDefence(actor);
+      else this.deployShield(actor);
+    }
+    if (input.atgm) this.fireAtgm(actor);
     // Markers go to everyone; clients show them to the marker's allies only.
     if (input.mark && actor.markCd <= 0) {
       actor.markCd = 0.6;
@@ -1652,6 +1663,10 @@ export class Sim {
       drones: this.drones,
     };
     for (const hit of updateBullets(bullets, ctx, dt)) {
+      if (hit.bullet.rocket) {
+        this.rocketHit(hit.bullet, hit.x, hit.z, hit.kind === 'prop' ? hit.prop : null);
+        continue;
+      }
       if (hit.kind === 'drone') {
         this.damageDrone(hit.drone, damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul, hit.bullet.ownerId);
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1.6, weapon: hit.bullet.weapon });
@@ -1684,6 +1699,10 @@ export class Sim {
           weapon: hit.bullet.weapon,
           ownerId: hit.bullet.ownerId,
         });
+      } else if (hit.prop.kind === 'aa') {
+        const shooter = this.actors.get(hit.bullet.ownerId);
+        this.damageAirDefence(hit.prop, damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul, hit.bullet.team ?? shooter?.team ?? -1);
+        this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 0.8, weapon: hit.bullet.weapon });
       } else if (hit.prop.kind === 'tower' || hit.prop.kind === 'throne') {
         const shooter = this.actors.get(hit.bullet.ownerId);
         const dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
@@ -1838,7 +1857,8 @@ export class Sim {
 
   /** The dead drop their best gun (not in gun game; co-op guards sometimes). */
   private dropWeapon(actor: Actor): void {
-    if (this.mode === 'gun') return;
+    // Gun game climbs a ladder; in «Осада» guns are bought, not picked up.
+    if (this.mode === 'gun' || this.mode === 'siege') return;
     if (actor.weapon === 'pistol' || actor.weapon === 'knife') return;
     if (this.mode === 'coop' && (actor.kind === 'player' || this.rng.next() > 0.5)) return;
     this.pickups.push({
@@ -1881,6 +1901,9 @@ export class Sim {
     // Towers and the throne take blasts in full: a drone or a shell is how you crack one.
     for (const t of this.towers) {
       if (t.prop.alive && dist(t.prop.x, t.prop.z, x, z) < radius + t.prop.hw) this.damageStructure(t.prop, damage * 0.6, team, sourceId, false);
+    }
+    for (const p of this.props) {
+      if (p.kind === 'aa' && p.alive && dist(p.x, p.z, x, z) < radius + p.hw) this.damageAirDefence(p, damage * (1 - dist(p.x, p.z, x, z) / (radius + p.hw)), team);
     }
     for (const d of this.drones) if (dist(d.x, d.z, x, z) < radius) this.damageDrone(d, damage, sourceId);
     for (const actor of this.actors.values()) {
@@ -2150,6 +2173,16 @@ export class Sim {
 
     // «Осада», nobody in sight: shoot the enemy structure the creeps are on.
     if (this.mode === 'siege' && !canSee && ai.mode !== 'chase') {
+      // A missile from the truck: on the nearest enemy structure within reach.
+      if ((actor.atgm ?? 0) > 0) {
+        const target = this.towers.find(
+          (t) => t.prop.alive && t.team !== actor.team && (!t.throne || this.throneOpen(t.team)) && dist(actor.x, actor.z, t.prop.x, t.prop.z) < 24 && this.world.lineOfSight(actor.x, actor.z, t.prop.x, t.prop.z, this.scratch),
+        );
+        if (target) {
+          actor.ang = Math.atan2(target.prop.z - actor.z, target.prop.x - actor.x);
+          this.fireAtgm(actor);
+        }
+      }
       const st = this.structureTarget(actor, 11);
       if (st) {
         actor.ang = turnTowards(actor.ang, Math.atan2(st.z - actor.z, st.x - actor.x), 7 * dt);
@@ -3689,17 +3722,18 @@ export class Sim {
     actor.lane = actor.id % 2;
   }
 
-  /** What a role carries into each life. */
+  /**
+   * What a fighter carries into each life: a pistol (and a knife), and every
+   * gun bought so far — guns are bought, never picked up. Grenades and the
+   * rest of the utility are bought too; the saboteur gets one coil of wire.
+   */
   private siegeKit(actor: Actor): void {
     const role = actor.siegeRole ?? 'line';
-    const knife: WeaponId[] = actor.kind === 'player' ? ['knife'] : [];
-    const kit: WeaponId[] = role === 'line' ? ['rifle', 'pistol'] : role === 'sab' ? ['shotgun', 'silenced'] : ['smg', 'pistol'];
-    actor.weapons = [...kit, ...knife];
-    this.equip(actor, kit[0]);
-    actor.grenades = Math.max(actor.grenades, 1);
-    if (role === 'line') actor.armor = Math.max(actor.armor, 50);
-    if (role === 'sab') actor.wires = Math.max(actor.wires ?? 0, 2);
-    if (role === 'op') actor.drones = Math.max(actor.drones, 1);
+    const guns = actor.guns ?? [];
+    actor.weapons = ['pistol', ...guns, ...(actor.kind === 'player' ? (['knife'] as WeaponId[]) : [])];
+    this.equip(actor, guns.length ? guns[guns.length - 1] : 'pistol');
+    actor.grenades = actor.smokes = actor.flashes = actor.molotovs = 0;
+    if (role === 'sab') actor.wires = Math.max(actor.wires ?? 0, 1);
   }
 
   /** Shop: take another role (a bot holding it hands it over; a person keeps theirs). */
@@ -3737,8 +3771,28 @@ export class Sim {
     if (!entry || actor.team < 0 || this.matchOver) return false;
     if (item === 'role_line' || item === 'role_sab' || item === 'role_op') return this.switchRole(actor, item.slice(5) as SiegeRole);
     const price = siegePrice(entry, actor.siegeRole, this.recentBuys(actor.id, item));
-    if (this.bank[actor.team] < price) return false;
-    if (item === 'drone') {
+    if (this.bank[actor.team] < price || this.time < (entry.from ?? 0)) return false;
+    if (item in WEAPONS) {
+      // A gun for yourself: kept from life to life.
+      const gun = item as WeaponId;
+      if (actor.guns?.includes(gun)) return false;
+      actor.guns = [...(actor.guns ?? []), gun];
+      if (!actor.weapons.includes(gun)) actor.weapons.splice(actor.weapons.length - (actor.weapons.includes('knife') ? 1 : 0), 0, gun);
+      this.equip(actor, gun);
+    } else if (item === 'armor') {
+      if (actor.armor >= CONFIG.powerups.maxArmor) return false;
+      actor.armor = CONFIG.powerups.maxArmor;
+    } else if (item === 'grenade') {
+      if (actor.grenades >= CONFIG.grenade.max) return false;
+      actor.grenades++;
+    } else if (item === 'cw_guns' || item === 'cw_armor' || item === 'cw_more') {
+      const up = item.slice(3);
+      if (this.waveUp[actor.team].has(up)) return false;
+      this.waveUp[actor.team].add(up);
+    } else if (item === 'aa') {
+      if ((actor.aa ?? 0) >= 1) return false;
+      actor.aa = 1;
+    } else if (item === 'drone') {
       if (actor.drones >= 2) return false;
       actor.drones++;
     } else if (item === 'droneExt') {
@@ -3779,7 +3833,7 @@ export class Sim {
     const R = CONFIG.siege.reward;
     const killer = this.actors.get(sourceId);
     if (!killer || killer.team < 0 || killer.team === victim.team) return;
-    if (isCreep(victim)) this.earn(killer.team, victim.role === 'shieldman' ? R.shieldman : victim.role === 'kamikaze' ? R.kamikaze : R.creep);
+    if (isCreep(victim)) this.earn(killer.team, victim.role === 'shieldman' ? R.shieldman : R.creep);
     else this.earn(killer.team, R.kill + R.bountyPer2 * Math.floor(streak / 2));
   }
 
@@ -3861,25 +3915,35 @@ export class Sim {
   private spawnSiegeWave(): void {
     const S = CONFIG.siege;
     this.siegeWaveN++;
-    const count = Math.round(S.waveCreeps * (this.time >= S.bigWavesAt ? 1.5 : 1));
+    const base = this.time < S.earlyUntil ? S.earlyCreeps : S.waveCreeps;
     for (const team of [0, 1]) {
+      const up = this.waveUp[team];
+      const count = Math.round(base * (this.time >= S.bigWavesAt ? 1.5 : 1)) + (up.has('more') ? S.cwMore : 0);
       let alive = 0;
       for (const a of this.actors.values()) if (a.alive && a.team === team && isCreep(a)) alive++;
+      // Bought reinforcements come on top of the cap.
+      const cap = S.creepCap + (up.has('more') ? 2 * S.cwMore : 0);
       for (const lane of [0, 1]) {
         const roles: EnemyRole[] = Array.from({ length: count }, () => 'creep' as EnemyRole);
         if (this.time >= S.shieldFrom && this.siegeWaveN % 2 === 0) roles.unshift('shieldman');
-        if (this.time >= S.kamikazeFrom) roles.push('kamikaze');
         roles.forEach((role, i) => {
-          if (alive >= S.creepCap) return;
+          if (alive >= cap) return;
           alive++;
-          this.spawnCreep(team, lane, role, i, roles.length);
+          const c = this.spawnCreep(team, lane, role, i, roles.length);
+          if (up.has('guns')) {
+            c.weapons = [S.cwGun];
+            this.equip(c, S.cwGun);
+          }
+          if (up.has('armor')) c.armor = S.cwArmor;
         });
       }
+      if (up.size) this.events.push({ type: 'siege', id: 'waveUp', team, text: [...up].join(',') });
+      up.clear();
     }
     this.events.push({ type: 'siege', id: 'wave', text: String(this.siegeWaveN) });
   }
 
-  private spawnCreep(team: number, lane: number, role: EnemyRole, i: number, n: number): void {
+  private spawnCreep(team: number, lane: number, role: EnemyRole, i: number, n: number): Actor {
     const S = CONFIG.siege;
     const throne = this.throneOf(team);
     const x0 = (throne?.prop.x ?? this.map.minX + 5) + this.siegeDir(team) * (1.5 + i * 0.9);
@@ -3889,8 +3953,8 @@ export class Sim {
     c.team = team;
     c.lane = lane;
     c.role = role;
-    c.maxHp = c.hp = role === 'shieldman' ? S.shieldHp : role === 'kamikaze' ? S.kamikazeHp : S.creepHp;
-    c.radius = role === 'shieldman' ? 0.62 : role === 'kamikaze' ? 0.36 : 0.42;
+    c.maxHp = c.hp = role === 'shieldman' ? S.shieldHp : S.creepHp;
+    c.radius = role === 'shieldman' ? 0.62 : 0.42;
     c.weapons = ['pistol'];
     this.equip(c, 'pistol');
     c.grenades = c.smokes = c.flashes = c.molotovs = 0;
@@ -3899,6 +3963,7 @@ export class Sim {
     c.ai!.patrolTarget = 0;
     this.applySpeed(c);
     this.actors.set(id, c);
+    return c;
   }
 
   /** Lane waypoints for a team's creeps: out of the base, down the lane, into the enemy's throne. */
@@ -3914,8 +3979,7 @@ export class Sim {
 
   /**
    * A creep: down its lane, shooting whatever enemy comes within reach —
-   * fighters, creeps, then towers. Kamikazes sprint at the target and go off;
-   * shieldmen walk up close behind their shield.
+   * fighters, creeps, then towers. Shieldmen walk up close behind their shield.
    */
   private updateCreep(c: Actor, dt: number): void {
     const S = CONFIG.siege;
@@ -3969,26 +4033,17 @@ export class Sim {
     if (has) {
       const d = dist(c.x, c.z, tx, tz);
       c.ang = turnTowards(c.ang, Math.atan2(tz - c.z, tx - c.x), 8 * dt);
-      if (c.role === 'kamikaze') {
-        if (d < reach + 1.1) {
-          this.kamikazeBlast(c);
-          return;
-        }
-        if (d < S.kamikazeSprint) c.buffs.speed = 0.2;
-        move = this.steer(c, tx, tz, 0.2);
-      } else {
-        const ideal = c.role === 'shieldman' ? reach + 1.6 : 6.5;
-        if (d > ideal) move = this.steer(c, tx, tz, ideal);
-        if (ai.fireDelay <= 0 && c.cooldown <= 0 && !c.reloading) {
-          if (c.ammo > 0) {
-            this.enemyShoot(c, { x: tx, z: tz });
-            ai.burst--;
-            if (ai.burst <= 0) {
-              ai.burst = 3;
-              ai.fireDelay = 0.7 + this.rng.next() * 0.6;
-            }
-          } else this.startReload(c);
-        }
+      const ideal = c.role === 'shieldman' ? reach + 1.6 : 6.5;
+      if (d > ideal) move = this.steer(c, tx, tz, ideal);
+      if (ai.fireDelay <= 0 && c.cooldown <= 0 && !c.reloading) {
+        if (c.ammo > 0) {
+          this.enemyShoot(c, { x: tx, z: tz });
+          ai.burst--;
+          if (ai.burst <= 0) {
+            ai.burst = 3;
+            ai.fireDelay = 0.7 + this.rng.next() * 0.6;
+          }
+        } else this.startReload(c);
       }
     } else {
       const lane = c.lane ?? 0;
@@ -4003,15 +4058,6 @@ export class Sim {
       }
     }
     this.moveActor(c, move.x, move.z, dt);
-  }
-
-  private kamikazeBlast(c: Actor): void {
-    const S = CONFIG.siege;
-    c.alive = false;
-    this.events.push({ type: 'death', ownerId: c.id, by: c.id, x: c.x, z: c.z, id: String(c.id), cause: 'kamikaze', text: 'creep' });
-    this.explode(c.x, c.z, S.kamikazeRadius, S.kamikazeDamage, c.id, 'kamikaze', c.team);
-    c.respawnT = Infinity;
-    this.buryCreep(c);
   }
 
   /** Fallen creeps stay a moment as bodies, then go (like the guards of waves). */
@@ -4088,12 +4134,30 @@ export class Sim {
       const reserve = people ? 400 : 150;
       for (const bot of this.actors.values()) {
         if (bot.kind !== 'enemy' || bot.team !== team || isCreep(bot) || !bot.alive) continue;
+        // A gun of the role first (with only the reserve people leave aside), then the role's tools.
+        const gun: ShopItem = bot.siegeRole === 'op' ? 'smg' : bot.siegeRole === 'sab' ? 'shotgun' : 'rifle';
+        const gunReserve = people ? 150 : 0;
+        if (!bot.guns?.includes(gun as WeaponId)) {
+          const entry = SIEGE_SHOP.find((e) => e.item === gun)!;
+          if (this.bank[team] >= siegePrice(entry, bot.siegeRole, 0) + gunReserve) this.siegeBuy(bot, gun);
+          continue;
+        }
+        const ownAa = this.props.some((p) => p.alive && p.kind === 'aa' && p.team === team);
         const want: ShopItem[] =
-          bot.siegeRole === 'op' ? (bot.strikes ? [] : ['mortar']) : bot.siegeRole === 'sab' ? ((bot.wires ?? 0) < 2 ? ['wire'] : []) : this.rng.next() < 0.5 ? ['tw_ew', 'tw_mg'] : ['tw_mg', 'tw_flame'];
+          bot.siegeRole === 'op'
+            ? [...(ownAa ? [] : (['aa'] as ShopItem[])), ...(bot.strikes ? [] : (['mortar'] as ShopItem[]))]
+            : bot.siegeRole === 'sab'
+              ? (bot.wires ?? 0) < 2 ? ['wire'] : []
+              : this.rng.next() < 0.5 ? ['tw_ew', 'tw_mg', 'cw_guns'] : ['tw_mg', 'tw_flame', 'cw_armor', 'cw_more'];
         for (const item of want) {
           const entry = SIEGE_SHOP.find((e) => e.item === item)!;
           if (this.bank[team] < siegePrice(entry, bot.siegeRole, this.recentBuys(bot.id, item)) + reserve) continue;
           if (this.siegeBuy(bot, item)) break;
+        }
+        // A post bought: put it down behind the front tower of the lane it holds.
+        if ((bot.aa ?? 0) > 0) {
+          const t = this.frontTower(team, bot.id % 2);
+          if (t && dist(bot.x, bot.z, t.prop.x, t.prop.z) < 10) this.placeAirDefence(bot);
         }
       }
     }
@@ -4150,6 +4214,8 @@ export class Sim {
         if (a.alive && a.team === team && !isCreep(a)) a.buffs.overshield = Math.max(a.buffs.overshield, S.shieldPoints * (behind ? 2 : 1));
       }
     }
+    // The humanitarian cargo holds an anti-tank missile for each who took it (one carried at most).
+    for (const a of inside) a.atgm = 1;
     // The saboteur on their own: the enemy shows on the minimap for a moment.
     const alone = inside.length === 1 && inside[0].siegeRole === 'sab';
     if (alone) for (const a of this.actors.values()) if (a.team === team && !isCreep(a)) a.buffs.radar = Math.max(a.buffs.radar, S.sabRadar);
@@ -4177,6 +4243,7 @@ export class Sim {
       this.spawnSiegeWave();
     }
     this.updateTowers(dt);
+    this.updateAirDefence(dt);
     this.updateTruck(dt);
     this.marks = this.marks.filter((m) => this.time - m.t < S.markLife);
     // Electronic warfare: a pulse now and then shows who hides in its field.
@@ -4236,8 +4303,113 @@ export class Sim {
       truck: tr ? { x: tr.x, z: tr.z, progress: tr.progress, team: tr.team } : undefined,
       exposed: exposed.length ? exposed : undefined,
       buff: [this.teamBuff[0].kind, Math.ceil(this.teamBuff[0].t), this.teamBuff[1].kind, Math.ceil(this.teamBuff[1].t)],
+      waveUp: [[...this.waveUp[0]].join(','), [...this.waveUp[1]].join(',')],
       score: [standing[0], standing[1]],
     };
+  }
+
+  /** V: an air-defence post a little ahead (bought in the shop; a few per team). */
+  private placeAirDefence(actor: Actor): void {
+    const A = CONFIG.siege.aa;
+    if ((actor.aa ?? 0) <= 0 || actor.downed) return;
+    const x = actor.x + Math.cos(actor.ang) * 1.4;
+    const z = actor.z + Math.sin(actor.ang) * 1.4;
+    if (!this.world.lineOfSight(actor.x, actor.z, x, z, this.scratch) || !this.nav.walkable(x, z)) return;
+    if (this.props.some((p) => p.alive && !isGhostProp(p.kind) && Math.abs(p.x - x) < p.hw + 0.7 && Math.abs(p.z - z) < p.hh + 0.7)) return;
+    // Over the team's limit: the oldest post comes down.
+    const own = this.props.filter((p) => p.alive && p.kind === 'aa' && p.team === actor.team);
+    if (own.length >= A.max) own[0].alive = false;
+    actor.aa = 0;
+    const id = this.props.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+    const def = PROP_TABLE.aa;
+    this.props.push({
+      id, kind: 'aa', x, z, vx: 0, vz: 0, hw: def.hw, hh: def.hh, hp: A.hp,
+      explosive: false, fixed: true, alive: true, room: 0, mass: 99, deployed: true, ownerId: actor.id, team: actor.team,
+    });
+    this.events.push({ type: 'siege', id: 'aa', ownerId: actor.id, team: actor.team, x, z });
+  }
+
+  private damageAirDefence(p: SimProp, amount: number, team: number): void {
+    if (!p.alive || team < 0 || team === p.team) return;
+    p.hp -= amount;
+    if (p.hp > 0) return;
+    p.alive = false;
+    this.events.push({ type: 'explosion', x: p.x, z: p.z, y: 1 });
+  }
+
+  /** Air defence: shoots enemy drones in reach, and now and then catches a falling shell. */
+  private updateAirDefence(dt: number): void {
+    const A = CONFIG.siege.aa;
+    for (const p of this.props) {
+      if (p.kind !== 'aa' || !p.alive) continue;
+      // Shells on their way down near the post: a chance to catch each one.
+      for (const sh of [...this.shells]) {
+        if (sh.t > 1 || this.shellsTried.has(sh.id) || dist(sh.x, sh.z, p.x, p.z) > A.intercept) continue;
+        if ((this.actors.get(sh.ownerId)?.team ?? -1) === p.team) continue;
+        this.shellsTried.add(sh.id);
+        if (this.rng.next() >= A.interceptChance) continue;
+        this.shells = this.shells.filter((x) => x !== sh);
+        this.events.push({ type: 'siege', id: 'intercept', team: p.team, x: sh.x, z: sh.z });
+        this.events.push({ type: 'impact', x: sh.x, z: sh.z, y: 6 });
+      }
+      const cd = (this.aaCd.get(p.id) ?? 0) - dt;
+      this.aaCd.set(p.id, cd);
+      if (cd > 0) continue;
+      let best: Drone | null = null;
+      let bestD: number = A.range;
+      for (const d of this.drones) {
+        if (d.down || d.team === p.team) continue;
+        const r = dist(d.x, d.z, p.x, p.z);
+        if (r >= bestD || !this.world.lineOfSight(p.x, p.z, d.x, d.z, this.scratch)) continue;
+        best = d;
+        bestD = r;
+      }
+      if (!best) {
+        this.aaCd.set(p.id, 0.2);
+        continue;
+      }
+      this.aaCd.set(p.id, A.cd);
+      this.damageDrone(best, A.droneDamage, p.ownerId ?? -1);
+      const dirX = (best.x - p.x) / (bestD || 1);
+      const dirZ = (best.z - p.z) / (bestD || 1);
+      const seq = this.bulletSeq++;
+      this.events.push({
+        type: 'shot', id: `a${p.id}-${seq}`, ownerId: towerOwnerId(p.id), shotSeq: seq, x: p.x + dirX * 0.7, z: p.z + dirZ * 0.7, dirX, dirZ,
+        pellets: [{ dx: dirX, dz: dirZ, speed: WEAPONS.lmg.bulletSpeed }], weapon: 'lmg',
+      });
+    }
+    if (this.shellsTried.size > 64) this.shellsTried = new Set([...this.shellsTried].filter((id) => this.shells.some((s) => s.id === id)));
+  }
+
+  /** H: the anti-tank missile from the truck — straight ahead, one shot. */
+  private fireAtgm(actor: Actor): void {
+    const G = CONFIG.siege.atgm;
+    if ((actor.atgm ?? 0) <= 0 || actor.downed || this.mode !== 'siege') return;
+    actor.atgm = 0;
+    const dirX = Math.cos(actor.ang);
+    const dirZ = Math.sin(actor.ang);
+    const seq = this.bulletSeq++;
+    const id = `r${actor.id}-${seq}`;
+    // A rifle round in the tables (no wallbang), carried as a rocket.
+    this.bullets.push({
+      id, ownerId: actor.id, ownerKind: actor.kind, x: actor.x + dirX * 0.9, z: actor.z + dirZ * 0.9,
+      vx: dirX * G.speed, vz: dirZ * G.speed, speed: G.speed, damage: 0, damageMul: 0, criticalMul: 1,
+      life: G.range / G.speed, weapon: 'rifle', color: 0xffa040, range: 0, rocket: true, team: actor.team,
+    });
+    actor.shield = 0;
+    actor.revealT = CONFIG.bush.revealAfterShot;
+    this.noises.push({ x: actor.x, z: actor.z, radius: 30, time: this.time, ownerId: actor.id });
+    this.events.push({ type: 'shot', id, ownerId: actor.id, shotSeq: seq, x: actor.x + dirX * 0.9, z: actor.z + dirZ * 0.9, dirX, dirZ, pellets: [{ dx: dirX, dz: dirZ, speed: G.speed }], weapon: 'sniper' });
+    this.events.push({ type: 'siege', id: 'atgm', ownerId: actor.id, team: actor.team, x: actor.x, z: actor.z });
+  }
+
+  /** The missile goes off on whatever it hits; a structure it strikes takes the full charge. */
+  private rocketHit(b: Bullet, x: number, z: number, prop: SimProp | null): void {
+    const G = CONFIG.siege.atgm;
+    const team = b.team ?? -1;
+    if (prop && (prop.kind === 'tower' || prop.kind === 'throne')) this.damageStructure(prop, G.structure, team, b.ownerId, false);
+    if (prop && prop.kind === 'aa') this.damageAirDefence(prop, G.structure, team);
+    this.explode(x, z, G.radius, G.damage, b.ownerId, 'atgm', team);
   }
 
   /** E-less barbed wire for the saboteur: a coil across where they look (N). */
@@ -5138,7 +5310,8 @@ export class Sim {
       if (!s.kind || this.props.some((p) => p.id === s.id)) continue;
       this.props.push({
         id: s.id, kind: s.kind, x: s.x, z: s.z, vx: 0, vz: 0, hw: s.hw ?? 1, hh: s.hh ?? 1, hp: s.hp ?? 1,
-        explosive: false, fixed: false, alive: s.alive, room: 0, mass: 4, deployed: true, ownerId: s.owner,
+        // Posts and wire stand where they were put: prediction must not push them.
+        explosive: false, fixed: s.kind === 'aa' || s.kind === 'wire', alive: s.alive, room: 0, mass: 4, deployed: true, ownerId: s.owner,
       });
     }
     for (const p of this.props) {

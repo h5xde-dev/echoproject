@@ -86,7 +86,7 @@ export interface HudState {
   round: RoundState | null;
   modeTitle: string;
   /** «Осада»: the local fighter's role and lane, wire coils, mortar cooldown. */
-  siege?: { role: SiegeRole | undefined; lane: number; wires: number; mortarCd: number };
+  siege?: { role: SiegeRole | undefined; lane: number; wires: number; mortarCd: number; aa: number; atgm: number };
 }
 
 /** «Осада»: one line of the team shop as the local fighter sees it. */
@@ -98,6 +98,7 @@ export interface SiegeShopRow {
   /** Their role's item (no off-role markup). */
   own: boolean;
   locked: boolean;
+  group: 'self' | 'team' | 'role';
 }
 
 export interface HudScore {
@@ -346,17 +347,22 @@ export class Hud {
 
   /** «Осада»: the team shop — the bank is shared, the prices are this fighter's. */
   showSiegeShop(open: boolean, shop: { bank: number; role: string; rows: SiegeShopRow[] }): void {
+    this.shopEl.classList.add('siege');
     this.shopEl.classList.toggle('visible', open);
     this.hudRoot().classList.toggle('shopping', open);
     if (!open) return;
     const key = `${shop.bank}|${shop.role}|${shop.rows.map((r) => `${r.price}${+r.locked}`).join(',')}`;
     if (key === this.shopKey) return;
     this.shopKey = key;
+    const heads = { self: 'СЕБЕ', team: 'КОМАНДЕ', role: 'РОЛЬ' };
+    let group = '';
     const items = shop.rows
       .map((e, i) => {
         const k = i < 9 ? String(i + 1) : i === 9 ? '0' : '';
         const price = e.price > 0 ? `${e.price}` : '—';
-        return `<button class="shop-item${e.locked ? ' locked' : ''}${e.own ? ' own' : ''}" data-item="${e.item}" title="${escapeHtml(e.note)}"><kbd>${k}</kbd><span>${escapeHtml(e.name)}<small>${escapeHtml(e.note)}</small></span><em>${price}</em></button>`;
+        const head = e.group !== group ? `<div class="shop-group">${heads[e.group]}</div>` : '';
+        group = e.group;
+        return `${head}<button class="shop-item${e.locked ? ' locked' : ''}${e.own ? ' own' : ''}" data-item="${e.item}" title="${escapeHtml(e.note)}"><kbd>${k}</kbd><span>${escapeHtml(e.name)}<small>${escapeHtml(e.note)}</small></span><em>${price}</em></button>`;
       })
       .join('');
     const markup = Math.round((CONFIG.siege.offRoleMul - 1) * 100);
@@ -1154,6 +1160,8 @@ function siegeLine(state: HudState, ms: ModeState): string {
   let tools = '';
   if (sg.role === 'sab') tools = ` · ПРОВОЛОКА ${sg.wires} (N)`;
   if (sg.role === 'op') tools = ` · ДРОНЫ ${state.drones} (X) · МИНОМЁТ ${state.strikes ? (sg.mortarCd > 0 ? `${sg.mortarCd} С` : 'T') : '— (B)'}`;
+  if (sg.aa > 0) tools += ' · ПВО (V)';
+  if (sg.atgm > 0) tools += ' · ПТУР (H)';
   const buff = ms.buff && state.team >= 0 && ms.buff[state.team * 2] ? ` · ${ms.buff[state.team * 2] === 'reload' ? 'БАШНИ БЫСТРЕЕ' : 'ЩИТ'} ${ms.buff[state.team * 2 + 1]} С` : '';
   return ` · ${role}${lane} · БАНК ${bank} (B)${tools}${buff}`;
 }

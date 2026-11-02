@@ -1126,6 +1126,9 @@ kbd {
 .shop-head span { font-size: 12px; letter-spacing: 0.3em; color: var(--ink-dim); }
 .shop-head b { font-family: var(--mono); font-size: 22px; color: #7dff9e; }
 .shop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+/* «Осада»: a longer list — three columns, and it scrolls on a small screen. */
+.shop.siege { width: min(880px, calc(100vw - 32px)); max-height: 86vh; overflow-y: auto; }
+.shop.siege .shop-grid { grid-template-columns: repeat(3, 1fr); }
 .shop-item {
   font: inherit; color: var(--ink); text-align: left; cursor: pointer; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
   padding: 10px 12px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1138,6 +1141,7 @@ kbd {
 /* «Осада»: a note under the name; the role's own items in the accent, others' price in amber. */
 .shop-item span small { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; letter-spacing: 0.02em; color: var(--muted, #8a93a3); }
 .shop-item:not(.own) em { color: #ffb545; }
+.shop-group { grid-column: 1 / -1; margin: 6px 0 -2px; font-size: 11px; letter-spacing: 0.18em; color: var(--muted, #8a93a3); }
 .shop-foot { margin-top: 10px; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.06em; }
 
 .hint-comp { display: none; }
