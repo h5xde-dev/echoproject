@@ -1135,6 +1135,9 @@ kbd {
 .shop-item em { font-style: normal; font-family: var(--mono); color: #7dff9e; font-size: 13px; }
 .shop-item.locked { opacity: 0.35; cursor: not-allowed; }
 .shop-item.locked em { color: var(--danger); }
+/* «Осада»: a note under the name; the role's own items in the accent, others' price in amber. */
+.shop-item span small { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; letter-spacing: 0.02em; color: var(--muted, #8a93a3); }
+.shop-item:not(.own) em { color: #ffb545; }
 .shop-foot { margin-top: 10px; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.06em; }
 
 .hint-comp { display: none; }

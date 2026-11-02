@@ -69,13 +69,15 @@ export function newTally(): MatchTally {
 export function tallyEvent(t: MatchTally, e: GameEvent, playerId: number, hostile: (id: number) => boolean): void {
   switch (e.type) {
     case 'death':
+      // «Осада» creeps are farmed by the dozen: they pay the bank, not experience.
+      if (e.text === 'creep') break;
       if (e.by === playerId && e.ownerId !== playerId && hostile(e.ownerId ?? -1)) t.kills++;
       break;
     case 'roomClear':
       t.rooms++;
       break;
     case 'objective':
-      if ((e.text === 'hacked' || e.text === 'defused' || e.text === 'cargo' || e.text === 'vip') && e.ownerId === playerId) t.objectives++;
+      if ((e.text === 'hacked' || e.text === 'defused' || e.text === 'cargo' || e.text === 'vip' || e.text === 'tower' || e.text === 'truck') && e.ownerId === playerId) t.objectives++;
       break;
     case 'revive':
       if (e.by === playerId) t.revives++;
@@ -120,7 +122,7 @@ const bump = (s: MatchStats, key: string, n = 1) => {
 };
 
 /** Objectives of any kind (flag, bomb, terminal, cargo, VIP) also add up here, for awards. */
-const OBJECTIVE_KEYS = new Set(['objectives', 'captures', 'plants', 'defuses', 'cargo', 'vip_escaped', 'hotspots']);
+const OBJECTIVE_KEYS = new Set(['objectives', 'captures', 'plants', 'defuses', 'cargo', 'vip_escaped', 'hotspots', 'towers', 'trucks']);
 const bumpStat = (s: MatchStats, key: string) => {
   bump(s, key);
   if (OBJECTIVE_KEYS.has(key)) bump(s, 'objectives_any');
@@ -130,6 +132,10 @@ const bumpStat = (s: MatchStats, key: string) => {
 export function statEvent(s: MatchStats, e: GameEvent, playerId: number, hostile: (id: number) => boolean): void {
   switch (e.type) {
     case 'death':
+      if (e.text === 'creep') {
+        if (e.by === playerId) bump(s, 'creeps');
+        break;
+      }
       if (e.ownerId === playerId) bump(s, 'deaths');
       else if (e.by === playerId && hostile(e.ownerId ?? -1)) {
         bump(s, 'kills');
@@ -147,6 +153,8 @@ export function statEvent(s: MatchStats, e: GameEvent, playerId: number, hostile
       if ((e.text === 'hacked' || e.text === 'defused') && e.ownerId === playerId) bumpStat(s, 'objectives');
       if (e.text === 'cargo' && e.ownerId === playerId) bumpStat(s, 'cargo');
       if (e.text === 'vip' && e.ownerId === playerId) bumpStat(s, 'vip_escaped');
+      if (e.text === 'tower' && e.ownerId === playerId) bumpStat(s, 'towers');
+      if (e.text === 'truck' && e.ownerId === playerId) bumpStat(s, 'trucks');
       break;
     case 'bomb':
       if (e.ownerId === playerId && e.text === 'planted') bumpStat(s, 'plants');

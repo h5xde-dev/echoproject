@@ -3,7 +3,7 @@ import { clamp, dist, normalize, segCircleHit } from '../core/math';
 import { CONFIG, TILE } from './config';
 import { updateBullets, type BulletCtx } from './bullets';
 import { pickPowerup } from './levelgen';
-import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from './modes';
+import { GUN_LADDER, isArena, isCoopMode, isRoundMode, isTeamMode, SHOP, SIEGE_SHOP, siegePrice, TEAM_NAMES } from './modes';
 import { NavGrid } from './nav';
 import { PhysicsWorld, resolveCircleBox, type DoorBody } from './physics';
 import type {
@@ -35,9 +35,11 @@ import type {
   PropKind,
   RoomDef,
   ShopItem,
+  SiegeRole,
   SimProp,
   SmokeCloud,
   StaticBody,
+  TowerUp,
 } from './types';
 import { WEAPON_ORDER, WEAPONS, damageAtRange, projectileLife, weaponCooldown, type WeaponId } from './weapons';
 import { shotSeed } from '../net/protocol';
@@ -158,6 +160,29 @@ const ENEMY_WEAPONS: WeaponId[] = ['pistol', 'smg', 'rifle'];
 const BOT_NAMES = ['Волк', 'Сыч', 'Гюрза', 'Кедр', 'Филин', 'Шатун', 'Ворон', 'Рысь'];
 const MAX_CORPSES = 24;
 
+/** «Осада»: towers fire as owner ids at and below this (they are not actors). */
+const TOWER_ID_BASE = -1000;
+export function towerOwnerId(propId: number): number {
+  return TOWER_ID_BASE - propId;
+}
+
+/** «Осада» lane creeps: no score, no seat, simple minds. */
+export function isCreep(a: { role?: EnemyRole }): boolean {
+  return a.role === 'creep' || a.role === 'shieldman' || a.role === 'kamikaze';
+}
+
+/** A tower or throne: the body is a map prop, the rest lives here. */
+interface SiegeTower {
+  prop: SimProp;
+  team: number;
+  /** 0 top, 1 bottom; -1 the throne. */
+  lane: number;
+  up: TowerUp;
+  cd: number;
+  throne: boolean;
+  max: number;
+}
+
 export class Sim {
   readonly map: MapData;
   readonly mode: GameMode;
@@ -228,6 +253,22 @@ export class Sim {
   private armoredDrop = false;
   /** Team modes: kills per team. */
   teamScore: [number, number] = [0, 0];
+  /** «Осада»: structures, both banks (and money earned so far), the truck, waves, buffs, the team's marks. */
+  private towers: SiegeTower[] = [];
+  bank: [number, number] = [CONFIG.siege.startBank, CONFIG.siege.startBank];
+  private siegeEarned: [number, number] = [0, 0];
+  private truck: { x: number; z: number; progress: number; team: number; life: number } | null = null;
+  private truckT: number = CONFIG.siege.truckFirst;
+  private siegeWaveT: number = CONFIG.siege.firstWave;
+  private siegeWaveN = 0;
+  private teamBuff: { kind: string; t: number }[] = [{ kind: '', t: 0 }, { kind: '', t: 0 }];
+  private marks: { team: number; x: number; z: number; t: number }[] = [];
+  private siegeBuys = new Map<number, { item: ShopItem; t: number }[]>();
+  private campT = new Map<number, number>();
+  /** Fighters inside an enemy's barbed wire (the alarm sounds once per crossing). */
+  private wireIn = new Set<number>();
+  private ewPulse = 0;
+  private laneZ: [number, number] = [0, 0];
   /** Bot and guard sharpness (host setting). */
   difficulty: Difficulty = 'normal';
   /**
@@ -354,6 +395,7 @@ export class Sim {
       this.roundT = CONFIG.comp.freezeTime;
     }
     if (this.mode === 'coop') this.placeObjectives();
+    if (this.mode === 'siege') this.setupSiege();
     if (this.mode === 'bomb') {
       // Sites A and B: upper and lower quarter of the defenders' half.
       const w = map.maxX - map.minX;
@@ -395,7 +437,7 @@ export class Sim {
   private teamFor(isHuman: boolean): number {
     const count = [0, 0];
     for (const a of this.actors.values()) {
-      if (a.team < 0) continue;
+      if (a.team < 0 || isCreep(a)) continue;
       if (!isHuman || a.kind === 'player') count[a.team]++;
     }
     return count[1] < count[0] ? 1 : 0;
@@ -524,6 +566,10 @@ export class Sim {
     actor.cls = cls;
     actor.color = color;
     this.classKit(actor);
+    if (this.mode === 'siege') {
+      this.assignSiegeRole(actor);
+      this.siegeKit(actor);
+    }
     if (this.arena && !this.rounds) actor.shield = CONFIG.dm.spawnShield;
     // Joining a competitive round already under way: wait for the next one.
     // The zone (after its first moments) and a VIP round: watch until the next.
@@ -556,9 +602,11 @@ export class Sim {
     let bots = 0;
     for (const a of this.actors.values()) {
       if (a.kind === 'player') humans++;
-      else bots++;
+      else if (!isCreep(a)) bots++;
     }
-    const want = this.botsAllowed ? Math.max(0, this.fighters - humans) : 0;
+    // «Осада» is four a side, whatever the room asked for.
+    const total = this.mode === 'siege' ? CONFIG.siege.fighters : this.fighters;
+    const want = this.botsAllowed ? Math.max(0, total - humans) : 0;
     while (bots < want) {
       const id = this.nextActorId++;
       const team = this.mode === 'infect' ? (this.infectStarted ? 1 : 0) : this.teams ? this.teamFor(false) : -1;
@@ -580,11 +628,15 @@ export class Sim {
       this.actors.set(id, bot);
       this.scores.set(id, { kills: 0, deaths: 0, rounds: 0 });
       if (this.mode === 'infect' && this.infectStarted) this.infectActor(bot);
+      if (this.mode === 'siege') {
+        this.assignSiegeRole(bot);
+        this.siegeKit(bot);
+      }
       bots++;
     }
     while (bots > want) {
       const bigger = this.teams ? 1 - this.teamFor(false) : -1;
-      const bot = [...this.actors.values()].find((a) => a.kind === 'enemy' && (bigger < 0 || a.team === bigger));
+      const bot = [...this.actors.values()].find((a) => a.kind === 'enemy' && !isCreep(a) && (bigger < 0 || a.team === bigger));
       if (!bot) break;
       this.removeActor(bot.id);
       bots--;
@@ -721,6 +773,8 @@ export class Sim {
     if (input.mark && actor.markCd <= 0) {
       actor.markCd = 0.6;
       this.events.push({ type: 'mark', ownerId: actor.id, x: input.mark.x, z: input.mark.z });
+      // «Осада»: the team's marks are what the mortar may fire at.
+      if (this.mode === 'siege') this.marks.push({ team: actor.team, x: input.mark.x, z: input.mark.z, t: this.time });
     }
     if (input.buy) this.buy(actor, input.buy);
     // Competitive freeze time: look around and shop, but no moving or shooting.
@@ -734,7 +788,10 @@ export class Sim {
     if (input.drone) this.launchDrone(actor);
     if (input.interact) this.interact(actor);
     if (input.strike) this.callStrike(actor, input.aim, input.throwDist ?? 15);
-    if (input.mine) this.placeMine(actor);
+    if (input.mine) {
+      if (this.mode === 'siege') this.placeWire(actor);
+      else this.placeMine(actor);
+    }
 
     // Number keys pick among the weapons the actor carries.
     if (input.slot >= 0 && input.slot < WEAPON_ORDER.length) {
@@ -841,7 +898,7 @@ export class Sim {
       vz: dirZ * speed,
       speed,
       damage: def.damage,
-      damageMul: actor.buffs.damage > 0 ? CONFIG.powerups.damageMul : 1,
+      damageMul: (actor.buffs.damage > 0 ? CONFIG.powerups.damageMul : 1) * (isCreep(actor) ? CONFIG.siege.creepDamageMul : 1),
       criticalMul: def.criticalChance && this.rng.next() < def.criticalChance ? def.criticalMul ?? 1.5 : 1,
       life: projectileLife(def, speed),
       weapon: actor.weapon,
@@ -889,6 +946,7 @@ export class Sim {
     else if (this.mode === 'extract') this.updateExtract(dt);
     else if (this.mode === 'vip') this.updateVip(dt);
     else if (this.mode === 'zone') this.updateZone(dt);
+    else if (this.mode === 'siege') this.updateSiege(dt);
     else this.updateMatch(dt);
     if (this.mode === 'ctf') this.updateFlags(dt);
     this.updateInteractables(dt);
@@ -909,6 +967,7 @@ export class Sim {
     actor.blind = Math.max(0, actor.blind - dt);
     actor.revealT = Math.max(0, actor.revealT - dt);
     actor.markCd = Math.max(0, actor.markCd - dt);
+    if (actor.mortarCd) actor.mortarCd = Math.max(0, actor.mortarCd - dt);
     actor.stillT = Math.hypot(actor.vx, actor.vz) < 0.4 ? actor.stillT + dt : 0;
     const b = actor.buffs;
     b.damage = Math.max(0, b.damage - dt);
@@ -980,6 +1039,8 @@ export class Sim {
     if (this.mode === 'ctf' && actor.carrying >= 0) return { ...this.bases[actor.team], reach: CONFIG.ctf.touch };
     if (this.mode === 'extract' && actor.carrying >= 0) return { ...this.extractAt, reach: CONFIG.extract.radius * 0.6 };
     if (this.mode === 'vip' && actor.id === this.vipId) return { ...this.vipGoal, reach: CONFIG.vip.radius * 0.6 };
+    // «Осада»: the saboteur's errand is the truck.
+    if (this.mode === 'siege' && actor.siegeRole === 'sab' && this.truck) return { x: this.truck.x, z: this.truck.z, reach: CONFIG.siege.truckRadius * 0.6 };
     return null;
   }
 
@@ -1088,7 +1149,7 @@ export class Sim {
       vz: 0,
       ang: actor.ang,
       hp: CONFIG.drone.hp,
-      battery: CONFIG.drone.battery,
+      battery: this.mode === 'siege' ? CONFIG.siege.droneBattery + (actor.droneExt ? CONFIG.siege.droneExt : 0) : CONFIG.drone.battery,
       age: 0,
       down: false,
       downT: 0,
@@ -1123,7 +1184,7 @@ export class Sim {
     const D = CONFIG.drone;
     this.drones = this.drones.filter((d) => d !== drone);
     this.releasePilot(drone);
-    this.explode(drone.x, drone.z, D.blastRadius, D.blastDamage, drone.ownerId, 'drone');
+    this.explode(drone.x, drone.z, D.blastRadius, D.blastDamage, drone.ownerId, 'drone', drone.team);
   }
 
   /** Shot down, crashed or the link lost: it drops and goes off where it lands. */
@@ -1162,6 +1223,17 @@ export class Sim {
       if (drone.battery <= 0) {
         this.detonateDrone(drone);
         continue;
+      }
+      if (this.mode === 'siege') {
+        // Out of the operator's reach, or jammed by an enemy EW tower for long enough: the link drops.
+        const S = CONFIG.siege;
+        const jammed = this.towers.some((t) => t.up === 'ew' && t.prop.alive && t.team !== drone.team && dist(t.prop.x, t.prop.z, drone.x, drone.z) < S.ewRadius);
+        drone.jam = jammed ? (drone.jam ?? 0) + dt : Math.max(0, (drone.jam ?? 0) - dt);
+        if (drone.jam >= S.ewJam || dist(pilot.x, pilot.z, drone.x, drone.z) > S.opRange) {
+          this.events.push({ type: 'drone', id: 'jammed', ownerId: drone.ownerId, x: drone.x, z: drone.z });
+          this.downDrone(drone);
+          continue;
+        }
       }
       // The nose follows the mouse, but a quad only yaws so fast.
       drone.ang = turnTowards(drone.ang, drone.aim, D.yawRate * dt);
@@ -1315,11 +1387,14 @@ export class Sim {
   /** Hidden while in a bush and quiet (not running, not just fired). */
   private updateConcealment(actor: Actor): void {
     const inBush = (this.map.bushes ?? []).some((b) => dist(actor.x, actor.z, b.x, b.z) < b.r);
-    const quiet = actor.gait !== 'run' || Math.hypot(actor.vx, actor.vz) < 0.4;
+    // The saboteur stays hidden in the bushes even on the run.
+    const quiet = actor.gait !== 'run' || Math.hypot(actor.vx, actor.vz) < 0.4 || actor.siegeRole === 'sab';
     // Ducked down in a trench is as good as a bush.
     const dugIn = actor.gait === 'crouch' && (this.inTrench(actor.x, actor.z) || this.inCrater(actor.x, actor.z));
     const cloaked = actor.buffs.stealth > 0 && quiet;
-    actor.concealed = ((inBush && quiet) || dugIn || cloaked) && actor.revealT <= 0 && !this.inFlareLight(actor.x, actor.z);
+    // The truck's floodlights: nobody hides at it.
+    const atTruck = !!this.truck && dist(actor.x, actor.z, this.truck.x, this.truck.z) < CONFIG.siege.truckRadius + 1;
+    actor.concealed = ((inBush && quiet) || dugIn || cloaked) && actor.revealT <= 0 && !this.inFlareLight(actor.x, actor.z) && !atTruck;
   }
 
   /** Inside one of the map's trenches. */
@@ -1338,7 +1413,7 @@ export class Sim {
     if (actor.stepDist < CONFIG.gait.stepLength) return;
     actor.stepDist = 0;
     const radius =
-      CONFIG.gait.stepNoise[actor.gait] * (actor.cls === 'scout' ? CONFIG.classes.scout.stepNoiseMul : 1) * (this.worldEvent.kind === 'rain' ? CONFIG.world.rainSteps : 1);
+      CONFIG.gait.stepNoise[actor.gait] * (actor.cls === 'scout' || actor.siegeRole === 'sab' ? CONFIG.classes.scout.stepNoiseMul : 1) * (this.worldEvent.kind === 'rain' ? CONFIG.world.rainSteps : 1);
     if (radius <= 0) return;
     this.noises.push({ x: actor.x, z: actor.z, radius, time: this.time, ownerId: actor.id, step: true });
     this.events.push({ type: 'step', ownerId: actor.id, x: actor.x, z: actor.z });
@@ -1361,7 +1436,8 @@ export class Sim {
     const base = actor.kind === 'player' ? CONFIG.player.maxSpeed : this.arena ? CONFIG.player.maxSpeed * 0.92 : CONFIG.enemy.maxSpeed;
     const role = actor.role === 'grunt' ? 1 : CONFIG.roles[actor.role].speed;
     const gun = WEAPONS[actor.weapon].moveMul ?? 1;
-    actor.speed = base * role * gun * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1) * (this.mut.has('fast') ? CONFIG.mutators.fastSpeed : 1);
+    const sab = actor.siegeRole === 'sab' ? 1.08 : 1;
+    actor.speed = base * role * gun * sab * (actor.buffs.speed > 0 ? CONFIG.powerups.speedMul : 1) * (this.mut.has('fast') ? CONFIG.mutators.fastSpeed : 1);
   }
 
   /**
@@ -1591,7 +1667,11 @@ export class Sim {
           dmg *= T.coverMul;
         const friendly =
           (isCoopMode(this.mode) && hit.bullet.ownerKind === hit.actor.kind) ||
-          (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team);
+          (this.teams && !!shooter && shooter !== hit.actor && shooter.team === hit.actor.team) ||
+          (hit.bullet.team !== undefined && hit.bullet.team === hit.actor.team);
+        // A shieldman's shield takes what comes at him from the front.
+        if (hit.actor.role === 'shieldman' && (hit.bullet.vx * Math.cos(hit.actor.ang) + hit.bullet.vz * Math.sin(hit.actor.ang)) / hit.bullet.speed < -0.3)
+          dmg *= CONFIG.siege.shieldFront;
         if (!friendly) {
           this.damageActor(hit.actor, dmg, hit.bullet.ownerId, hit.bullet.weapon, (hit.bullet.criticalMul ?? 1) > 1);
           if (WEAPONS[hit.bullet.weapon].flame) this.ignite(hit.actor, hit.bullet.ownerId);
@@ -1604,6 +1684,11 @@ export class Sim {
           weapon: hit.bullet.weapon,
           ownerId: hit.bullet.ownerId,
         });
+      } else if (hit.prop.kind === 'tower' || hit.prop.kind === 'throne') {
+        const shooter = this.actors.get(hit.bullet.ownerId);
+        const dmg = damageAtRange(WEAPONS[hit.bullet.weapon], hit.bullet.range) * hit.bullet.damageMul;
+        this.damageStructure(hit.prop, dmg, hit.bullet.team ?? shooter?.team ?? -1, hit.bullet.ownerId, !!shooter && !isCreep(shooter));
+        this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1.4, weapon: hit.bullet.weapon });
       } else {
         if (!hit.prop.fixed) hit.prop.hp -= hit.bullet.damage;
         this.events.push({ type: 'impact', x: hit.x, z: hit.z, y: 1, weapon: hit.bullet.weapon });
@@ -1676,7 +1761,15 @@ export class Sim {
     actor.vx = 0;
     actor.vz = 0;
     actor.reloading = false;
-    this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id), weapon, cause: cause || undefined, text: critical ? 'critical' : undefined });
+    const creep = isCreep(actor);
+    // text 'creep': a lane creep — no kill feed, no score, no experience.
+    this.events.push({ type: 'death', ownerId: actor.id, by: sourceId, x: actor.x, z: actor.z, id: String(actor.id), weapon, cause: cause || undefined, text: creep ? 'creep' : critical ? 'critical' : undefined });
+    if (this.mode === 'siege') this.siegeKillReward(actor, sourceId, actor.streak);
+    if (creep) {
+      actor.respawnT = Infinity;
+      this.buryCreep(actor);
+      return;
+    }
     actor.streak = 0;
     actor.holdT = 0;
     const scorer = this.actors.get(sourceId);
@@ -1698,6 +1791,8 @@ export class Sim {
         actor.respawnT = CONFIG.infect.respawn;
       }
       if (this.mode === 'extract') actor.respawnT = actor.kind === 'player' ? CONFIG.extract.respawn : Infinity;
+      // «Осада»: the side with fewer towers standing is back sooner.
+      if (this.mode === 'siege') actor.respawnT = this.towersStanding(actor.team) < this.towersStanding(1 - actor.team) ? CONFIG.siege.respawnBehind : CONFIG.siege.respawn;
       const victim = this.scores.get(actor.id);
       if (victim) victim.deaths++;
       const killer = this.scores.get(sourceId);
@@ -1707,7 +1802,7 @@ export class Sim {
       if (this.mode === 'tdm' && k && !suicide && k.team >= 0 && k.team !== actor.team) this.teamScore[k.team]++;
       if (k && !suicide) this.rewardKill(k);
       // Sometimes a powerup falls where they fell (it lies there for a while).
-      if (!this.rounds && this.mode !== 'waves' && this.rng.next() < CONFIG.powerups.arenaDropChance) this.dropPowerup(actor.x, actor.z, CONFIG.powerups.dropLife);
+      if (!this.rounds && this.mode !== 'waves' && this.mode !== 'siege' && this.rng.next() < CONFIG.powerups.arenaDropChance) this.dropPowerup(actor.x, actor.z, CONFIG.powerups.dropLife);
       // Waves and extraction: fallen guards are bodies, cleared like co-op corpses.
       if ((this.mode === 'waves' || this.mode === 'extract') && actor.kind === 'enemy') {
         this.corpses.push(actor.id);
@@ -1781,8 +1876,12 @@ export class Sim {
     }
   }
 
-  explode(x: number, z: number, radius: number, damage: number, sourceId: number, cause = 'blast'): void {
+  explode(x: number, z: number, radius: number, damage: number, sourceId: number, cause = 'blast', team = this.actors.get(sourceId)?.team ?? -1): void {
     this.events.push({ type: 'explosion', x, z, y: 1 });
+    // Towers and the throne take blasts in full: a drone or a shell is how you crack one.
+    for (const t of this.towers) {
+      if (t.prop.alive && dist(t.prop.x, t.prop.z, x, z) < radius + t.prop.hw) this.damageStructure(t.prop, damage * 0.6, team, sourceId, false);
+    }
     for (const d of this.drones) if (dist(d.x, d.z, x, z) < radius) this.damageDrone(d, damage, sourceId);
     for (const actor of this.actors.values()) {
       if (!actor.alive) continue;
@@ -1793,8 +1892,10 @@ export class Sim {
       const falloff = 1 - d / radius;
       // Teams: your grenade spares your side (but not you).
       const thrower = this.actors.get(sourceId);
-      const ally = this.teams && !!thrower && thrower !== actor && thrower.team === actor.team;
-      if (!ally) this.damageActor(actor, damage * falloff, sourceId, undefined, false, cause);
+      const ally = this.teams && ((!!thrower && thrower !== actor && thrower.team === actor.team) || (!thrower && team >= 0 && team === actor.team));
+      // «Осада»: shells hit those caught in barbed wire harder.
+      const wired = cause === 'mortar' && this.mode === 'siege' && this.inWire(actor.x, actor.z) ? CONFIG.siege.wireMortarMul : 1;
+      if (!ally) this.damageActor(actor, damage * falloff * wired, sourceId, undefined, false, cause);
       const dir = normalize(actor.x - x, actor.z - z);
       actor.vx += dir.x * 16 * falloff;
       actor.vz += dir.z * 16 * falloff;
@@ -1868,6 +1969,10 @@ export class Sim {
   private updateAi(actor: Actor, dt: number): void {
     const ai = actor.ai;
     if (!ai) return;
+    if (isCreep(actor)) {
+      this.updateCreep(actor, dt);
+      return;
+    }
     actor.using = false;
     // In a trench, ducks while waiting or trading shots; climbs out at a run.
     if (this.map.trenches?.length && actor.role !== 'scout')
@@ -1892,8 +1997,10 @@ export class Sim {
 
     let nearest: Actor | null = null;
     let nearestD = Infinity;
+    // The saboteur leaves the creeps to the lanes.
+    const skipCreeps = actor.siegeRole === 'sab';
     for (const other of this.actors.values()) {
-      if (!this.hostileTo(actor, other)) continue;
+      if (!this.hostileTo(actor, other) || (skipCreeps && isCreep(other))) continue;
       const d = dist(actor.x, actor.z, other.x, other.z);
       // Stick with the current target unless someone is much closer.
       const bias = other.id === ai.targetId ? 0.75 : 1;
@@ -2041,6 +2148,22 @@ export class Sim {
     let move = { x: 0, z: 0 };
     let wantAng = actor.ang;
 
+    // «Осада», nobody in sight: shoot the enemy structure the creeps are on.
+    if (this.mode === 'siege' && !canSee && ai.mode !== 'chase') {
+      const st = this.structureTarget(actor, 11);
+      if (st) {
+        actor.ang = turnTowards(actor.ang, Math.atan2(st.z - actor.z, st.x - actor.x), 7 * dt);
+        if (actor.cooldown <= 0 && !actor.reloading && ai.fireDelay <= 0) {
+          if (actor.ammo > 0) this.enemyShoot(actor, st);
+          else this.startReload(actor);
+        }
+        this.moveActor(actor, 0, 0, dt);
+        return;
+      }
+      // The saboteur lays wire by the truck it is holding.
+      if (actor.siegeRole === 'sab' && (actor.wires ?? 0) > 0 && this.truck && dist(actor.x, actor.z, this.truck.x, this.truck.z) < 6 && this.rng.next() < 0.004) this.placeWire(actor);
+    }
+
     // An objective to carry out (plant, defuse, bring a flag home) wins over
     // hunting noises: with no enemy in sight, patrol straight to it.
     const objective = this.objectiveOf(actor);
@@ -2055,7 +2178,7 @@ export class Sim {
       case 'reposition': {
         if (ai.repathTimer <= 0 || dist(actor.x, actor.z, ai.targetX, ai.targetZ) < 1.2) {
           // Objectives move (a flag is carried off): replan often in CTF.
-          ai.repathTimer = this.mode === 'ctf' || this.mode === 'bomb' ? 1.2 : this.arena ? 6 + this.rng.next() * 4 : 2.4 + this.rng.next() * 2.4;
+          ai.repathTimer = this.mode === 'ctf' || this.mode === 'bomb' ? 1.2 : this.mode === 'siege' ? 2.5 : this.arena ? 6 + this.rng.next() * 4 : 2.4 + this.rng.next() * 2.4;
           const target = this.pickPatrolTarget(actor);
           ai.targetX = target.x;
           ai.targetZ = target.z;
@@ -2163,6 +2286,12 @@ export class Sim {
         move = home;
         if (!canSee) wantAng = Math.atan2(home.z, home.x);
       }
+    }
+
+    // The saboteur fights its way into the truck's circle rather than standing off.
+    if (objective && canSee && actor.siegeRole === 'sab' && dist(actor.x, actor.z, objective.x, objective.z) > objective.reach) {
+      const go = this.steer(actor, objective.x, objective.z, objective.reach);
+      if (go.x !== 0 || go.z !== 0) move = go;
     }
 
     // Get out of a live grenade's blast.
@@ -2433,6 +2562,8 @@ export class Sim {
   get canBuy(): boolean {
     // Waves: the shop is open between waves.
     if (this.mode === 'waves') return this.wavePhase === 'break';
+    // «Осада»: the team shop is open the whole match.
+    if (this.mode === 'siege') return !this.matchOver;
     return this.rounds && this.roundAge < CONFIG.comp.buyTime && this.roundPhase !== 'end';
   }
 
@@ -2442,6 +2573,7 @@ export class Sim {
 
   buy(actor: Actor, item: ShopItem): boolean {
     if (!this.canBuy || !actor.alive) return false;
+    if (this.mode === 'siege') return this.siegeBuy(actor, item);
     const entry = SHOP.find((e) => e.item === item);
     if (!entry || actor.money < entry.price) return false;
     if (this.mut.has('knives') && item in WEAPONS) return false;
@@ -2470,8 +2602,11 @@ export class Sim {
       if (actor.mines >= CONFIG.mine.max) return false;
       actor.mines++;
     } else {
-      if (actor.weapons.includes(item)) return false;
-      this.equip(actor, item);
+      // Only guns are left (the siege items have their own shop).
+      if (!(item in WEAPONS)) return false;
+      const gun = item as WeaponId;
+      if (actor.weapons.includes(gun)) return false;
+      this.equip(actor, gun);
     }
     actor.money -= entry.price;
     this.events.push({ type: 'buy', ownerId: actor.id, text: item });
@@ -2759,7 +2894,14 @@ export class Sim {
   }
 
   private respawn(actor: Actor): void {
-    const at = this.mode === 'extract' ? this.nearestWalkable(this.extractAt.x + this.rng.range(-2, 2), this.extractAt.z + this.rng.range(-2, 2)) : this.arena ? this.pickSpawn(actor) : this.findSafeSpawn(actor);
+    const at =
+      this.mode === 'extract'
+        ? this.nearestWalkable(this.extractAt.x + this.rng.range(-2, 2), this.extractAt.z + this.rng.range(-2, 2))
+        : this.mode === 'siege'
+          ? this.siegeSpawn(actor)
+          : this.arena
+            ? this.pickSpawn(actor)
+            : this.findSafeSpawn(actor);
     actor.alive = true;
     actor.burnT = 0;
     actor.x = at.x;
@@ -2785,6 +2927,7 @@ export class Sim {
       actor.shield = this.rounds ? 0 : CONFIG.dm.spawnShield;
       if (actor.ai) Object.assign(actor.ai, makeAi(), { hasLight: true });
       if (this.mode === 'infect' && actor.team === 1) this.infectActor(actor);
+      if (this.mode === 'siege') this.siegeKit(actor);
     } else {
       actor.hp = actor.maxHp * 0.7;
       actor.ammo = WEAPONS[actor.weapon].mag;
@@ -3428,6 +3571,7 @@ export class Sim {
   /** Where bots of the new modes go when they have nobody in sight. */
   private modePatrolTarget(actor: Actor): { x: number; z: number } | null {
     const jitter = (p: { x: number; z: number }, r: number) => this.nearestWalkable(p.x + this.rng.range(-r, r), p.z + this.rng.range(-r, r));
+    if (this.mode === 'siege' && actor.team >= 0) return this.siegePatrol(actor);
     if (this.mode === 'extract') {
       const squad = [...this.actors.values()].filter((a) => a.kind === 'player' && a.alive);
       const cargo = this.cargo.filter((c) => !c.delivered);
@@ -3453,6 +3597,669 @@ export class Sim {
       return this.nearestWalkable(z.x + Math.cos(a) * r, z.z + Math.sin(a) * r);
     }
     return null;
+  }
+
+  // ----------------------------------------------------------------- siege
+
+  /** «Осада»: structures from the map's tower and throne props, lanes, the bank. */
+  private setupSiege(): void {
+    const S = CONFIG.siege;
+    this.fighters = S.fighters;
+    this.timeLeft = S.timeLimit;
+    const midZ = (this.map.minZ + this.map.maxZ) / 2;
+    for (const p of this.props) {
+      if (p.kind !== 'tower' && p.kind !== 'throne') continue;
+      const throne = p.kind === 'throne';
+      const max = throne ? S.throneHp : S.towerHp;
+      p.hp = max;
+      this.towers.push({ prop: p, team: this.sideOf(p.x), lane: throne ? -1 : p.z < midZ ? 0 : 1, up: '', cd: 0, throne, max });
+    }
+    for (const lane of [0, 1]) {
+      const own = this.towers.filter((t) => t.lane === lane);
+      this.laneZ[lane] = own.length ? own.reduce((s, t) => s + t.prop.z, 0) / own.length : lane === 0 ? this.map.minZ + 5 : this.map.maxZ - 5;
+    }
+  }
+
+  /** A team's throne (the last structure). */
+  private throneOf(team: number): SiegeTower | undefined {
+    return this.towers.find((t) => t.throne && t.team === team);
+  }
+
+  /** Lane towers still standing. */
+  towersStanding(team: number): number {
+    let n = 0;
+    for (const t of this.towers) if (!t.throne && t.team === team && t.prop.alive) n++;
+    return n;
+  }
+
+  /** The throne takes damage once a whole lane of its towers is down, or late in the match. */
+  private throneOpen(team: number): boolean {
+    if (this.time >= CONFIG.siege.throneOpenAt) return true;
+    return [0, 1].some((lane) => !this.towers.some((t) => t.team === team && t.lane === lane && t.prop.alive));
+  }
+
+  /** +1 for the side walking right (blue), -1 for red. */
+  private siegeDir(team: number): number {
+    return team === 0 ? 1 : -1;
+  }
+
+  /** How far toward the enemy a point lies, for this team. */
+  private advance(team: number, x: number): number {
+    return team === 0 ? x : this.map.maxX - x;
+  }
+
+  /** The team's most forward living tower on a lane (the throne when none). */
+  private frontTower(team: number, lane: number): SiegeTower | undefined {
+    let best: SiegeTower | undefined;
+    for (const t of this.towers) {
+      if (t.throne || t.team !== team || t.lane !== lane || !t.prop.alive) continue;
+      if (!best || this.advance(team, t.prop.x) > this.advance(team, best.prop.x)) best = t;
+    }
+    return best ?? this.throneOf(team);
+  }
+
+  /** Respawn behind the last tower standing on the fighter's lane. */
+  private siegeSpawn(actor: Actor): { x: number; z: number } {
+    let lane = actor.lane ?? 0;
+    if (actor.siegeRole !== 'line') {
+      // Operator and saboteur: the lane whose front is furthest forward.
+      const a = this.frontTower(actor.team, 0);
+      const b = this.frontTower(actor.team, 1);
+      lane = a && b && this.advance(actor.team, b.prop.x) > this.advance(actor.team, a.prop.x) ? 1 : 0;
+    }
+    const t = this.frontTower(actor.team, lane);
+    if (!t) return this.pickSpawn(actor);
+    const back = this.siegeDir(actor.team) * -(t.prop.hw + 1.8);
+    return this.nearestWalkable(t.prop.x + back + this.rng.range(-0.6, 0.6), t.prop.z + this.rng.range(-1.2, 1.2));
+  }
+
+  /** First free seat in the team: two on the lanes, then the operator and the saboteur. */
+  private assignSiegeRole(actor: Actor): void {
+    const seats: [SiegeRole, number][] = actor.kind === 'player' ? [['line', 0], ['line', 1], ['op', 0], ['sab', 0]] : [['line', 0], ['line', 1], ['sab', 0], ['op', 0]];
+    for (const [role, lane] of seats) {
+      const taken = [...this.actors.values()].some(
+        (a) => a !== actor && a.team === actor.team && !isCreep(a) && a.siegeRole === role && (role !== 'line' || a.lane === lane),
+      );
+      if (taken) continue;
+      actor.siegeRole = role;
+      actor.lane = lane;
+      return;
+    }
+    actor.siegeRole = 'line';
+    actor.lane = actor.id % 2;
+  }
+
+  /** What a role carries into each life. */
+  private siegeKit(actor: Actor): void {
+    const role = actor.siegeRole ?? 'line';
+    const knife: WeaponId[] = actor.kind === 'player' ? ['knife'] : [];
+    const kit: WeaponId[] = role === 'line' ? ['rifle', 'pistol'] : role === 'sab' ? ['shotgun', 'silenced'] : ['smg', 'pistol'];
+    actor.weapons = [...kit, ...knife];
+    this.equip(actor, kit[0]);
+    actor.grenades = Math.max(actor.grenades, 1);
+    if (role === 'line') actor.armor = Math.max(actor.armor, 50);
+    if (role === 'sab') actor.wires = Math.max(actor.wires ?? 0, 2);
+    if (role === 'op') actor.drones = Math.max(actor.drones, 1);
+  }
+
+  /** Shop: take another role (a bot holding it hands it over; a person keeps theirs). */
+  private switchRole(actor: Actor, role: SiegeRole): boolean {
+    if (actor.siegeRole === role) return false;
+    const holders = [...this.actors.values()].filter((a) => a !== actor && a.team === actor.team && !isCreep(a) && a.siegeRole === role);
+    // Two line seats: free while one of them is.
+    const seats = role === 'line' ? 2 : 1;
+    if (holders.length >= seats) {
+      const bot = holders.find((a) => a.kind === 'enemy');
+      if (!bot) return false;
+      bot.siegeRole = actor.siegeRole;
+      [bot.lane, actor.lane] = [actor.lane, bot.lane];
+    } else if (role === 'line') {
+      actor.lane = holders.length ? 1 - (holders[0].lane ?? 0) : 0;
+    }
+    actor.siegeRole = role;
+    // At home the new kit is handed out at once, elsewhere from the next life.
+    const throne = this.throneOf(actor.team);
+    if (throne && dist(actor.x, actor.z, throne.prop.x, throne.prop.z) < 14) this.siegeKit(actor);
+    this.events.push({ type: 'siege', id: 'role', ownerId: actor.id, text: role });
+    return true;
+  }
+
+  /** Purchases of this item by this fighter within the last minute. */
+  private recentBuys(id: number, item: ShopItem): number {
+    const since = this.time - CONFIG.siege.repeatWindow;
+    return (this.siegeBuys.get(id) ?? []).filter((b) => b.item === item && b.t > since).length;
+  }
+
+  /** «Осада» shop: paid from the team's bank, at this fighter's price. */
+  private siegeBuy(actor: Actor, item: ShopItem): boolean {
+    const S = CONFIG.siege;
+    const entry = SIEGE_SHOP.find((e) => e.item === item);
+    if (!entry || actor.team < 0 || this.matchOver) return false;
+    if (item === 'role_line' || item === 'role_sab' || item === 'role_op') return this.switchRole(actor, item.slice(5) as SiegeRole);
+    const price = siegePrice(entry, actor.siegeRole, this.recentBuys(actor.id, item));
+    if (this.bank[actor.team] < price) return false;
+    if (item === 'drone') {
+      if (actor.drones >= 2) return false;
+      actor.drones++;
+    } else if (item === 'droneExt') {
+      if (actor.droneExt) return false;
+      actor.droneExt = true;
+    } else if (item === 'mortar') {
+      if (actor.strikes >= 1) return false;
+      actor.strikes++;
+    } else if (item === 'wire') {
+      if ((actor.wires ?? 0) >= S.maxWires) return false;
+      actor.wires = (actor.wires ?? 0) + 1;
+    } else {
+      const up: TowerUp = item === 'tw_mg' ? 'mg' : item === 'tw_flame' ? 'flame' : 'ew';
+      if (up === 'ew' && this.towers.filter((t) => t.team === actor.team && t.up === 'ew' && t.prop.alive).length >= S.maxEw) return false;
+      const t = this.towers
+        .filter((x) => x.team === actor.team && x.prop.alive && x.up === '' && dist(actor.x, actor.z, x.prop.x, x.prop.z) < 8)
+        .sort((a, b) => dist(actor.x, actor.z, a.prop.x, a.prop.z) - dist(actor.x, actor.z, b.prop.x, b.prop.z))[0];
+      if (!t) return false;
+      t.up = up;
+    }
+    this.bank[actor.team] -= price;
+    const list = this.siegeBuys.get(actor.id) ?? [];
+    list.push({ item, t: this.time });
+    this.siegeBuys.set(actor.id, list.filter((b) => b.t > this.time - S.repeatWindow));
+    this.events.push({ type: 'buy', ownerId: actor.id, text: item });
+    return true;
+  }
+
+  /** Money into a team's bank (and its tally, for the comeback rules). */
+  private earn(team: number, amount: number): void {
+    if (team < 0 || amount <= 0) return;
+    this.bank[team] += amount;
+    this.siegeEarned[team] += amount;
+  }
+
+  /** Kills pay the killer's team: creeps by type, fighters with a bounty on long streaks. */
+  private siegeKillReward(victim: Actor, sourceId: number, streak: number): void {
+    const R = CONFIG.siege.reward;
+    const killer = this.actors.get(sourceId);
+    if (!killer || killer.team < 0 || killer.team === victim.team) return;
+    if (isCreep(victim)) this.earn(killer.team, victim.role === 'shieldman' ? R.shieldman : victim.role === 'kamikaze' ? R.kamikaze : R.creep);
+    else this.earn(killer.team, R.kill + R.bountyPer2 * Math.floor(streak / 2));
+  }
+
+  /** A hit on a tower or the throne: bullets of fighters only chip it, blasts and creeps do it properly. */
+  private damageStructure(p: SimProp, amount: number, team: number, sourceId: number, hero: boolean): void {
+    const S = CONFIG.siege;
+    const t = this.towers.find((x) => x.prop === p);
+    if (!t || !p.alive || this.matchOver || team < 0 || team === t.team) return;
+    if (t.throne && !this.throneOpen(t.team)) return;
+    const creep = this.actors.get(sourceId);
+    p.hp -= amount * (hero ? S.heroStructureMul : creep && isCreep(creep) ? S.creepStructureMul : 1) * (t.throne ? S.throneMul : 1);
+    if (p.hp > 0) return;
+    p.hp = 0;
+    p.alive = false;
+    this.events.push({ type: 'explosion', x: p.x, z: p.z, y: 1.5 });
+    if (t.throne) {
+      this.events.push({ type: 'siege', id: 'throne', team: t.team, ownerId: sourceId, x: p.x, z: p.z });
+      this.finishTeamMatch(1 - t.team, `${TEAM_NAMES[1 - t.team]} разрушили Трон`);
+      return;
+    }
+    this.earn(1 - t.team, S.reward.tower);
+    this.events.push({ type: 'siege', id: 'tower', team: t.team, ownerId: sourceId, x: p.x, z: p.z, text: String(t.lane) });
+    if (this.actors.has(sourceId)) this.events.push({ type: 'objective', text: 'tower', ownerId: sourceId, x: p.x, z: p.z });
+  }
+
+  /** Towers shoot the nearest enemy in range — creeps before fighters, like any tower should. */
+  private updateTowers(dt: number): void {
+    const S = CONFIG.siege;
+    for (const t of this.towers) {
+      const p = t.prop;
+      if (!p.alive) continue;
+      t.cd -= dt;
+      if (t.cd > 0) continue;
+      const range = t.up === 'flame' ? S.flameRange : S.towerRange;
+      let best: Actor | null = null;
+      let bestScore = Infinity;
+      for (const a of this.actors.values()) {
+        if (!a.alive || a.team < 0 || a.team === t.team) continue;
+        const d = dist(a.x, a.z, p.x, p.z);
+        if (d > range + p.hw) continue;
+        const score = d + (isCreep(a) ? 0 : 6);
+        if (score >= bestScore || !this.world.lineOfSight(p.x, p.z, a.x, a.z, this.scratch)) continue;
+        best = a;
+        bestScore = score;
+      }
+      if (!best) {
+        t.cd = 0.25;
+        continue;
+      }
+      const weapon: WeaponId = t.up === 'mg' ? 'lmg' : t.up === 'flame' ? 'flamer' : 'rifle';
+      const def = WEAPONS[weapon];
+      const damage = t.up === 'mg' ? S.mgDamage : t.up === 'flame' ? def.damage * 2.2 : S.towerDamage;
+      const buff = this.teamBuff[t.team].kind === 'reload' && this.teamBuff[t.team].t > 0 ? S.reloadMul : 1;
+      t.cd = (t.up === 'mg' ? S.mgCd : t.up === 'flame' ? S.flameCd : S.towerCd) * buff;
+      // Lead a little: aim where the target will be when the round arrives.
+      const d = dist(best.x, best.z, p.x, p.z);
+      const lead = d / def.bulletSpeed;
+      const ang = Math.atan2(best.z + best.vz * lead - p.z, best.x + best.vx * lead - p.x) + this.rng.range(-0.02, 0.02) * (t.up === 'flame' ? 6 : 1);
+      const dirX = Math.cos(ang);
+      const dirZ = Math.sin(ang);
+      const muzzle = p.hw * 1.45 + 0.2;
+      const seq = this.bulletSeq++;
+      const id = `t${p.id}-${seq}`;
+      const ownerId = towerOwnerId(p.id);
+      this.bullets.push({
+        id, ownerId, ownerKind: 'enemy', x: p.x + dirX * muzzle, z: p.z + dirZ * muzzle,
+        vx: dirX * def.bulletSpeed, vz: dirZ * def.bulletSpeed, speed: def.bulletSpeed,
+        damage: def.damage, damageMul: damage / def.damage, criticalMul: 1,
+        life: projectileLife(def, def.bulletSpeed), weapon, color: t.team === 0 ? 0x7fe8ff : 0xff9a7a, range: 0, team: t.team,
+      });
+      this.events.push({
+        type: 'shot', id, ownerId, shotSeq: seq, x: p.x + dirX * muzzle, z: p.z + dirZ * muzzle, dirX, dirZ,
+        pellets: [{ dx: dirX, dz: dirZ, speed: def.bulletSpeed }], weapon,
+      });
+    }
+  }
+
+  /** A wave of creeps on both lanes for both sides: plain ones, a shieldman every other wave, kamikazes late. */
+  private spawnSiegeWave(): void {
+    const S = CONFIG.siege;
+    this.siegeWaveN++;
+    const count = Math.round(S.waveCreeps * (this.time >= S.bigWavesAt ? 1.5 : 1));
+    for (const team of [0, 1]) {
+      let alive = 0;
+      for (const a of this.actors.values()) if (a.alive && a.team === team && isCreep(a)) alive++;
+      for (const lane of [0, 1]) {
+        const roles: EnemyRole[] = Array.from({ length: count }, () => 'creep' as EnemyRole);
+        if (this.time >= S.shieldFrom && this.siegeWaveN % 2 === 0) roles.unshift('shieldman');
+        if (this.time >= S.kamikazeFrom) roles.push('kamikaze');
+        roles.forEach((role, i) => {
+          if (alive >= S.creepCap) return;
+          alive++;
+          this.spawnCreep(team, lane, role, i, roles.length);
+        });
+      }
+    }
+    this.events.push({ type: 'siege', id: 'wave', text: String(this.siegeWaveN) });
+  }
+
+  private spawnCreep(team: number, lane: number, role: EnemyRole, i: number, n: number): void {
+    const S = CONFIG.siege;
+    const throne = this.throneOf(team);
+    const x0 = (throne?.prop.x ?? this.map.minX + 5) + this.siegeDir(team) * (1.5 + i * 0.9);
+    const at = this.nearestWalkable(x0, this.laneZ[lane] + (i - (n - 1) / 2) * 1.1);
+    const id = this.nextActorId++;
+    const c = this.newActor(id, 'enemy', '', at.x, at.z);
+    c.team = team;
+    c.lane = lane;
+    c.role = role;
+    c.maxHp = c.hp = role === 'shieldman' ? S.shieldHp : role === 'kamikaze' ? S.kamikazeHp : S.creepHp;
+    c.radius = role === 'shieldman' ? 0.62 : role === 'kamikaze' ? 0.36 : 0.42;
+    c.weapons = ['pistol'];
+    this.equip(c, 'pistol');
+    c.grenades = c.smokes = c.flashes = c.molotovs = 0;
+    c.flashOn = false;
+    c.ang = team === 0 ? 0 : Math.PI;
+    c.ai!.patrolTarget = 0;
+    this.applySpeed(c);
+    this.actors.set(id, c);
+  }
+
+  /** Lane waypoints for a team's creeps: out of the base, down the lane, into the enemy's throne. */
+  private lanePoint(team: number, lane: number, i: number): { x: number; z: number } | null {
+    const m = this.map;
+    const z = this.laneZ[lane];
+    const xs = [m.minX + 12, (m.minX + m.maxX) / 2, m.maxX - 12];
+    if (team === 1) xs.reverse();
+    if (i < xs.length) return { x: xs[i], z };
+    const enemy = this.throneOf(1 - team);
+    return i === xs.length && enemy ? { x: enemy.prop.x, z: enemy.prop.z } : null;
+  }
+
+  /**
+   * A creep: down its lane, shooting whatever enemy comes within reach —
+   * fighters, creeps, then towers. Kamikazes sprint at the target and go off;
+   * shieldmen walk up close behind their shield.
+   */
+  private updateCreep(c: Actor, dt: number): void {
+    const S = CONFIG.siege;
+    const ai = c.ai!;
+    ai.fireDelay -= dt;
+    // Look around four times a second, staggered so a wave does not do it all at once.
+    if ((this.frame + c.id) % 15 === 0) {
+      let target = -1;
+      let best: number = S.creepAggro;
+      for (const a of this.actors.values()) {
+        if (!a.alive || a.team < 0 || a.team === c.team) continue;
+        const d = dist(a.x, a.z, c.x, c.z);
+        if (d >= best || (a.concealed && d > CONFIG.bush.spotDist) || !this.world.lineOfSight(c.x, c.z, a.x, a.z, this.scratch)) continue;
+        best = d;
+        target = a.id;
+      }
+      if (target < 0) {
+        for (const t of this.towers) {
+          if (!t.prop.alive || t.team === c.team || (t.throne && !this.throneOpen(t.team))) continue;
+          const d = dist(t.prop.x, t.prop.z, c.x, c.z) - t.prop.hw;
+          if (d >= best) continue;
+          best = d;
+          target = towerOwnerId(t.prop.id);
+        }
+      }
+      ai.targetId = target;
+    }
+    let tx = 0;
+    let tz = 0;
+    let reach = 0;
+    let has = false;
+    if (ai.targetId <= TOWER_ID_BASE) {
+      const p = this.towers.find((t) => towerOwnerId(t.prop.id) === ai.targetId)?.prop;
+      if (p?.alive) {
+        tx = p.x;
+        tz = p.z;
+        reach = p.hw;
+        has = true;
+      }
+    } else if (ai.targetId >= 0) {
+      const a = this.actors.get(ai.targetId);
+      if (a?.alive && dist(a.x, a.z, c.x, c.z) < S.creepAggro * 1.5) {
+        tx = a.x;
+        tz = a.z;
+        reach = a.radius;
+        has = true;
+      }
+    }
+    if (!has) ai.targetId = -1;
+    let move = { x: 0, z: 0 };
+    if (has) {
+      const d = dist(c.x, c.z, tx, tz);
+      c.ang = turnTowards(c.ang, Math.atan2(tz - c.z, tx - c.x), 8 * dt);
+      if (c.role === 'kamikaze') {
+        if (d < reach + 1.1) {
+          this.kamikazeBlast(c);
+          return;
+        }
+        if (d < S.kamikazeSprint) c.buffs.speed = 0.2;
+        move = this.steer(c, tx, tz, 0.2);
+      } else {
+        const ideal = c.role === 'shieldman' ? reach + 1.6 : 6.5;
+        if (d > ideal) move = this.steer(c, tx, tz, ideal);
+        if (ai.fireDelay <= 0 && c.cooldown <= 0 && !c.reloading) {
+          if (c.ammo > 0) {
+            this.enemyShoot(c, { x: tx, z: tz });
+            ai.burst--;
+            if (ai.burst <= 0) {
+              ai.burst = 3;
+              ai.fireDelay = 0.7 + this.rng.next() * 0.6;
+            }
+          } else this.startReload(c);
+        }
+      }
+    } else {
+      const lane = c.lane ?? 0;
+      let wp = this.lanePoint(c.team, lane, ai.patrolTarget);
+      while (wp && Math.abs(this.advance(c.team, wp.x) - this.advance(c.team, c.x)) < 2.5 && ai.patrolTarget < 4) {
+        ai.patrolTarget++;
+        wp = this.lanePoint(c.team, lane, ai.patrolTarget);
+      }
+      if (wp) {
+        move = this.steer(c, wp.x, wp.z, 1.5);
+        if (move.x || move.z) c.ang = turnTowards(c.ang, Math.atan2(move.z, move.x), 5 * dt);
+      }
+    }
+    this.moveActor(c, move.x, move.z, dt);
+  }
+
+  private kamikazeBlast(c: Actor): void {
+    const S = CONFIG.siege;
+    c.alive = false;
+    this.events.push({ type: 'death', ownerId: c.id, by: c.id, x: c.x, z: c.z, id: String(c.id), cause: 'kamikaze', text: 'creep' });
+    this.explode(c.x, c.z, S.kamikazeRadius, S.kamikazeDamage, c.id, 'kamikaze', c.team);
+    c.respawnT = Infinity;
+    this.buryCreep(c);
+  }
+
+  /** Fallen creeps stay a moment as bodies, then go (like the guards of waves). */
+  private buryCreep(c: Actor): void {
+    this.corpses.push(c.id);
+    while (this.corpses.length > MAX_CORPSES) {
+      const id = this.corpses.shift()!;
+      this.actors.delete(id);
+      this.scores.delete(id);
+    }
+  }
+
+  /** Bots of the siege: where each role goes when nobody is in sight. */
+  private siegePatrol(actor: Actor): { x: number; z: number } {
+    const team = actor.team;
+    const dir = this.siegeDir(team);
+    const jitter = (p: { x: number; z: number }, r: number) => this.nearestWalkable(p.x + this.rng.range(-r, r), p.z + this.rng.range(-r, r));
+    const role = actor.siegeRole ?? 'line';
+    if (role === 'sab') {
+      if (this.truck) return jitter(this.truck, 1.5);
+      const spots = this.map.truckSpots ?? [];
+      // Lurk in the forest on the enemy's side, near where the truck turns up.
+      const far = spots.filter((s) => this.advance(team, s.x) >= this.advance(team, (this.map.minX + this.map.maxX) / 2) - 1);
+      const pool = far.length ? far : spots;
+      const s = pool[this.rng.int(0, Math.max(0, pool.length - 1))];
+      return s ? jitter(s, 6) : { x: actor.x, z: actor.z };
+    }
+    const lane = role === 'op' ? actor.id % 2 : actor.lane ?? 0;
+    const tower = this.frontTower(team, lane);
+    if (role === 'op') {
+      const t = tower?.prop ?? actor;
+      return jitter({ x: t.x - dir * 6, z: t.z }, 2);
+    }
+    // Line: with the leading creep of the lane, or a little ahead of the tower.
+    let lead: Actor | null = null;
+    for (const a of this.actors.values()) {
+      if (!a.alive || a.team !== team || !isCreep(a) || a.lane !== lane) continue;
+      if (!lead || this.advance(team, a.x) > this.advance(team, lead.x)) lead = a;
+    }
+    if (lead) return jitter({ x: lead.x - dir * 2.5, z: lead.z }, 2);
+    const t = tower?.prop ?? actor;
+    return jitter({ x: t.x + dir * 5, z: t.z }, 2);
+  }
+
+  /**
+   * An enemy structure a bot can shoot right now: in range and sight, the
+   * throne only when open — and only with its own creeps under it (a tower
+   * shoots fighters once the creeps are gone), or nearly broken anyway.
+   */
+  private structureTarget(actor: Actor, range: number): SimProp | null {
+    for (const t of this.towers) {
+      const p = t.prop;
+      if (!p.alive || t.team === actor.team || (t.throne && !this.throneOpen(t.team))) continue;
+      if (dist(actor.x, actor.z, p.x, p.z) - p.hw > range) continue;
+      let cover = p.hp < t.max * 0.3;
+      if (!cover) {
+        for (const a of this.actors.values()) {
+          if (a.alive && a.team === actor.team && isCreep(a) && dist(a.x, a.z, p.x, p.z) < 10) {
+            cover = true;
+            break;
+          }
+        }
+      }
+      if (cover && this.world.lineOfSight(actor.x, actor.z, p.x, p.z, this.scratch)) return p;
+    }
+    return null;
+  }
+
+  /** Bots spend the bank on their role — sparingly while people share it. */
+  private siegeBotShopping(): void {
+    for (const team of [0, 1]) {
+      const people = [...this.actors.values()].some((a) => a.kind === 'player' && a.team === team);
+      // People share the bank: bots leave them a good part of it.
+      const reserve = people ? 400 : 150;
+      for (const bot of this.actors.values()) {
+        if (bot.kind !== 'enemy' || bot.team !== team || isCreep(bot) || !bot.alive) continue;
+        const want: ShopItem[] =
+          bot.siegeRole === 'op' ? (bot.strikes ? [] : ['mortar']) : bot.siegeRole === 'sab' ? ((bot.wires ?? 0) < 2 ? ['wire'] : []) : this.rng.next() < 0.5 ? ['tw_ew', 'tw_mg'] : ['tw_mg', 'tw_flame'];
+        for (const item of want) {
+          const entry = SIEGE_SHOP.find((e) => e.item === item)!;
+          if (this.bank[team] < siegePrice(entry, bot.siegeRole, this.recentBuys(bot.id, item)) + reserve) continue;
+          if (this.siegeBuy(bot, item)) break;
+        }
+      }
+    }
+  }
+
+  /** The truck in the forest: alone in its circle for a few seconds takes it. */
+  private updateTruck(dt: number): void {
+    const S = CONFIG.siege;
+    if (!this.truck) {
+      this.truckT -= dt;
+      const spots = this.map.truckSpots ?? [];
+      if (this.truckT > 0 || !spots.length) return;
+      this.truckT = S.truckEvery;
+      const s = spots[this.rng.int(0, spots.length - 1)];
+      this.truck = { x: s.x, z: s.z, progress: 0, team: -1, life: S.truckLife };
+      this.events.push({ type: 'siege', id: 'truck', text: 'start', x: s.x, z: s.z });
+      return;
+    }
+    const tr = this.truck;
+    tr.life -= dt;
+    if (tr.life <= 0) {
+      this.truck = null;
+      this.events.push({ type: 'siege', id: 'truck', text: 'gone', x: tr.x, z: tr.z });
+      return;
+    }
+    const inside: Actor[] = [];
+    let teams = 0;
+    for (const a of this.actors.values()) {
+      if (!a.alive || a.team < 0 || isCreep(a) || dist(a.x, a.z, tr.x, tr.z) > S.truckRadius) continue;
+      inside.push(a);
+      teams |= 1 << a.team;
+    }
+    if (teams === 0) {
+      tr.progress = Math.max(0, tr.progress - S.truckDecay * dt);
+      return;
+    }
+    // Both sides in the circle: it waits.
+    if (teams === 3) return;
+    const team = teams === 1 ? 0 : 1;
+    if (tr.team !== team) {
+      tr.team = team;
+      tr.progress = 0;
+    }
+    tr.progress += dt;
+    if (tr.progress < S.truckHold) return;
+    this.truck = null;
+    this.earn(team, S.reward.truck);
+    const behind = this.siegeEarned[1 - team] - this.siegeEarned[team] > S.behindBy;
+    const kind = this.rng.next() < 0.5 ? 'reload' : 'shield';
+    const time = S.buffTime * (behind && kind === 'reload' ? 2 : 1);
+    this.teamBuff[team] = { kind, t: time };
+    if (kind === 'shield') {
+      for (const a of this.actors.values()) {
+        if (a.alive && a.team === team && !isCreep(a)) a.buffs.overshield = Math.max(a.buffs.overshield, S.shieldPoints * (behind ? 2 : 1));
+      }
+    }
+    // The saboteur on their own: the enemy shows on the minimap for a moment.
+    const alone = inside.length === 1 && inside[0].siegeRole === 'sab';
+    if (alone) for (const a of this.actors.values()) if (a.team === team && !isCreep(a)) a.buffs.radar = Math.max(a.buffs.radar, S.sabRadar);
+    this.events.push({ type: 'siege', id: 'truck', text: 'taken', team, ownerId: inside[0].id, x: tr.x, z: tr.z, cause: kind });
+    this.events.push({ type: 'objective', text: 'truck', ownerId: inside[0].id, x: tr.x, z: tr.z });
+  }
+
+  /**
+   * «Осада» each tick: income, waves, towers, the truck, electronic warfare,
+   * shieldmen holding the line, operators camping at home, the clock.
+   */
+  private updateSiege(dt: number): void {
+    if (this.matchOver) return;
+    const S = CONFIG.siege;
+    const standing = [this.towersStanding(0), this.towersStanding(1)];
+    for (const team of [0, 1]) {
+      this.earn(team, S.income * dt * (standing[team] < standing[1 - team] ? S.comebackMul : 1));
+      const b = this.teamBuff[team];
+      b.t = Math.max(0, b.t - dt);
+      if (b.t <= 0) b.kind = '';
+    }
+    this.siegeWaveT -= dt;
+    if (this.siegeWaveT <= 0) {
+      this.siegeWaveT = S.waveEvery;
+      this.spawnSiegeWave();
+    }
+    this.updateTowers(dt);
+    this.updateTruck(dt);
+    this.marks = this.marks.filter((m) => this.time - m.t < S.markLife);
+    // Electronic warfare: a pulse now and then shows who hides in its field.
+    this.ewPulse -= dt;
+    if (this.ewPulse <= 0) {
+      this.ewPulse = S.ewPulseEvery;
+      for (const t of this.towers) {
+        if (t.up !== 'ew' || !t.prop.alive) continue;
+        for (const a of this.actors.values()) {
+          if (a.alive && a.team !== t.team && a.team >= 0 && dist(a.x, a.z, t.prop.x, t.prop.z) < S.ewRadius) a.revealT = Math.max(a.revealT, S.ewReveal);
+        }
+        this.events.push({ type: 'siege', id: 'ewPulse', team: t.team, x: t.prop.x, z: t.prop.z });
+      }
+    }
+    // A shieldman is a wall: enemies are pushed out of him.
+    for (const s of this.actors.values()) {
+      if (!s.alive || s.role !== 'shieldman') continue;
+      for (const a of this.actors.values()) {
+        if (!a.alive || a.team === s.team || a.team < 0) continue;
+        const d = dist(a.x, a.z, s.x, s.z);
+        const min = a.radius + s.radius;
+        if (d >= min || d < 1e-4) continue;
+        a.x = s.x + ((a.x - s.x) / d) * min;
+        a.z = s.z + ((a.z - s.z) / d) * min;
+      }
+    }
+    // Operators hiding at home are shown to the enemy.
+    const exposed: number[] = [];
+    for (const a of this.actors.values()) {
+      if (a.siegeRole !== 'op' || !a.alive || isCreep(a)) continue;
+      const throne = this.throneOf(a.team);
+      const home = !!throne && dist(a.x, a.z, throne.prop.x, throne.prop.z) < S.campRadius;
+      const t = home ? (this.campT.get(a.id) ?? 0) + dt : 0;
+      this.campT.set(a.id, t);
+      if (t > S.campTime) exposed.push(a.id);
+    }
+    if ((this.frame % 300) === 0) this.siegeBotShopping();
+    this.timeLeft = Math.max(0, this.timeLeft - dt);
+    if (this.timeLeft <= 0) {
+      // Time: more towers standing wins, then the healthier throne.
+      const [a, b] = standing;
+      const ha = this.throneOf(0)?.prop.hp ?? 0;
+      const hb = this.throneOf(1)?.prop.hp ?? 0;
+      const winner = a !== b ? (a > b ? 0 : 1) : Math.abs(ha - hb) > 1 ? (ha > hb ? 0 : 1) : undefined;
+      this.finishTeamMatch(winner, winner === undefined ? `Ничья: башен ${a}:${b}` : `${TEAM_NAMES[winner]} победили по башням ${a}:${b}`);
+    }
+    const tr = this.truck;
+    this.modeState = {
+      t: this.timeLeft,
+      // The HUD adds the clock after the text: "до конца m:ss".
+      text: `БАШНИ ${standing[0]}:${standing[1]} · ${tr ? 'ГРУЗОВИК В ЛЕСУ' : `ГРУЗОВИК ЧЕРЕЗ ${Math.ceil(this.truckT)} С`} · ДО КОНЦА`,
+      towers: this.towers.map((t) => ({
+        id: t.prop.id, team: t.team, lane: t.lane, up: t.up, hp: Math.round(t.prop.hp), max: t.max,
+        ...(t.throne ? { throne: true, open: this.throneOpen(t.team) } : {}),
+      })),
+      bank: [Math.floor(this.bank[0]), Math.floor(this.bank[1])],
+      truck: tr ? { x: tr.x, z: tr.z, progress: tr.progress, team: tr.team } : undefined,
+      exposed: exposed.length ? exposed : undefined,
+      buff: [this.teamBuff[0].kind, Math.ceil(this.teamBuff[0].t), this.teamBuff[1].kind, Math.ceil(this.teamBuff[1].t)],
+      score: [standing[0], standing[1]],
+    };
+  }
+
+  /** E-less barbed wire for the saboteur: a coil across where they look (N). */
+  private placeWire(actor: Actor): void {
+    const S = CONFIG.siege;
+    if ((actor.wires ?? 0) <= 0 || actor.downed) return;
+    const x = actor.x + Math.cos(actor.ang) * 1.3;
+    const z = actor.z + Math.sin(actor.ang) * 1.3;
+    if (!this.world.lineOfSight(actor.x, actor.z, x, z, this.scratch)) return;
+    // Across the way they look: facing along x, it runs along z.
+    const acrossZ = Math.abs(Math.cos(actor.ang)) > Math.abs(Math.sin(actor.ang));
+    const thin = 0.45;
+    const long = S.wireLen / 2;
+    const mine = this.props.filter((p) => p.alive && p.kind === 'wire' && p.ownerId === actor.id);
+    if (mine.length >= S.maxWires) mine[0].alive = false;
+    actor.wires = (actor.wires ?? 0) - 1;
+    const id = this.props.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+    this.props.push({
+      id, kind: 'wire', x, z, vx: 0, vz: 0, hw: acrossZ ? thin : long, hh: acrossZ ? long : thin, hp: 999,
+      explosive: false, fixed: true, alive: true, room: 0, mass: 99, deployed: true, ownerId: actor.id, team: actor.team,
+    });
+    this.events.push({ type: 'wire', id: 'place', ownerId: actor.id, x, z });
   }
 
   /** Client: the new modes' state from a snapshot. */
@@ -3482,7 +4289,7 @@ export class Sim {
   private updateWorld(dt: number): void {
     const W = CONFIG.world;
     // Not in rounds (they have their own rhythm), duels or ranked-like short modes.
-    if (this.rounds || this.mode === 'duel' || this.mode === 'vip' || this.matchOver) return;
+    if (this.rounds || this.mode === 'duel' || this.mode === 'vip' || this.mode === 'siege' || this.matchOver) return;
     const ev = this.worldEvent;
     if (ev.kind) {
       ev.t -= dt;
@@ -4041,7 +4848,8 @@ export class Sim {
   private updateDrops(dt: number): void {
     const D = CONFIG.drop;
     for (const a of this.actors.values()) a.holdT = 0;
-    if (this.rounds || this.matchOver) return;
+    // «Осада» has its truck instead.
+    if (this.rounds || this.mode === 'siege' || this.matchOver) return;
     this.dropTimer -= dt;
     if (this.dropTimer <= 0) {
       this.dropTimer = this.dropEvery;
@@ -4147,14 +4955,28 @@ export class Sim {
   private callStrike(actor: Actor, aim: number, distance: number): void {
     if (actor.strikes <= 0) return;
     const S = CONFIG.streak;
-    const r = clamp(distance, 3, S.strikeRange);
+    const siege = this.mode === 'siege';
+    if (siege && (actor.mortarCd ?? 0) > 0) return;
+    const r = clamp(distance, 3, siege ? CONFIG.siege.opRange : S.strikeRange);
     const x = clamp(actor.x + Math.cos(aim) * r, this.map.minX + 1, this.map.maxX - 1);
     const z = clamp(actor.z + Math.sin(aim) * r, this.map.minZ + 1, this.map.maxZ - 1);
+    // «Осада»: the operator fires on what the team marked or a drone of theirs can see.
+    if (siege && actor.kind === 'player') {
+      const G = CONFIG.siege;
+      const marked = this.marks.some((m) => m.team === actor.team && dist(m.x, m.z, x, z) < G.markNear);
+      const seen = this.drones.some((d) => d.team === actor.team && !d.down && dist(d.x, d.z, x, z) < G.droneSees);
+      if (!marked && !seen) {
+        this.events.push({ type: 'strike', id: 'nodata', ownerId: actor.id, x, z });
+        return;
+      }
+    }
+    if (siege) actor.mortarCd = CONFIG.siege.mortarCd;
     actor.strikes--;
+    const delay = siege ? CONFIG.siege.mortarDelay : S.strikeDelay;
     for (let i = 0; i < S.shells; i++) {
       const a = this.rng.next() * Math.PI * 2;
       const s = i === 0 ? 0 : S.shellSpread * (0.4 + this.rng.next() * 0.6);
-      this.shells.push({ id: this.nextShellId++, x: x + Math.cos(a) * s, z: z + Math.sin(a) * s, t: S.strikeDelay + i * S.shellGap, ownerId: actor.id });
+      this.shells.push({ id: this.nextShellId++, x: x + Math.cos(a) * s, z: z + Math.sin(a) * s, t: delay + i * S.shellGap, ownerId: actor.id });
     }
     this.events.push({ type: 'strike', id: 'call', ownerId: actor.id, x, z });
   }
@@ -4207,6 +5029,14 @@ export class Sim {
         this.wireCut.delete(a.id);
         continue;
       }
+      // «Осада»: an enemy wading into a team's wire rings out for that team.
+      if (wire.team !== undefined && wire.team !== a.team && !isCreep(a) && this.inWire(a.x, a.z)) {
+        if (!this.wireIn.has(a.id)) {
+          this.wireIn.add(a.id);
+          this.noises.push({ x: a.x, z: a.z, radius: CONFIG.siege.wireAlarm, time: this.time, ownerId: a.id });
+          this.events.push({ type: 'wire', id: 'alarm', team: wire.team, ownerId: a.id, x: a.x, z: a.z });
+        }
+      } else this.wireIn.delete(a.id);
       if (pulse && this.inWire(a.x, a.z) && Math.hypot(a.vx, a.vz) > 0.3) {
         this.damageActor(a, W.dps * 0.5, -1, undefined, false, 'wire');
         this.events.push({ type: 'wire', id: 'hurt', ownerId: a.id, x: a.x, z: a.z });

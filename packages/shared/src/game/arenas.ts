@@ -35,6 +35,7 @@ import type { WeaponId } from './weapons';
 //   Y bush (no collision; hides whoever keeps quiet in it)
 //   = trench (slows you; crouched in it you are hidden, long shots from the open hit less)
 //   o shell crater (hides you crouched, like a trench)  W barbed wire (slows, cuts; E or a knife cuts it)
+//   & tower  ^ throne  * truck spot («Осада» only)
 
 export const CELL = 1.5;
 
@@ -417,6 +418,49 @@ export const ARENAS: ArenaInfo[] = [
   },
 ];
 
+/**
+ * «Осада»: the one map of the mode, wider than the rest (left half 30 cells).
+ * Blue holds the left, red the right: a base with the throne, two lanes with
+ * two towers each along the top and bottom, the forest between them with the
+ * truck's spots.
+ */
+export const SIEGE_ARENA: ArenaInfo = {
+  id: 'osada',
+  name: 'Осада',
+  theme: 'forest',
+  rows: [
+    '###############################',
+    '#S.............................',
+    '#.................K............',
+    '#..L.......&....L....&....L...L',
+    '#.................K............',
+    '#S.............................',
+    '#......#####..####..#####..###.',
+    '#......#..Y......##......Y.....',
+    '#.L....#.Y.Y..#.......Y.....#.Y',
+    '#......#......#...*....Y.Y..#..',
+    '#......#..##.....Y........#....',
+    '#......#..#..o...Y...##........',
+    '#.+....#.......Y.........Y..Y..',
+    '#......#.Y....###...o....Y...Y.',
+    '#..^.....Y........Y...........*',
+    '#......#.Y....###...o....Y...Y.',
+    '#.O....#.......Y.........Y..Y..',
+    '#......#..#..o...Y...##........',
+    '#......#..##.....Y........#....',
+    '#......#......#...*....Y.Y..#..',
+    '#.L....#.Y.Y..#.......Y.....#.Y',
+    '#......#..Y......##......Y.....',
+    '#......#####..####..#####..###.',
+    '#S.............................',
+    '#.................K............',
+    '#..L.......&....L....&....L...L',
+    '#.................K............',
+    '#S.............................',
+    '###############################',
+  ],
+};
+
 const PROP_CHARS: Record<string, PropKind> = {
   C: 'crate', B: 'barrel', K: 'cover', V: 'car', T: 'tires', P: 'pallet',
   D: 'drum', M: 'cabinet', A: 'ammo', t: 'table', c: 'chair',
@@ -431,15 +475,17 @@ const INTERACT_CHARS: Record<string, InteractKind> = { G: 'switch', O: 'ammo', '
 /** Expands the mirrored rows into the full grid. */
 export function arenaGrid(info: ArenaInfo): string[] {
   return info.rows.map((r) => {
-    if (r.length !== 21) throw new Error(`arena ${info.id}: row must be 21 chars: "${r}"`);
+    if (r.length !== info.rows[0].length) throw new Error(`arena ${info.id}: rows must be one length: "${r}"`);
     if (info.mirror === false) return r;
-    const left = r.slice(0, 20);
-    return left + r[20] + [...left].reverse().join('');
+    // The left half, then the centre column (the row's last cell).
+    const half = r.length - 1;
+    const left = r.slice(0, half);
+    return left + r[half] + [...left].reverse().join('');
   });
 }
 
 export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): MapData {
-  const info = ARENAS.find((a) => a.id === id) ?? ARENAS[0];
+  const info = mode === 'siege' ? SIEGE_ARENA : ARENAS.find((a) => a.id === id) ?? ARENAS[0];
   const grid = arenaGrid(info);
   const gw = grid[0].length;
   const gh = grid.length;
@@ -473,6 +519,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
   const interactables: InteractDef[] = [];
   const arenaDoors: ArenaDoorDef[] = [];
   const craters: CraterDef[] = [];
+  const truckSpots: { x: number; z: number }[] = [];
   const seen = new Uint8Array(gw * gh);
 
   for (let z = 0; z < gh; z++) {
@@ -485,6 +532,12 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
       else if (INTERACT_CHARS[ch]) interactables.push({ id: interactables.length + 1, kind: INTERACT_CHARS[ch], ...p });
       else if (ch === '|' || ch === '-') arenaDoors.push({ ...p, vertical: ch === '|' });
       else if (ch === 'o') craters.push({ ...p, r: 1.25 });
+      else if (ch === '*') truckSpots.push(p);
+      else if (ch === '&' || ch === '^') {
+        const kind: PropKind = ch === '&' ? 'tower' : 'throne';
+        const def = PROP_TABLE[kind];
+        props.push({ id: props.length + 1, kind, ...p, hw: def.hw, hh: def.hh, explosive: false, fixed: true, hp: def.hp, room: 0 });
+      }
       else if (ch === 'W') {
         // Wire follows its run: turned when it runs along z.
         const def = PROP_TABLE.wire;
@@ -604,6 +657,7 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
     interactables,
     arenaDoors,
     craters,
+    truckSpots: truckSpots.length ? truckSpots : undefined,
     spawns,
     spawnX: spawns[0]?.x ?? maxX / 2,
     spawnZ: spawns[0]?.z ?? maxZ / 2,

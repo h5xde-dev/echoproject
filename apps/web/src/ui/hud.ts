@@ -1,5 +1,5 @@
-import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, ModeState, PlayerClass, RoomDef, RoomObjective, ShopItem } from '@echo/shared/game/types';
-import { GUN_LADDER, isArena, isRoundMode, isTeamMode, SHOP, TEAM_NAMES } from '@echo/shared/game/modes';
+import type { BombState, Buffs, FlagState, Gait, GameMode, GrenadeKind, MapData, ModeState, PlayerClass, RoomDef, RoomObjective, ShopItem, SiegeRole } from '@echo/shared/game/types';
+import { GUN_LADDER, isArena, isRoundMode, isTeamMode, SHOP, SIEGE_ROLES, TEAM_NAMES } from '@echo/shared/game/modes';
 import type { RoundState, WaveState } from '@echo/shared/net/protocol';
 import { WEAPON_ORDER } from '@echo/shared/game/weapons';
 import { CONFIG } from '@echo/shared/game/config';
@@ -85,6 +85,19 @@ export interface HudState {
   tierKills: number;
   round: RoundState | null;
   modeTitle: string;
+  /** «Осада»: the local fighter's role and lane, wire coils, mortar cooldown. */
+  siege?: { role: SiegeRole | undefined; lane: number; wires: number; mortarCd: number };
+}
+
+/** «Осада»: one line of the team shop as the local fighter sees it. */
+export interface SiegeShopRow {
+  item: ShopItem;
+  name: string;
+  price: number;
+  note: string;
+  /** Their role's item (no off-role markup). */
+  own: boolean;
+  locked: boolean;
 }
 
 export interface HudScore {
@@ -331,6 +344,28 @@ export class Hud {
     this.shopEl.innerHTML = `<div class="shop-head"><span>МАГАЗИН</span><b>$${money}</b></div><div class="shop-grid">${items}</div><div class="shop-foot">B — закрыть · клавиши 1–9, 0 или клик</div>`;
   }
 
+  /** «Осада»: the team shop — the bank is shared, the prices are this fighter's. */
+  showSiegeShop(open: boolean, shop: { bank: number; role: string; rows: SiegeShopRow[] }): void {
+    this.shopEl.classList.toggle('visible', open);
+    this.hudRoot().classList.toggle('shopping', open);
+    if (!open) return;
+    const key = `${shop.bank}|${shop.role}|${shop.rows.map((r) => `${r.price}${+r.locked}`).join(',')}`;
+    if (key === this.shopKey) return;
+    this.shopKey = key;
+    const items = shop.rows
+      .map((e, i) => {
+        const k = i < 9 ? String(i + 1) : i === 9 ? '0' : '';
+        const price = e.price > 0 ? `${e.price}` : '—';
+        return `<button class="shop-item${e.locked ? ' locked' : ''}${e.own ? ' own' : ''}" data-item="${e.item}" title="${escapeHtml(e.note)}"><kbd>${k}</kbd><span>${escapeHtml(e.name)}<small>${escapeHtml(e.note)}</small></span><em>${price}</em></button>`;
+      })
+      .join('');
+    const markup = Math.round((CONFIG.siege.offRoleMul - 1) * 100);
+    this.shopEl.innerHTML =
+      `<div class="shop-head"><span>БАНК КОМАНДЫ${shop.role ? ` · ВЫ — ${escapeHtml(shop.role.toUpperCase())}` : ''}</span><b>${shop.bank}</b></div>` +
+      `<div class="shop-grid">${items}</div>` +
+      `<div class="shop-foot">Своё по роли — без наценки, чужое +${markup}% · повтор в течение минуты +${Math.round(CONFIG.siege.repeatMul * 100)}% · B — закрыть</div>`;
+  }
+
   private hudRoot(): HTMLElement {
     return this.root;
   }
@@ -541,6 +576,7 @@ export class Hud {
         if (this.mode === 'infect') me = state.team === 1 ? ' · ВЫ ЗАРАЖЁННЫЙ — НОЖ' : ' · ВЫ ЧЕЛОВЕК';
         else if (this.mode === 'vip') me = state.isVip ? ' · ВЫ — VIP: К ТОЧКЕ!' : state.team >= 0 ? ` · ВЫ — ${TEAM_NAMES[state.team]}` : '';
         else if (this.mode === 'extract' && state.carrying >= 0) me = ' · ГРУЗ У ВАС — К ТОЧКЕ';
+        else if (this.mode === 'siege' && state.siege?.role) me = siegeLine(state, ms);
         this.objectiveEl.textContent = `${ms.text}${ms.t > 0 ? ` ${clock(ms.t)}` : ''}${me}`;
       } else if (this.mode === 'bomb') {
         const r = state.round;
@@ -917,6 +953,7 @@ export class Hud {
     blips: { noise: { x: number; z: number; life: number }[]; marks: { x: number; z: number; life: number }[] } = { noise: [], marks: [] },
     modeState: ModeState | null = null,
     hotspot: { x: number; z: number } | null = null,
+    siege: { towers: { x: number; z: number; ally: boolean; alive: boolean; throne: boolean }[]; exposed: { x: number; z: number }[] } | null = null,
   ): void {
     const ctx = this.minimapCtx;
     // Drawn in 184 CSS px; the backing store follows the screen density and
@@ -1000,6 +1037,43 @@ export class Hud {
       ctx.fillRect(px(p.x) - r, pz(p.z) - r, r * 2, r * 2);
     }
 
+    // «Осада»: towers (squares, the throne bigger; a cross once down), the truck, operators camping at home.
+    if (siege) {
+      for (const t of siege.towers) {
+        const r = t.throne ? 4 : 2.8;
+        ctx.fillStyle = t.ally ? '#3fd6c8' : '#e05268';
+        ctx.strokeStyle = ctx.fillStyle;
+        if (t.alive) ctx.fillRect(px(t.x) - r, pz(t.z) - r, r * 2, r * 2);
+        else {
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px(t.x) - r, pz(t.z) - r);
+          ctx.lineTo(px(t.x) + r, pz(t.z) + r);
+          ctx.moveTo(px(t.x) + r, pz(t.z) - r);
+          ctx.lineTo(px(t.x) - r, pz(t.z) + r);
+          ctx.stroke();
+        }
+      }
+      const tr = modeState?.truck;
+      if (tr) {
+        ctx.fillStyle = '#ffb545';
+        ctx.beginPath();
+        ctx.moveTo(px(tr.x), pz(tr.z) - 5);
+        ctx.lineTo(px(tr.x) + 5, pz(tr.z));
+        ctx.lineTo(px(tr.x), pz(tr.z) + 5);
+        ctx.lineTo(px(tr.x) - 5, pz(tr.z));
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.strokeStyle = '#ff3a4a';
+      ctx.lineWidth = 1.5;
+      for (const e of siege.exposed) {
+        ctx.beginPath();
+        ctx.arc(px(e.x), pz(e.z), 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     // The hotspot: an amber circle worth fighting over.
     if (hotspot) {
       ctx.strokeStyle = '#ffb545';
@@ -1069,6 +1143,19 @@ function must(root: HTMLElement, selector: string): HTMLElement {
   const el = root.querySelector<HTMLElement>(selector);
   if (!el) throw new Error(`HUD element not found: ${selector}`);
   return el;
+}
+
+/** «Осада»: the local fighter's part of the status line: role, bank, the role's tools. */
+function siegeLine(state: HudState, ms: ModeState): string {
+  const sg = state.siege!;
+  const role = sg.role ? SIEGE_ROLES[sg.role].short : '';
+  const bank = ms.bank?.[state.team] ?? 0;
+  const lane = sg.role === 'line' ? (sg.lane === 0 ? ' ВЕРХ' : ' НИЗ') : '';
+  let tools = '';
+  if (sg.role === 'sab') tools = ` · ПРОВОЛОКА ${sg.wires} (N)`;
+  if (sg.role === 'op') tools = ` · ДРОНЫ ${state.drones} (X) · МИНОМЁТ ${state.strikes ? (sg.mortarCd > 0 ? `${sg.mortarCd} С` : 'T') : '— (B)'}`;
+  const buff = ms.buff && state.team >= 0 && ms.buff[state.team * 2] ? ` · ${ms.buff[state.team * 2] === 'reload' ? 'БАШНИ БЫСТРЕЕ' : 'ЩИТ'} ${ms.buff[state.team * 2 + 1]} С` : '';
+  return ` · ${role}${lane} · БАНК ${bank} (B)${tools}${buff}`;
 }
 
 const GAIT_LABEL: Record<Gait, string> = {

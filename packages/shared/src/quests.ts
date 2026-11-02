@@ -31,6 +31,7 @@ export const DAILY_QUESTS: QuestDef[] = [
   { id: 'd_zone', text: 'Сыграть в «Сужающуюся зону»', stat: 'play_zone', goal: 1, xp: 150 },
   { id: 'd_streak', text: 'Серия из 3 убийств', stat: 'streak3', goal: 1, xp: 150 },
   { id: 'd_hotspot', text: 'Удержать 2 горячие точки', stat: 'hotspots', goal: 2, xp: 200 },
+  { id: 'd_truck', text: 'Взять грузовик в «Осаде»', stat: 'trucks', goal: 1, xp: 200 },
   { id: 'd_objective', text: 'Выполнить 2 цели (флаг, бомба, терминал, VIP)', stat: 'objectives_all', goal: 2, xp: 200 },
 ];
 
@@ -43,6 +44,7 @@ export const WEEKLY_QUESTS: QuestDef[] = [
   { id: 'w_revive15', text: 'Поднять 15 союзников', stat: 'revives', goal: 15, xp: 600 },
   { id: 'w_modes4', text: 'Победить в «Заражении», «Эвакуации», VIP или «Зоне» 3 раза', stat: 'win_new', goal: 3, xp: 700 },
   { id: 'w_cargo10', text: 'Вынести 10 грузов', stat: 'cargo', goal: 10, xp: 700 },
+  { id: 'w_towers5', text: 'Разрушить 5 башен в «Осаде»', stat: 'towers', goal: 5, xp: 700 },
 ];
 
 export type CosmeticKind = 'camo' | 'badge';

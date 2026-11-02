@@ -1,4 +1,4 @@
-import type { ModeState, BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, Flare, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud, StrikeShell, SupplyDrop } from '../game/types';
+import type { SiegeRole, ModeState, BombState, Buffs, Drone, EnemyRole, FireZone, FlagState, Flare, GameEvent, GameMode, Grenade, GrenadeKind, MapData, PlayerClass, PowerupKind, PropKind, RoomObjective, ShopItem, SmokeCloud, StrikeShell, SupplyDrop } from '../game/types';
 import type { WeaponId } from '../game/weapons';
 
 export interface ActorState {
@@ -59,7 +59,19 @@ export interface ActorState {
   mines?: number;
   flares?: number;
   hold?: number;
+  /** «Осада»: role and lane, wire coils, the longer drone battery, mortar cooldown. */
+  srole?: SiegeRole;
+  lane?: number;
+  wires?: number;
+  droneExt?: boolean;
+  mortarCd?: number;
 }
+
+/**
+ * «Осада» lane creeps, many and simple: [id, role, team, x, z, ang, hp, maxHp, alive]
+ * with role 0 creep, 1 shieldman, 2 kamikaze (see expandCreep).
+ */
+export type CreepState = [number, number, number, number, number, number, number, number, number];
 
 export interface BulletState {
   id: string;
@@ -158,6 +170,8 @@ export interface SnapshotMsg {
   flags?: FlagState[];
   /** The new modes (infect, extract, vip, zone): status, marks, zone. */
   modeState?: ModeState;
+  /** «Осада»: lane creeps, packed (they are not in `actors`). */
+  creeps?: CreepState[];
   /** A map event under way: blackout, rain… and seconds left. */
   world?: { kind: string; t: number };
   /** The hotspot circle of the matching map event. */

@@ -1,6 +1,8 @@
 import { isRoundMode } from '../game/modes';
 import type { Sim } from '../game/sim';
-import type { ActorState, RoundState, SnapshotMsg, WaveState } from './protocol';
+import { isCreep } from '../game/sim';
+import type { EnemyRole } from '../game/types';
+import type { ActorState, CreepState, RoundState, SnapshotMsg, WaveState } from './protocol';
 
 // What an authority (a hosting browser or the dedicated server) sends its
 // clients: the whole visible state of the match. Kept small, 20 times a
@@ -28,7 +30,12 @@ function changedProps(sim: Sim): Set<number> {
 
 export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number>): SnapshotMsg {
   const actors: ActorState[] = [];
+  const creeps: CreepState[] = [];
   for (const a of sim.actors.values()) {
+    if (isCreep(a)) {
+      creeps.push([a.id, CREEP_ROLES.indexOf(a.role), a.team, r3(a.x), r3(a.z), Math.round(a.ang * 100) / 100, Math.round(a.hp), a.maxHp, a.alive ? 1 : 0]);
+      continue;
+    }
     actors.push({
       id: a.id,
       kind: a.kind,
@@ -80,6 +87,11 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
       mines: a.mines || undefined,
       flares: a.flares || undefined,
       hold: a.holdT > 0 ? a.holdT : undefined,
+      srole: a.siegeRole,
+      lane: a.siegeRole ? a.lane : undefined,
+      wires: a.wires || undefined,
+      droneExt: a.droneExt || undefined,
+      mortarCd: a.mortarCd ? Math.ceil(a.mortarCd) : undefined,
     });
   }
   const bullets = sim.bullets.map((b) => ({ id: b.id, x: r3(b.x), z: r3(b.z), vx: r3(b.vx), vz: r3(b.vz), color: b.color }));
@@ -100,6 +112,7 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
     room: sim.roomIndex,
     phase: sim.roomPhase,
     actors,
+    creeps: creeps.length ? creeps : undefined,
     bullets,
     props,
     doors,
@@ -148,4 +161,18 @@ export function waveStateOf(sim: Sim): WaveState | null {
 export function roundStateOf(sim: Sim): RoundState | null {
   if (!isRoundMode(sim.mode)) return null;
   return { n: sim.round, phase: sim.roundPhase, t: Math.max(0, sim.roundT), canBuy: sim.canBuy };
+}
+
+const CREEP_ROLES: EnemyRole[] = ['creep', 'shieldman', 'kamikaze'];
+
+/** A packed creep back as an ordinary actor state (clients draw it like any other). */
+export function expandCreep(c: CreepState): ActorState {
+  const [id, role, team, x, z, ang, hp, maxHp, alive] = c;
+  return {
+    id, kind: 'enemy', peerId: '', name: '', x, z, ang, hp, maxHp, armor: 0, alive: alive === 1,
+    weapon: 'pistol', weapons: ['pistol'],
+    buffs: { damage: 0, speed: 0, rapid: 0, nv: 0, regen: 0, stealth: 0, radar: 0, overshield: 0 },
+    shield: 0, grenades: 0, money: 0, tier: 0, tierKills: 0, ammo: 1, reloading: false, flashOn: false, slot: 0,
+    team, role: CREEP_ROLES[role] ?? 'creep',
+  };
 }

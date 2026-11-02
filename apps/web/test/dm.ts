@@ -9,7 +9,8 @@ import { statEvent, type MatchStats } from '@echo/shared/progress';
 import { ARENAS, buildArena } from '@echo/shared/game/arenas';
 import { CONFIG } from '@echo/shared/game/config';
 import { generateMap, pickPowerup } from '@echo/shared/game/levelgen';
-import { Sim } from '@echo/shared/game/sim';
+import { isCreep, Sim } from '@echo/shared/game/sim';
+import { buildSnapshot, expandCreep } from '@echo/shared/net/snapshot';
 import { addMatch, levelOf, loadProgress, matchXp } from '../src/ui/progress';
 import { WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
 import type { GameMode } from '@echo/shared/game/types';
@@ -2066,6 +2067,174 @@ for (const info of ARENAS) {
   check(near(aimRelativeMove(1, 0, -Math.PI / 2), 1, 0), 'aim north (up): D strafes right, as on the screen');
   const d = aimRelativeMove(Math.SQRT1_2, -Math.SQRT1_2, 1.234);
   check(Math.abs(Math.hypot(d.x, d.z) - 1) < 1e-9, 'a diagonal keeps its length');
+}
+
+
+// «Осада»: the map, roles, creeps on the lanes, towers and the throne, the
+// shop's prices, the mortar's rule, the truck, wire alarms, packed creeps.
+{
+  type SiegeTowerT = { prop: { id: number; x: number; z: number; hp: number; alive: boolean }; team: number; lane: number; throne: boolean; up: string };
+  type Priv = {
+    towers: SiegeTowerT[];
+    truck: { x: number; z: number; progress: number; team: number; life: number } | null;
+    truckT: number;
+    siegeWaveT: number;
+    marks: { team: number; x: number; z: number; t: number }[];
+    damageStructure(p: unknown, amount: number, team: number, src: number, hero: boolean): void;
+    throneOpen(team: number): boolean;
+    callStrike(a: unknown, aim: number, d: number): void;
+    placeWire(a: unknown): void;
+  };
+  const dt = CONFIG.tickDt;
+  const map = buildArena('sklad', 4040, 'siege');
+  check(map.name === 'Осада' && map.gridW === 61, `siege has its own wide map (${map.name}, ${map.gridW} cells)`);
+  const towerProps = map.props.filter((p) => p.kind === 'tower');
+  const thrones = map.props.filter((p) => p.kind === 'throne');
+  check(towerProps.length === 8 && thrones.length === 2 && (map.truckSpots?.length ?? 0) >= 3, `8 towers, 2 thrones, ${map.truckSpots?.length} truck spots`);
+  const s = new Sim(map);
+  const priv = s as unknown as Priv;
+  const from = map.spawns[0];
+  const unreachable = [...thrones, ...(map.truckSpots ?? []), ...towerProps.map((t) => ({ x: t.x + 1.6, z: t.z }))].filter((t) => !s.nav.find(from.x, from.z, t.x, t.z));
+  check(unreachable.length === 0, `throne, towers and truck spots reachable (${unreachable.length} not)`);
+  const p = s.addPlayer('p', 'Игрок', 1);
+  s.fillBots();
+  const fighters = [...s.actors.values()];
+  check(fighters.length === CONFIG.siege.fighters, `four a side whatever the room asked for (${fighters.length})`);
+  check(p.siegeRole === 'line' && p.lane === 0 && p.weapons.includes('rifle'), `a person gets the first seat: line, top lane (${p.siegeRole}${p.lane})`);
+  const roles = [0, 1].map((t) => fighters.filter((a) => a.team === t).map((a) => `${a.siegeRole}${a.siegeRole === 'line' ? a.lane : ''}`).sort().join(','));
+  check(roles.every((r) => r === 'line0,line1,op,sab'), `each side: two lines, an operator, a saboteur (${roles.join(' | ')})`);
+
+  // Creeps come out and walk their lane.
+  priv.siegeWaveT = 0;
+  s.step(dt);
+  const creeps = [...s.actors.values()].filter(isCreep);
+  check(creeps.length === 4 * CONFIG.siege.waveCreeps, `a wave: ${creeps.length} creeps on both lanes for both sides`);
+  const blue = creeps.find((c) => c.team === 0)!;
+  const x0 = blue.x;
+  for (let i = 0; i < Math.round(8 / dt); i++) s.step(dt);
+  check(!blue.alive || blue.x > x0 + 10, `a creep walks down its lane (${x0.toFixed(1)} → ${blue.x.toFixed(1)})`);
+  check(!s.scores.has(blue.id), 'creeps are not on the scoreboard');
+
+  // Packed in snapshots, and back.
+  const snap = buildSnapshot(s, 1, {});
+  const packed = snap.creeps ?? [];
+  const back = packed.length ? expandCreep(packed[0]) : null;
+  check(packed.length > 0 && !snap.actors.some((a) => isCreep(a)) && !!back && back.role !== undefined && isCreep(back), `creeps travel packed (${packed.length}) and unpack as actors`);
+
+  // A tower shoots an enemy fighter that walks up to it (no creeps around).
+  for (const c of [...s.actors.values()]) if (isCreep(c)) s.removeActor(c.id);
+  const red = priv.towers.find((t) => !t.throne && t.team === 1 && t.lane === 0)!;
+  p.x = red.prop.x - 6;
+  p.z = red.prop.z;
+  p.hp = p.maxHp;
+  p.shield = 0;
+  for (const a of s.actors.values()) if (a !== p && a.ai) a.alive = false;
+  let hit = false;
+  for (let i = 0; i < Math.round(2.5 / dt) && !hit; i++) {
+    s.step(dt);
+    hit = s.drainEvents().some((e) => e.type === 'hurt' && e.ownerId === p.id && (e.by ?? 0) < 0);
+    p.x = red.prop.x - 6;
+    p.z = red.prop.z;
+  }
+  check(hit, 'a tower shoots an enemy in range');
+
+  // The throne is closed until a lane falls; then it takes damage.
+  const throne = priv.towers.find((t) => t.throne && t.team === 1)!;
+  const hp0 = throne.prop.hp;
+  priv.damageStructure(throne.prop, 500, 0, p.id, false);
+  check(throne.prop.hp === hp0 && !priv.throneOpen(1), 'the throne shrugs off damage while its lanes stand');
+  for (const t of priv.towers.filter((x) => x.team === 1 && x.lane === 0)) priv.damageStructure(t.prop, 1e6, 0, p.id, false);
+  check(priv.throneOpen(1), 'a lane down: the throne opens');
+  const bank0 = s.bank[0];
+  s.drainEvents();
+  priv.damageStructure(throne.prop, 500, 0, p.id, false);
+  check(throne.prop.hp < hp0, `then it takes damage (${hp0} → ${throne.prop.hp})`);
+  check(s.bank[0] >= bank0, 'broken towers paid the bank');
+  // Friendly fire on own structures does nothing.
+  const own = priv.towers.find((t) => !t.throne && t.team === 0)!;
+  const ownHp = own.prop.hp;
+  priv.damageStructure(own.prop, 500, 0, p.id, true);
+  check(own.prop.hp === ownHp, 'own side cannot hurt its towers');
+
+  // Shop: role prices, repeat markup, tower upgrades near a tower.
+  p.alive = true;
+  s.bank[0] = 1000;
+  p.x = own.prop.x - 2;
+  p.z = own.prop.z;
+  check(s.buy(p, 'tw_mg') && own.up === 'mg' && s.bank[0] === 800, `the line upgrades the tower it stands by (${own.up}, bank ${s.bank[0]})`);
+  const b1 = s.bank[0];
+  s.buy(p, 'drone');
+  check(b1 - s.bank[0] === Math.round(80 * CONFIG.siege.offRoleMul), `off-role items cost more (${b1 - s.bank[0]})`);
+  s.buy(p, 'wire');
+  const b2 = s.bank[0];
+  s.buy(p, 'wire');
+  check(b2 - s.bank[0] === Math.round(40 * CONFIG.siege.offRoleMul * (1 + CONFIG.siege.repeatMul)), `a repeat buy within a minute costs more (${b2 - s.bank[0]})`);
+
+  // The mortar fires only on a mark (or under a drone).
+  p.strikes = 1;
+  p.mortarCd = 0;
+  s.drainEvents();
+  priv.callStrike(p, 0, 20);
+  check(s.drainEvents().some((e) => e.type === 'strike' && e.id === 'nodata') && p.strikes === 1, 'no mark, no salvo');
+  priv.marks.push({ team: p.team, x: p.x + 20, z: p.z, t: s.time });
+  priv.callStrike(p, 0, 20);
+  check(p.strikes === 0 && s.shells.length === 3 && (p.mortarCd ?? 0) > 0, 'on a mark: three shells and a cooldown');
+
+  // The truck: alone in the circle for 5 s.
+  priv.truckT = 0;
+  s.step(dt);
+  const tr = priv.truck!;
+  check(!!tr, 'the truck turns up');
+  const bankBefore = s.bank[0];
+  let taken = false;
+  for (let i = 0; i < Math.round((CONFIG.siege.truckHold + 0.5) / dt) && !taken; i++) {
+    p.x = tr.x;
+    p.z = tr.z;
+    p.alive = true;
+    p.hp = p.maxHp;
+    for (const a of s.actors.values()) if (a !== p && !isCreep(a) && a.ai) a.alive = false;
+    s.step(dt);
+    taken = s.drainEvents().some((e) => e.type === 'siege' && e.id === 'truck' && e.text === 'taken' && e.team === p.team);
+  }
+  check(taken && s.bank[0] >= bankBefore + CONFIG.siege.reward.truck - 1, `held alone: taken, +${Math.round(s.bank[0] - bankBefore)} to the bank`);
+
+  // The saboteur's wire rings when an enemy wades into it.
+  const sab = [...s.actors.values()].find((a) => a.team === 1 && a.siegeRole === 'sab')!;
+  sab.alive = true;
+  sab.wires = 1;
+  sab.x = 46;
+  sab.z = 21.75;
+  sab.ang = Math.PI;
+  priv.placeWire(sab);
+  const wire = s.props.find((x) => x.kind === 'wire' && x.ownerId === sab.id);
+  check(!!wire && sab.wires === 0, 'the saboteur lays a coil (N)');
+  if (wire) {
+    p.x = wire.x;
+    p.z = wire.z;
+    s.drainEvents();
+    s.step(dt);
+    const alarm = s.drainEvents().find((e) => e.type === 'wire' && e.id === 'alarm');
+    check(alarm?.team === 1 && alarm.ownerId === p.id, 'an enemy in it: the alarm rings for the wire’s side');
+  }
+}
+
+// «Осада» bots only: the match runs to an end with creeps, towers and trucks.
+{
+  const s = new Sim(buildArena('sklad', 5151, 'siege'));
+  s.fillBots();
+  const dt = CONFIG.tickDt;
+  let ended = '';
+  let towers = 0;
+  let trucks = 0;
+  for (let t = 0; t < CONFIG.siege.timeLimit + 2 && !ended; t += dt) {
+    s.step(dt);
+    for (const e of s.drainEvents()) {
+      if (e.type === 'victory') ended = e.text ?? '?';
+      if (e.type === 'siege' && e.id === 'tower') towers++;
+      if (e.type === 'siege' && e.id === 'truck' && e.text === 'taken') trucks++;
+    }
+  }
+  check(!!ended && towers >= 1 && trucks >= 3, `bots play siege to the end: ${ended} (${towers} towers down, ${trucks} trucks taken)`);
 }
 
 out.push(`${failures} failures`);

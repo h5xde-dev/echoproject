@@ -4,7 +4,26 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb' | 'infect' | 'extract' | 'vip' | 'zone';
+export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb' | 'infect' | 'extract' | 'vip' | 'zone' | 'siege';
+
+/** «Осада»: what a fighter does for the team (see CONFIG.siege). */
+export type SiegeRole = 'line' | 'sab' | 'op';
+
+/** A tower's upgrade: none, machine gun, flamethrower, electronic warfare. */
+export type TowerUp = '' | 'mg' | 'flame' | 'ew';
+
+/** «Осада»: a tower or throne as snapshots carry it (the body is a prop). */
+export interface TowerState {
+  id: number;
+  team: number;
+  lane: number;
+  up: TowerUp;
+  hp: number;
+  max: number;
+  /** The throne: open to damage only once a lane falls (or late in the match). */
+  throne?: boolean;
+  open?: boolean;
+}
 
 /**
  * What the new modes (infect, extract, vip, zone) show and draw, built by the
@@ -19,6 +38,13 @@ export interface ModeState {
   points?: { x: number; z: number; kind: 'extract' | 'cargo' | 'goal' }[];
   vip?: number;
   score?: [number, number];
+  /** «Осада»: towers, both banks, the truck and capture, operators camping at home. */
+  towers?: TowerState[];
+  bank?: [number, number];
+  truck?: { x: number; z: number; progress: number; team: number };
+  exposed?: number[];
+  /** Seconds left on each team's truck buff, and which ('reload' | 'shield'). */
+  buff?: [string, number, string, number];
 }
 
 export interface StaticBody {
@@ -73,7 +99,10 @@ export type PropKind =
   /** Barbed wire: no collision, slows and cuts whoever wades through. */
   | 'wire'
   /** An engineer's mine: no collision, goes off under an enemy. */
-  | 'mine';
+  | 'mine'
+  /** «Осада»: a lane tower and the throne (bodies of the structures). */
+  | 'tower'
+  | 'throne';
 
 /** Things to use with E. */
 export type InteractKind = 'switch' | 'ammo' | 'med';
@@ -253,6 +282,8 @@ export interface MapData {
   interactables?: InteractDef[];
   arenaDoors?: ArenaDoorDef[];
   craters?: CraterDef[];
+  /** «Осада»: where the truck can turn up. */
+  truckSpots?: { x: number; z: number }[];
   /** Deathmatch spawn points (empty for co-op levels). */
   spawns: { x: number; z: number }[];
   spawnX: number;
@@ -269,7 +300,8 @@ export type ActorKind = 'player' | 'enemy';
 
 /** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
 /** zombie: the infected in «Заражение» — knife only, fast, tough, no light. */
-export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie';
+/** creep, shieldman, kamikaze: «Осада» lane creeps. */
+export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie' | 'creep' | 'shieldman' | 'kamikaze';
 
 /** A player's speciality (bots have none). */
 export type PlayerClass = 'assault' | 'scout' | 'medic' | 'engineer';
@@ -445,6 +477,12 @@ export interface Actor {
   flares: number;
   /** Holding E on a supply crate or barbed wire: seconds so far. */
   holdT: number;
+  /** «Осада»: role, lane (line fighters), wire coils, the longer drone battery, mortar cooldown. */
+  siegeRole?: SiegeRole;
+  lane?: number;
+  wires?: number;
+  droneExt?: boolean;
+  mortarCd?: number;
 }
 
 /** A kamikaze FPV drone: flown by a soldier who stands still meanwhile. */
@@ -469,6 +507,8 @@ export interface Drone {
   moveZ: number;
   /** Where the pilot wants the nose: the drone yaws toward it at a limited rate. */
   aim: number;
+  /** Seconds inside an enemy electronic-warfare field (the link drops at CONFIG.siege.ewJam). */
+  jam?: number;
 }
 
 /** Co-op: a task a room sets on top of clearing it. */
@@ -511,6 +551,8 @@ export interface FlagState {
 }
 
 export interface Bullet {
+  /** Fired by a tower: its team (towers are not actors). */
+  team?: number;
   /** Already punched through a thin wall (one per bullet, at reduced damage). */
   pierced?: boolean;
   id: string;
@@ -565,7 +607,10 @@ export interface FireZone {
 }
 
 /** Things for sale in competitive mode. */
-export type ShopItem = 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov' | 'drone' | 'flare' | 'mine';
+export type ShopItem =
+  | 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'flamer' | 'armor' | 'grenade' | 'smoke' | 'flash' | 'molotov' | 'drone' | 'flare' | 'mine'
+  /** «Осада»: the team shop. */
+  | 'droneExt' | 'mortar' | 'wire' | 'tw_mg' | 'tw_flame' | 'tw_ew' | 'role_line' | 'role_sab' | 'role_op';
 
 export interface NoiseEvent {
   x: number;
@@ -620,7 +665,9 @@ export interface GameEvent {
     | 'wire'
     | 'flare'
     /** Map event: id = blackout | rain | armored | intercept; text = 'start' | 'end'. */
-    | 'world';
+    | 'world'
+    /** «Осада»: id = wave | tower | throne | truck | ewPulse | income …, see Sim.updateSiege. */
+    | 'siege';
   x?: number;
   z?: number;
   y?: number;

@@ -59,6 +59,9 @@ export const PROP_TABLE: Record<PropKind, PropSpec> = {
   // A roll of wire across a 1.5 m cell (stretched along rows by the arena builder).
   wire: { hw: 0.75, hh: 0.45, hp: 999, explosive: false, fixed: true },
   mine: { hw: 0.3, hh: 0.3, hp: 10, explosive: true, fixed: false },
+  // «Осада»: hit points live in CONFIG.siege (structures take damage their own way).
+  tower: { hw: 0.9, hh: 0.9, hp: 1600, explosive: false, fixed: true },
+  throne: { hw: 1.5, hh: 1.5, hp: 3000, explosive: false, fixed: true },
 };
 
 /** Prop mix per theme: [kind, min, max]. */

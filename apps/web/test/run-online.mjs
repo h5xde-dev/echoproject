@@ -201,6 +201,27 @@ try {
   await f.page.waitForFunction((c) => [...document.querySelectorAll('.open-room')].length > 0 && document.querySelector('.open-rooms-list').textContent.length > 0, q.code, { timeout: 15000, polling: 500 });
   check(true, 'the menu lists open rooms');
 
+  // «Осада» through the server: quick play, creeps arrive packed, towers and the bank in the mode state.
+  const g = await player('Гольф');
+  await g.page.click('.menu-tab[data-tab="online"]');
+  await g.page.click('.mode-card[data-mode="siege"]');
+  await g.page.click('#btn-quick');
+  await inGame(g);
+  await g.page.waitForFunction(() => [...window.echo.game.latestActors.values()].some((a) => a.role === 'creep'), null, { timeout: 30000, polling: 500 });
+  const sg = await g.page.evaluate(() => {
+    const game = window.echo.game;
+    const actors = [...game.latestActors.values()];
+    const me = game.latestActors.get(game.localId);
+    return {
+      fighters: actors.filter((a) => !['creep', 'shieldman', 'kamikaze'].includes(a.role)).length,
+      creeps: actors.filter((a) => a.role === 'creep').length,
+      towers: game.sim.modeState.towers?.length ?? 0,
+      bank: game.sim.modeState.bank,
+      role: me?.srole,
+    };
+  });
+  check(sg.fighters === 8 && sg.creeps > 0 && sg.towers === 10 && !!sg.bank && sg.role === 'line', `siege via the server: ${sg.fighters} fighters, ${sg.creeps} creeps, ${sg.towers} structures, bank ${sg.bank}, role ${sg.role}`);
+
   // A wrong code: a clear message, back in the menu.
   const c = await player('Чарли');
   await c.page.click('.menu-tab[data-tab="online"]');

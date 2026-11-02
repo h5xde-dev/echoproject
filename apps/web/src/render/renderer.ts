@@ -436,21 +436,25 @@ export class Renderer {
     this.bushVisuals = (map.bushes ?? []).map((b, i) => {
       // A faint glow of their own: in the dark a bush still reads as a shape.
       const material = new THREE.MeshStandardMaterial({ color: 0x2c4424, emissive: 0x0e1c0a, roughness: 0.95, transparent: true });
-      const group = new THREE.Group();
-      group.position.set(b.x, 0, b.z);
+      // The blobs are merged into one mesh per bush: a forest map has a
+      // hundred bushes, and six draw calls each (times the shadow passes) was
+      // most of its frame.
       const blobs = 6;
+      const parts: THREE.BufferGeometry[] = [];
+      const m = new THREE.Matrix4();
       for (let k = 0; k < blobs; k++) {
         const a = (k / blobs) * Math.PI * 2 + i;
         const off = k === 0 ? 0 : b.r * 0.5;
-        const blob = new THREE.Mesh(BUSH_BLOB_GEO, material);
         const size = b.r * (k === 0 ? 0.75 : 0.55 + ((k * 37 + i * 11) % 10) * 0.02);
-        blob.scale.set(size, size * 0.85, size);
-        blob.position.set(Math.cos(a) * off, size * 0.6, Math.sin(a) * off);
-        blob.castShadow = true;
-        blob.receiveShadow = true;
-        group.add(blob);
+        m.compose(new THREE.Vector3(Math.cos(a) * off, size * 0.6, Math.sin(a) * off), new THREE.Quaternion(), new THREE.Vector3(size, size * 0.85, size));
+        parts.push(BUSH_BLOB_GEO.clone().applyMatrix4(m));
       }
-      g.add(group);
+      const clump = new THREE.Mesh(mergeGeometries(parts) ?? BUSH_BLOB_GEO, material);
+      for (const part of parts) part.dispose();
+      clump.position.set(b.x, 0, b.z);
+      clump.castShadow = true;
+      clump.receiveShadow = true;
+      g.add(clump);
       return { x: b.x, z: b.z, r: b.r, material };
     });
 
@@ -828,6 +832,16 @@ export class Renderer {
     }
     this.capMask = null;
     this.memoryPlane = null;
+    // «Осада»: EW fields and the truck belong to the old map.
+    for (const ring of this.ewRings.values()) this.overlay.remove(ring);
+    this.ewRings.clear();
+    if (this.truckGroup) {
+      const { ring, fill } = this.truckGroup.userData as { ring: THREE.Mesh; fill: THREE.Mesh };
+      this.overlay.remove(ring, fill);
+      this.scene.remove(this.truckGroup);
+      this.truckGroup = null;
+    }
+    this.siegeKey = '';
     this.ghosts.clear();
     this.propVisuals = [];
     this.doorVisuals = [];
@@ -856,10 +870,10 @@ export class Renderer {
 
   // --------------------------------------------------------------- actors
 
-  ensureActor(id: number, color: number, isPlayer: boolean): ActorVisual {
+  ensureActor(id: number, color: number, isPlayer: boolean, light = false): ActorVisual {
     let visual = this.actorVisuals.get(id);
     if (!visual) {
-      visual = new ActorVisual(id, color, isPlayer);
+      visual = new ActorVisual(id, color, isPlayer, light);
       this.actorVisuals.set(id, visual);
       this.scene.add(visual.group);
     }
@@ -1237,6 +1251,98 @@ export class Renderer {
 
   private hotspotRing: THREE.Mesh | null = null;
 
+  /** «Осада»: EW fields around towers, and the truck with its capture circle. */
+  private ewRings = new Map<number, THREE.Mesh>();
+  private truckGroup: THREE.Group | null = null;
+  private siegeKey = '';
+
+  /**
+   * «Осада» each frame: tower heads by their upgrade, EW fields, the throne's
+   * shield while it is closed, and the truck with its capture filling up.
+   */
+  syncSiege(state: ModeState | null): void {
+    const towers = state?.towers ?? [];
+    const key = towers.map((t) => `${t.id}${t.up}${t.hp > 0 ? 1 : 0}${t.open ? 1 : 0}`).join(',');
+    if (key !== this.siegeKey) {
+      this.siegeKey = key;
+      for (const t of towers) {
+        const pv = this.propVisuals.find((v) => v.id === t.id);
+        const head = pv?.group.getObjectByName('head') as THREE.Mesh | undefined;
+        if (head) (head.material as THREE.MeshStandardMaterial).color.setHex(t.up === 'mg' ? 0x30353c : t.up === 'flame' ? 0xd2541c : t.up === 'ew' ? 0xd8dde4 : 0x5a5f66);
+        const barrel = pv?.group.getObjectByName('barrel');
+        if (barrel) barrel.scale.set(t.up === 'mg' ? 1.5 : t.up === 'flame' ? 0.7 : 1, t.up === 'flame' ? 1.8 : 1, t.up === 'flame' ? 1.8 : 1);
+        const antenna = pv?.group.getObjectByName('antenna');
+        if (antenna) antenna.visible = t.up === 'ew';
+        const dome = pv?.group.getObjectByName('dome');
+        if (dome) dome.visible = !!t.throne && !t.open && t.hp > 0;
+        // The EW field: a faint circle in the tower's colour.
+        let ring = this.ewRings.get(t.id);
+        if (t.up === 'ew' && t.hp > 0 && pv) {
+          if (!ring) {
+            const geo = new THREE.RingGeometry(CONFIG.siege.ewRadius - 0.12, CONFIG.siege.ewRadius, 72).rotateX(-Math.PI / 2);
+            ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: STRUCTURE_COLORS[t.team], transparent: true, opacity: 0.35, depthTest: false, toneMapped: false }));
+            ring.position.set(pv.group.position.x, 0.06, pv.group.position.z);
+            this.overlay.add(ring);
+            this.ewRings.set(t.id, ring);
+          }
+          ring.visible = true;
+        } else if (ring) ring.visible = false;
+      }
+    }
+    const tr = state?.truck;
+    if (!tr) {
+      if (this.truckGroup) {
+        this.truckGroup.visible = false;
+        const { ring, fill } = this.truckGroup.userData as { ring: THREE.Mesh; fill: THREE.Mesh };
+        ring.visible = fill.visible = false;
+      }
+      return;
+    }
+    if (!this.truckGroup) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.5, 1.6), new THREE.MeshStandardMaterial({ color: 0x4f5a3a, roughness: 0.85 }));
+      body.position.set(-0.4, 1.0, 0);
+      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.2, 1.5), new THREE.MeshStandardMaterial({ color: 0x3d4630, roughness: 0.8 }));
+      cab.position.set(1.75, 0.85, 0);
+      const cross = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.3), new THREE.MeshBasicMaterial({ color: 0xe8e8e8, toneMapped: false }));
+      cross.position.set(-0.4, 1.77, 0);
+      const cross2 = cross.clone();
+      cross2.rotation.y = Math.PI / 2;
+      for (const m of [body, cab]) m.castShadow = true;
+      g.add(body, cab, cross, cross2);
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(CONFIG.siege.truckRadius - 0.15, CONFIG.siege.truckRadius, 64).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: 0xffb545, transparent: true, opacity: 0.8, depthTest: false, toneMapped: false }),
+      );
+      ring.name = 'ring';
+      const fill = new THREE.Mesh(new THREE.CircleGeometry(CONFIG.siege.truckRadius, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffb545, transparent: true, opacity: 0.18, depthTest: false, toneMapped: false }));
+      fill.name = 'fill';
+      ring.position.y = fill.position.y = 0.06;
+      this.overlay.add(ring, fill);
+      g.userData = { ring, fill };
+      this.scene.add(g);
+      this.truckGroup = g;
+    }
+    const g = this.truckGroup;
+    g.visible = true;
+    g.position.set(tr.x, 0, tr.z);
+    const { ring, fill } = g.userData as { ring: THREE.Mesh; fill: THREE.Mesh };
+    ring.visible = fill.visible = true;
+    ring.position.x = fill.position.x = tr.x;
+    ring.position.z = fill.position.z = tr.z;
+    // Filling up in the colour of the side holding it.
+    const k = Math.min(1, tr.progress / CONFIG.siege.truckHold);
+    const color = tr.team >= 0 && k > 0 ? STRUCTURE_COLORS[tr.team] : 0xffb545;
+    (ring.material as THREE.MeshBasicMaterial).color.setHex(color);
+    (fill.material as THREE.MeshBasicMaterial).color.setHex(color);
+    fill.scale.setScalar(Math.max(0.02, k));
+  }
+
+  /** An EW pulse sweeping out of a tower. */
+  ewPulse(x: number, z: number, r: number, ours: boolean): void {
+    this.shockwaves.spawn(x, z, r, ours ? 0x7fe8ff : 0xff9a7a, 0.7);
+  }
+
   syncModeMarks(state: ModeState | null, hotspot: { x: number; z: number; r: number; holdT: number } | null = null): void {
     // The hotspot: an amber ring over the fog, pulsing until someone holds it.
     if (hotspot) {
@@ -1462,6 +1568,10 @@ export class Renderer {
     const model = turned ? assets.prop(p.kind, p.hh * 2, p.hw * 2) : assets.prop(p.kind, p.hw * 2, p.hh * 2);
     if (p.kind === 'wire') {
       group.add(wireVisual(p.hw, p.hh));
+    } else if (p.kind === 'tower' || p.kind === 'throne') {
+      const m = this.map;
+      const team = m && p.x > (m.minX + m.maxX) / 2 ? 1 : 0;
+      group.add(structureVisual(p.kind, team));
     } else if (p.kind === 'mine') {
       const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, 0.09, 14), new THREE.MeshStandardMaterial({ color: 0x3c4430, roughness: 0.7, metalness: 0.4 }));
       disc.position.y = 0.05;
@@ -2572,4 +2682,54 @@ function wireVisual(hw: number, hh: number): THREE.Mesh {
     paint(stake, 0x4a3622);
   }
   return new THREE.Mesh(mergeGeometries(parts), WIRE_MAT);
+}
+
+/** «Осада»: the two sides' colours on their structures (as the teams are drawn). */
+const STRUCTURE_COLORS = [0x4aa8ff, 0xff5a4a];
+
+/**
+ * A lane tower (a concrete column, a band in the team's colour, a turret with
+ * a barrel — the head and barrel change with the upgrade) or the throne (a
+ * plinth with a glowing core, under a shield dome while it is closed).
+ */
+function structureVisual(kind: 'tower' | 'throne', team: number): THREE.Group {
+  const g = new THREE.Group();
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x6b6e70, roughness: 0.9 });
+  const glow = new THREE.MeshBasicMaterial({ color: STRUCTURE_COLORS[team], toneMapped: false });
+  if (kind === 'tower') {
+    const column = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.88, 2.4, 10), concrete);
+    column.position.y = 1.2;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.74, 0.74, 0.22, 10), glow);
+    band.position.y = 2.25;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.55, 0.9), new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.6, metalness: 0.4 }));
+    head.name = 'head';
+    head.position.y = 2.65;
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.9, 8).rotateZ(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x24272b, metalness: 0.6, roughness: 0.4 }));
+    barrel.name = 'barrel';
+    barrel.position.set(0.7, 2.65, 0);
+    // The barrel points at the enemy's side.
+    if (team === 1) barrel.position.x = -0.7;
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.4, 6), glow);
+    antenna.name = 'antenna';
+    antenna.position.set(0, 3.6, 0);
+    antenna.visible = false;
+    for (const m of [column, head]) {
+      m.castShadow = true;
+      m.receiveShadow = true;
+    }
+    g.add(column, band, head, barrel, antenna);
+  } else {
+    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.5, 1.3, 8), concrete);
+    plinth.position.y = 0.65;
+    plinth.castShadow = true;
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.75), glow);
+    core.position.y = 2.1;
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(2.3, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: STRUCTURE_COLORS[team], transparent: true, opacity: 0.16, depthWrite: false, toneMapped: false }),
+    );
+    dome.name = 'dome';
+    g.add(plinth, core, dome);
+  }
+  return g;
 }

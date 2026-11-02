@@ -23,7 +23,8 @@ await page.waitForFunction(() => !document.querySelector('#btn-solo').disabled, 
 // Solo lives on the "own game" tab of the main menu.
 await page.click('.menu-tab[data-tab="own"]');
 await page.click(`.mode-card[data-mode="${mode}"]`);
-if (mode !== 'coop') await page.click(`.arena-btn[data-arena="${arena}"]`);
+// Co-op and «Осада» have no arena to pick.
+if (mode !== 'coop' && mode !== 'siege') await page.click(`.arena-btn[data-arena="${arena}"]`);
 await page.evaluate(() => {
   // Time every method of the hot objects; per frame, keep the slow ones.
   const g = window.echo.game;

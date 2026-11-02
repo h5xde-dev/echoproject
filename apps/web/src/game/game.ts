@@ -3,7 +3,7 @@ import { Input } from '../core/input';
 import { aimRelativeMove, clamp } from '@echo/shared/core/math';
 import { gameUrl, MetaLink, type MetaRequest } from '../net/meta';
 import { Net } from '../net/net';
-import { roundStateOf, scoreRows, waveStateOf } from '@echo/shared/net/snapshot';
+import { expandCreep, roundStateOf, scoreRows, waveStateOf } from '@echo/shared/net/snapshot';
 import type { MetaTicketMsg, RoomOptions } from '@echo/shared/net/meta';
 import type { ActorState, EventMsg, LobbyMsg, MatchmakingMsg, ProgressMsg, RankedMsg, RoundState, SnapshotMsg, WaveState, WelcomeMsg } from '@echo/shared/net/protocol';
 import { POWERUP_COLOR, Renderer } from '../render/renderer';
@@ -13,9 +13,9 @@ import { badgeById, camoById } from '@echo/shared/quests';
 import { updateBullets, type BulletActor, type BulletCtx } from '@echo/shared/game/bullets';
 import { CONFIG, COLORS } from '@echo/shared/game/config';
 import { generateMap } from '@echo/shared/game/levelgen';
-import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, TEAM_NAMES } from '@echo/shared/game/modes';
-import { ARENA_DOOR_BASE, Sim, type PlayerInput } from '@echo/shared/game/sim';
-import type { Mutator, Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem } from '@echo/shared/game/types';
+import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, SIEGE_ROLES, SIEGE_SHOP, siegePrice, TEAM_NAMES } from '@echo/shared/game/modes';
+import { ARENA_DOOR_BASE, isCreep, Sim, type PlayerInput } from '@echo/shared/game/sim';
+import type { Mutator, Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem, SiegeRole } from '@echo/shared/game/types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
 import type { Hud, HudPlate, HudScore } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
@@ -88,6 +88,12 @@ export interface DisplayActor {
   moving: boolean;
   camo?: string;
   badge?: string;
+  /** «Осада»: role and lane, wire coils, mortar cooldown, the longer battery. */
+  srole?: SiegeRole;
+  lane?: number;
+  wires?: number;
+  mortarCd?: number;
+  droneExt?: boolean;
 }
 
 interface PendingInput {
@@ -154,7 +160,7 @@ class EntityLerp {
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
 /** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
-const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a };
+const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a, creep: COLORS.enemy, shieldman: 0x9a1420, kamikaze: 0xff8a2a };
 /** Team modes: blue and red, for humans and bots alike. */
 const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
@@ -604,6 +610,8 @@ export class Game {
   }
 
   private onSnapshot(msg: SnapshotMsg): void {
+    // «Осада»: creeps come packed; from here on they are actors like the rest.
+    if (msg.creeps) for (const c of msg.creeps) msg.actors.push(expandCreep(c));
     this.latestActors.clear();
     for (const a of msg.actors) this.latestActors.set(a.id, a);
 
@@ -677,8 +685,9 @@ export class Game {
       mirror.buffs = { ...local.buffs };
       // Carrying a flag or crawling downed slows you: prediction has to know.
       mirror.carrying = local.carrying ?? -1;
-      // The infected run faster: their role sets the speed.
+      // The infected run faster: their role sets the speed (so does the saboteur's).
       if (local.role) mirror.role = local.role;
+      mirror.siegeRole = local.srole;
       mirror.downed = local.downed ?? false;
       // So does the gun in hand (knife faster, flamer slower) and the class.
       mirror.weapon = local.weapon;
@@ -736,7 +745,8 @@ export class Game {
         const size = def.flashSize;
         this.renderer.muzzleFlash(event.x ?? 0, event.z ?? 0, event.dirX ?? 0, event.dirZ ?? 0, size);
         // A silenced shot leaves no marker for those who cannot see the shooter.
-        if (!def.silenced) {
+        // Towers («Осада») fire as negative ids: no soldier to flash.
+        if (!def.silenced && owner >= 0) {
           this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
           this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
         }
@@ -745,7 +755,7 @@ export class Game {
           this.renderer.shake(def.shake);
           this.hud.kick(0.25 + def.shake * 0.5);
         }
-        this.renderer.ensureActor(owner, this.colorFor(owner), this.isPlayerId(owner)).triggerFlash();
+        if (owner >= 0) this.renderer.ensureActor(owner, this.colorFor(owner), this.isPlayerId(owner), this.isCreepId(owner)).triggerFlash();
         if (!this.isAuthority) this.spawnClientBullets(event);
         break;
       }
@@ -811,7 +821,7 @@ export class Game {
           const weapon = WEAPONS[killer.weapon];
           const power = 2.5 + weapon.damage * 0.06;
           this.renderer
-            .ensureActor(victim.id, this.colorFor(victim.id), victim.kind === 'player')
+            .ensureActor(victim.id, this.colorFor(victim.id), victim.kind === 'player', isCreep(victim))
             .setDeathImpulse(victim.x - killer.x, victim.z - killer.z, Math.min(7, power));
         }
         this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.death());
@@ -820,8 +830,10 @@ export class Game {
         if (event.by === this.localId && event.ownerId !== this.localId) {
           this.hud.hitMarker(true);
         }
-        if (isArena(this.matchMode)) {
-          const by = event.by === event.ownerId ? '' : this.nameOf(event.by);
+        if (event.text === 'creep') {
+          // Lane creeps die by the dozen: no kill feed.
+        } else if (isArena(this.matchMode)) {
+          const by = event.by === event.ownerId ? '' : (event.by ?? 0) < 0 ? 'Башня' : this.nameOf(event.by);
           this.hud.killFeed(by, this.nameOf(event.ownerId), event.by === this.localId, event.ownerId === this.localId, event.weapon ?? 'pistol', event.text === 'critical');
         } else if (event.by === this.localId && event.ownerId !== this.localId) {
           this.hud.message('Противник нейтрализован', 'good');
@@ -835,8 +847,9 @@ export class Game {
         break;
       case 'buy':
         if (event.ownerId === this.localId) {
+          if (this.matchMode === 'siege') this.siegeBuys.push({ item: event.text ?? '', at: performance.now() });
           this.audio.pickup();
-          this.hud.message(`Куплено: ${SHOP.find((e) => e.item === event.text)?.name ?? ''}`, 'good');
+          this.hud.message(`Куплено: ${(SHOP.find((e) => e.item === event.text) ?? SIEGE_SHOP.find((e) => e.item === event.text))?.name ?? ''}`, 'good');
         }
         break;
       case 'ladder':
@@ -916,7 +929,7 @@ export class Game {
         } else {
           this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.impact());
           this.renderer.impact(event.x ?? 0, event.z ?? 0);
-          if (event.ownerId === this.localId) this.hud.message('Связь с дроном потеряна', 'warn');
+          if (event.ownerId === this.localId) this.hud.message(event.id === 'jammed' ? 'Дрон заглушен: РЭБ или далеко от вас' : 'Связь с дроном потеряна', 'warn');
         }
         break;
       case 'interact':
@@ -934,6 +947,8 @@ export class Game {
           this.markBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
           this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.whistle(d));
           this.hud.message(event.ownerId === this.localId ? 'Миномёт: залп пошёл' : 'ВОЗДУХ! Миномётный обстрел', event.ownerId === this.localId ? 'good' : 'warn');
+        } else if (event.id === 'nodata' && event.ownerId === this.localId) {
+          this.hud.message('Нет данных для залпа: цель должна быть рядом с отметкой (Z) или под вашим дроном', 'warn');
         }
         break;
       case 'mine':
@@ -948,6 +963,17 @@ export class Game {
         if (event.id === 'cut') {
           this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.click(d));
           if (event.ownerId === this.localId) this.hud.message('Проволока перерезана', 'good');
+        } else if (event.id === 'place') {
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.click(d));
+          if (event.ownerId === this.localId) this.hud.message('Проволока натянута', 'good');
+        } else if (event.id === 'alarm') {
+          // A coil of our side rang: a red ping where the enemy waded in.
+          this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.glass(Math.max(0, d - 10)));
+          if (event.team === this.localTeam()) {
+            this.noiseBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
+            this.renderer.markAt(event.x ?? 0, event.z ?? 0);
+            this.hud.message('Проволока звенит: враг в лесу', 'warn');
+          } else if (event.ownerId === this.localId) this.hud.message('Вы задели проволоку — вас услышали', 'warn');
         } else if (event.ownerId === this.localId) {
           this.renderer.shake(0.25);
         }
@@ -1061,6 +1087,9 @@ export class Game {
           this.hud.banner(`ВОЛНА ${event.id ?? ''} — КОМЕНДАНТ`, 'Тяжёлая броня, много здоровья');
         }
         break;
+      case 'siege':
+        this.siegeEvent(event);
+        break;
       case 'gameOver':
         this.endGame(false, event.text ?? '', 'ОТРЯД ПОГИБ');
         break;
@@ -1074,6 +1103,43 @@ export class Game {
         } else {
           this.endGame(true, event.text ?? 'ОБЪЕКТ ЗАЧИЩЕН');
         }
+        break;
+    }
+  }
+
+  /** «Осада»: waves, towers, the truck, roles, electronic warfare pulses. */
+  private siegeEvent(event: GameEvent): void {
+    const ours = event.team === this.localTeam();
+    switch (event.id) {
+      case 'wave':
+        if (event.text === '1') this.hud.banner('КРИПЫ ПОШЛИ', 'Линейные — к своим линиям, диверсант — в лес');
+        break;
+      case 'tower': {
+        const lane = event.text === '0' ? 'верхней' : 'нижней';
+        this.hud.banner(ours ? 'БАШНЯ ПОТЕРЯНА' : 'БАШНЯ РАЗРУШЕНА', `${ours ? 'Наша' : 'Вражеская'} башня на ${lane} линии · +${CONFIG.siege.reward.tower} в банк ${ours ? 'врагу' : 'команде'}`);
+        this.audio.flashBang(25);
+        break;
+      }
+      case 'truck':
+        if (event.text === 'start') {
+          this.hud.banner('ГРУЗОВИК В ЛЕСУ', `Удержите круг ${CONFIG.siege.truckHold} с без врагов — деньги и бафф`);
+          this.markBlips.push({ x: event.x ?? 0, z: event.z ?? 0, at: performance.now() });
+        } else if (event.text === 'taken') {
+          const buff = event.cause === 'reload' ? 'башни стреляют чаще' : 'щит всей команде';
+          this.hud.banner(ours ? 'ГРУЗОВИК НАШ' : 'ГРУЗОВИК У ВРАГА', `+${CONFIG.siege.reward.truck} · ${buff} на ${CONFIG.siege.buffTime} с`);
+          if (ours) this.audio.powerup();
+        } else if (event.text === 'gone') this.hud.message('Грузовик уехал', 'info');
+        break;
+      case 'role':
+        if (event.ownerId === this.localId) {
+          const r = SIEGE_ROLES[event.text as SiegeRole];
+          this.hud.banner(`РОЛЬ: ${r?.short ?? ''}`, `${r?.desc ?? ''} Снаряжение — на базе сразу, иначе после возрождения.`);
+        }
+        break;
+      case 'ewPulse':
+        this.renderer.ewPulse(event.x ?? 0, event.z ?? 0, CONFIG.siege.ewRadius, ours);
+        break;
+      default:
         break;
     }
   }
@@ -1354,15 +1420,19 @@ export class Game {
     // number keys buy instead of switching weapons.
     const round = this.localRoundState();
     // Comp / bomb: the buy window of a round; waves: the break between waves.
-    const canBuy = (!!round?.canBuy || !!this.waveState()?.canBuy) && !!this.localDisplay()?.alive;
+    // «Осада»: the team shop, open all match long.
+    const siege = this.matchMode === 'siege';
+    const canBuy = (!!round?.canBuy || !!this.waveState()?.canBuy || siege) && !!this.localDisplay()?.alive;
     if (this.input.consume('buy') && canBuy) this.buyOpen = !this.buyOpen;
     if (!canBuy) this.buyOpen = false;
+    const shop = siege ? SIEGE_SHOP : SHOP;
     for (let i = 0; i < SHOP.length; i++) {
       if (!this.input.consume(`slot${i + 1}` as never)) continue;
-      if (this.buyOpen) this.pending.buy = SHOP[i].item;
+      if (this.buyOpen && shop[i]) this.pending.buy = shop[i].item;
       else if (i < WEAPON_ORDER.length) this.pending.slot = i;
     }
-    this.hud.showBuyMenu(this.buyOpen, this.localDisplay()?.money ?? 0, round?.canBuy ? round : null, this.waveState()?.t ?? 0);
+    if (siege) this.hud.showSiegeShop(this.buyOpen, this.siegeShopRows());
+    else this.hud.showBuyMenu(this.buyOpen, this.localDisplay()?.money ?? 0, round?.canBuy ? round : null, this.waveState()?.t ?? 0);
     this.hud.showScores(this.input.keys.has('Tab'));
 
     this.renderer.setPointer(this.input.mouseX, this.input.mouseY);
@@ -1578,6 +1648,11 @@ export class Game {
           moving: a.moving,
           camo: a.camo,
           badge: a.badge,
+          srole: a.siegeRole,
+          lane: a.lane,
+          wires: a.wires,
+          mortarCd: a.mortarCd,
+          droneExt: a.droneExt,
         });
       }
       for (const id of this.prevTick.keys()) if (!this.sim.actors.has(id)) this.prevTick.delete(id);
@@ -1586,7 +1661,7 @@ export class Game {
     }
 
     for (const d of this.display.values()) {
-      const visual = this.renderer.ensureActor(d.id, this.colorFor(d.id), d.kind === 'player');
+      const visual = this.renderer.ensureActor(d.id, this.colorFor(d.id), d.kind === 'player', isCreep(d));
       visual.setCamo(camoById(d.camo)?.colors ?? null);
       visual.concealed = d.concealed;
       visual.update(d, dt);
@@ -1639,6 +1714,7 @@ export class Game {
     this.renderer.syncFlags(flags, this.sim.bases);
     // New modes: marks on the ground and the zone; cargo being carried is not drawn on the floor.
     this.renderer.syncModeMarks(this.sim.modeState.text ? this.sim.modeState : null, this.sim.hotspot ? { ...this.sim.hotspot, r: CONFIG.world.hotspotRadius } : null);
+    if (this.matchMode === 'siege') this.renderer.syncSiege(this.sim.modeState.text ? this.sim.modeState : null);
     // Rain: a darker, shorter view and streaks over the screen.
     this.renderer.weather = this.sim.worldEvent.kind;
     this.hud.setWeather(this.sim.worldEvent.kind === 'rain');
@@ -1754,6 +1830,11 @@ export class Game {
         moving: false,
         camo: b.camo,
         badge: b.badge,
+        srole: b.srole,
+        lane: b.lane,
+        wires: b.wires,
+        mortarCd: b.mortarCd,
+        droneExt: b.droneExt,
       };
       if (d.isLocal) {
         const mirror = this.sim.actors.get(this.localId);
@@ -1780,6 +1861,12 @@ export class Game {
     }
   }
 
+  /** «Осада» creeps get the light visual (dozens of skinned soldiers cost too much). */
+  private isCreepId(id: number): boolean {
+    const a = this.display.get(id) ?? this.latestActors.get(id) ?? this.sim.actors.get(id);
+    return !!a && isCreep(a);
+  }
+
   private isPlayerId(id: number): boolean {
     return id < 1000;
   }
@@ -1793,6 +1880,23 @@ export class Game {
     const chosen = this.display.get(id)?.color ?? -1;
     if (chosen >= 0) return chosen;
     return PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length];
+  }
+
+  /** «Осада»: own purchases (the repeat rule raises the price for a minute). */
+  private siegeBuys: { item: string; at: number }[] = [];
+
+  /** The team shop as this fighter sees it: their price, the bank, what is out of reach. */
+  private siegeShopRows(): { bank: number; role: string; rows: { item: ShopItem; name: string; price: number; note: string; own: boolean; locked: boolean }[] } {
+    const me = this.localDisplay();
+    const team = this.localTeam();
+    const bank = this.sim.modeState.bank?.[team] ?? 0;
+    const now = performance.now();
+    this.siegeBuys = this.siegeBuys.filter((b) => now - b.at < CONFIG.siege.repeatWindow * 1000);
+    const rows = SIEGE_SHOP.map((e) => {
+      const price = siegePrice(e, me?.srole, this.siegeBuys.filter((b) => b.item === e.item).length);
+      return { item: e.item, name: e.name, price, note: e.note, own: !e.role || e.role === me?.srole, locked: bank < price || (e.item === `role_${me?.srole}`) };
+    });
+    return { bank, role: me?.srole ? SIEGE_ROLES[me.srole].name : '', rows };
   }
 
   private localDisplay(): DisplayActor | null {
@@ -2194,6 +2298,7 @@ export class Game {
       tierKills: self.tierKills,
       round: this.localRoundState(),
       modeTitle: modeInfo(this.matchMode).title,
+      siege: this.matchMode === 'siege' ? { role: self.srole, lane: self.lane ?? 0, wires: self.wires ?? 0, mortarCd: self.mortarCd ?? 0 } : undefined,
     });
 
     // Fog of war applies to the minimap too: only hostiles that are seen,
@@ -2208,8 +2313,24 @@ export class Game {
     this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined, {
       noise: this.noiseBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 1500 })),
       marks: this.markBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 4000 })),
-    }, this.sim.modeState.text ? this.sim.modeState : null, this.sim.hotspot);
+    }, this.sim.modeState.text ? this.sim.modeState : null, this.sim.hotspot, this.siegeMinimap());
     this.updatePlates();
+  }
+
+  /** «Осада» on the minimap: every structure (whose, standing or not), and operators exposed for camping. */
+  private siegeMinimap(): { towers: { x: number; z: number; ally: boolean; alive: boolean; throne: boolean }[]; exposed: { x: number; z: number }[] } | null {
+    const ms = this.sim.modeState;
+    if (this.matchMode !== 'siege' || !ms.towers) return null;
+    const team = this.localTeam();
+    const towers = ms.towers.flatMap((t) => {
+      const p = this.sim.props.find((x) => x.id === t.id);
+      return p ? [{ x: p.x, z: p.z, ally: t.team === team, alive: t.hp > 0, throne: !!t.throne }] : [];
+    });
+    const exposed = (ms.exposed ?? []).flatMap((id) => {
+      const d = this.display.get(id);
+      return d && d.alive && this.isHostile(id) ? [{ x: d.x, z: d.z }] : [];
+    });
+    return { towers, exposed };
   }
 
   private updatePlates(): void {
@@ -2225,11 +2346,22 @@ export class Game {
         x: p.x,
         y: p.y,
         // Arena bots and players have names worth showing; a badge goes before the name.
-        name: d.kind === 'enemy' && this.matchMode === 'coop' ? '' : `${this.sim.modeState.vip === d.id ? '♛ VIP · ' : ''}${badgeById(d.badge)?.glyph ?? ''}${badgeById(d.badge) ? ' ' : ''}${d.name}`,
+        name: (d.kind === 'enemy' && this.matchMode === 'coop') || !d.name ? '' : `${this.sim.modeState.vip === d.id ? '♛ VIP · ' : ''}${badgeById(d.badge)?.glyph ?? ''}${badgeById(d.badge) ? ' ' : ''}${d.name}`,
         hpRatio: d.hp / d.maxHp,
         armorRatio: d.armor / CONFIG.powerups.maxArmor,
         kind: d.isLocal ? 'self' : hostile ? 'enemy' : 'ally',
       });
+    }
+    // «Осада»: health bars over the structures in view.
+    for (const t of this.sim.modeState.towers ?? []) {
+      if (t.hp <= 0) continue;
+      const prop = this.sim.props.find((x) => x.id === t.id);
+      if (!prop) continue;
+      const p = this.renderer.project(prop.x, t.throne ? 4.4 : 3.6, prop.z);
+      if (!p.visible) continue;
+      const up = t.up === 'mg' ? ' · ПУЛЕМЁТ' : t.up === 'flame' ? ' · ОГНЕМЁТ' : t.up === 'ew' ? ' · РЭБ' : '';
+      const name = t.throne ? `ТРОН${t.open ? '' : ' · ЗАКРЫТ'}` : `БАШНЯ${up}`;
+      plates.push({ id: -200000 - t.id, x: p.x, y: p.y, name, hpRatio: t.hp / t.max, armorRatio: 0, kind: t.team === this.localTeam() ? 'ally' : 'enemy' });
     }
     // Powerups near the player: what lies there, before walking over it.
     const me = this.display.get(this.localId);

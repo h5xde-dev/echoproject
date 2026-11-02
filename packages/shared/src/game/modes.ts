@@ -1,4 +1,5 @@
-import type { GameMode, ShopItem } from './types';
+import { CONFIG } from './config';
+import type { GameMode, ShopItem, SiegeRole } from './types';
 import type { WeaponId } from './weapons';
 
 // Mode descriptions shared by the menu, the HUD and the simulation.
@@ -98,6 +99,13 @@ export const MODES: ModeInfo[] = [
     arena: true,
   },
   {
+    id: 'siege',
+    title: 'Осада',
+    short: 'ОСАДА',
+    desc: '4 на 4. Две линии башен и Трон, между ними лес. Линейные ведут крипов и ломают башни, диверсант охотится в лесу и берёт грузовик, оператор работает дронами и миномётом. Общий банк команды, магазин — B. Сломайте вражеский Трон.',
+    arena: true,
+  },
+  {
     id: 'comp',
     title: 'Соревнование',
     short: 'СОРЕВН.',
@@ -124,7 +132,7 @@ export function isCoopMode(mode: GameMode): boolean {
 
 /** Modes fought in two teams. */
 export function isTeamMode(mode: GameMode): boolean {
-  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb' || mode === 'infect' || mode === 'vip';
+  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb' || mode === 'infect' || mode === 'vip' || mode === 'siege';
 }
 
 /** Modes played in rounds with a freeze, a buy window and money. */
@@ -160,3 +168,39 @@ export const SHOP: ShopEntry[] = [
   { item: 'flare', name: 'Осветительная ракета', price: 200 },
   { item: 'mine', name: 'Противопехотная мина', price: 300 },
 ];
+
+/** «Осада»: names of the roles. */
+export const SIEGE_ROLES: Record<SiegeRole, { name: string; short: string; desc: string }> = {
+  line: { name: 'Линейный', short: 'ЛИНИЯ', desc: 'Держит свою линию с крипами, ломает башни, ставит улучшения на свои.' },
+  sab: { name: 'Диверсант', short: 'ДИВЕРСАНТ', desc: 'Лес: грузовики, колючая проволока (N), удары во фланг.' },
+  op: { name: 'Оператор', short: 'ОПЕРАТОР', desc: 'FPV-дроны (X) и миномёт (T) по отметкам команды (Z).' },
+};
+
+export interface SiegeShopEntry {
+  item: ShopItem;
+  name: string;
+  price: number;
+  /** The role it belongs to: everyone else pays CONFIG.siege.offRoleMul. */
+  role?: SiegeRole;
+  note: string;
+}
+
+/** «Осада»: the team shop. Prices from the design: drones and the mortar the operator's, wire the saboteur's, towers the line's. */
+export const SIEGE_SHOP: SiegeShopEntry[] = [
+  { item: 'drone', name: 'FPV-дрон', price: 80, role: 'op', note: 'до 2 в запасе' },
+  { item: 'droneExt', name: 'Батарея дрона +10 с', price: 120, role: 'op', note: '15 → 25 с полёта' },
+  { item: 'mortar', name: 'Залп миномёта', price: 150, role: 'op', note: 'T, по отметке или дрону' },
+  { item: 'wire', name: 'Катушка проволоки', price: 40, role: 'sab', note: 'N, до 3 на земле' },
+  { item: 'tw_mg', name: 'Башня: пулемёт', price: 200, role: 'line', note: 'ближайшая своя башня' },
+  { item: 'tw_flame', name: 'Башня: огнемёт', price: 250, role: 'line', note: 'ближняя, поджигает' },
+  { item: 'tw_ew', name: 'Башня: РЭБ', price: 300, role: 'line', note: 'глушит дроны, подсвечивает лес' },
+  { item: 'role_line', name: 'Роль: линейный', price: 0, note: 'со следующего возрождения' },
+  { item: 'role_sab', name: 'Роль: диверсант', price: 0, note: 'со следующего возрождения' },
+  { item: 'role_op', name: 'Роль: оператор', price: 0, note: 'со следующего возрождения' },
+];
+
+/** What an item costs this fighter: off-role and repeat purchases cost more. */
+export function siegePrice(entry: SiegeShopEntry, role: SiegeRole | undefined, recent: number): number {
+  const off = entry.role && entry.role !== role ? CONFIG.siege.offRoleMul : 1;
+  return Math.round(entry.price * off * (1 + CONFIG.siege.repeatMul * recent));
+}

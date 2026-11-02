@@ -126,7 +126,8 @@ export class ActorVisual {
   private velZ = 0;
   private prevHp = -1;
 
-  constructor(public readonly actorId: number, color: number, readonly isPlayer: boolean) {
+  /** `light`: a few primitives instead of the skinned soldier (lane creeps come by the dozen). */
+  constructor(public readonly actorId: number, color: number, readonly isPlayer: boolean, light = false) {
     // Chunkier than life so soldiers read from the top-down camera.
     this.bodyGroup.scale.setScalar(1.15);
     this.group.add(blobShadow());
@@ -135,7 +136,7 @@ export class ActorVisual {
     this.fallPivot.add(this.weaponHolder);
     this.weaponHolder.add(this.muzzle);
 
-    const model = assets.character(isPlayer ? 'player' : 'enemy');
+    const model = light ? null : assets.character(isPlayer ? 'player' : 'enemy');
     if (model) {
       this.fallPivot.add(model);
       model.traverse((o) => {
@@ -154,7 +155,7 @@ export class ActorVisual {
       const animator = new SoldierAnimator(model, this.bodyGroup);
       if (animator.ok) this.animator = animator;
     } else {
-      this.buildFallback(color, isPlayer);
+      this.buildFallback(color, isPlayer || light);
     }
 
     if (!glowTex) glowTex = makeGlowTexture();
@@ -231,10 +232,25 @@ export class ActorVisual {
     }
   }
 
+  private shadowsChecked = false;
+
   update(actor: ActorView, dt: number): void {
     const low = !actor.alive ? 0 : actor.downed ? 2.5 : actor.crouched ? 1 : 0;
     this.crouch += (low - this.crouch) * Math.min(1, dt * 10);
-    const big = actor.role === 'boss' ? 1.4 : actor.role === 'heavy' ? 1.15 : 1;
+    const big =
+      actor.role === 'boss' ? 1.4 : actor.role === 'heavy' || actor.role === 'shieldman' ? 1.15 : actor.role === 'creep' ? 0.85 : actor.role === 'kamikaze' ? 0.78 : 1;
+    // «Осада»: creeps come by the dozen — no shadows of their own.
+    if (!this.shadowsChecked) {
+      this.shadowsChecked = true;
+      if (actor.role === 'creep' || actor.role === 'shieldman' || actor.role === 'kamikaze') this.group.traverse((o) => ((o as THREE.Mesh).castShadow = false));
+    }
+    // «Осада»: a shieldman carries a slab of a shield in front of him.
+    if (actor.role === 'shieldman' && !this.bodyGroup.getObjectByName('slab')) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.25, 1.0), new THREE.MeshStandardMaterial({ color: 0x3b4048, metalness: 0.5, roughness: 0.5 }));
+      slab.name = 'slab';
+      slab.position.set(0.55, 0.8, 0);
+      this.bodyGroup.add(slab);
+    }
     this.bodyGroup.scale.set(big, big * (1 - 0.22 * this.crouch), big);
     // Velocity from positions works for local, simulated and interpolated actors.
     if (Number.isNaN(this.prevX) || dt <= 0) {
@@ -508,7 +524,8 @@ export class ActorVisual {
   }
 
   private buildFallback(color: number, isPlayer: boolean): void {
-    const body = new THREE.MeshStandardMaterial({ color: isPlayer ? color : 0x5a2530, roughness: 0.72 });
+    // Transparent like the full model's materials: fog-of-war fades never swap programs.
+    const body = new THREE.MeshStandardMaterial({ color: isPlayer ? color : 0x5a2530, roughness: 0.72, transparent: true });
     this.materials.push(body);
     this.baseColors.push(body.color.clone());
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.5, 4, 12), body);

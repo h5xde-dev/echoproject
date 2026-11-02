@@ -382,6 +382,10 @@ export const CONFIG = {
     boss: { base: 0, perLevel: 0, max: 0, hp: 6, armor: 100, speed: 0.65 },
     /** «Заражение» (never rolled): applied to the infected, people and bots alike. */
     zombie: { base: 0, perLevel: 0, max: 0, hp: 1.5, armor: 0, speed: 1.2 },
+    /** «Осада» lane creeps (never rolled; hit points come from CONFIG.siege). */
+    creep: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.78 },
+    shieldman: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.62 },
+    kamikaze: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 1.05 },
   },
 
   /** Match mutators (the host picks them, or the week's playlist). */
@@ -536,6 +540,105 @@ export const CONFIG = {
     touch: 1.3,
     /** Carrier speed factor. */
     carrySpeed: 0.9,
+  },
+
+  /**
+   * «Осада» 4v4: two lanes of towers and a throne, creeps, a truck in the
+   * forest every minute, one bank per team. Money in plain units.
+   */
+  siege: {
+    fighters: 8,
+    timeLimit: 900,
+    respawn: 10,
+    /** Respawn of the side with fewer towers standing. */
+    respawnBehind: 7,
+    towerHp: 1600,
+    throneHp: 3000,
+    /** Bullets of fighters (not creeps) chip structures for this share. */
+    heroStructureMul: 0.4,
+    towerRange: 12,
+    towerDamage: 26,
+    towerCd: 0.9,
+    mgDamage: 8,
+    mgCd: 0.17,
+    flameRange: 6.5,
+    flameCd: 0.06,
+    /** The throne opens to damage this late even with every tower up. */
+    throneOpenAt: 720,
+    /** Creeps: a wave per lane per team every `waveEvery` s. */
+    firstWave: 4,
+    waveEvery: 30,
+    waveCreeps: 3,
+    /** After this many seconds a wave is half again as big. */
+    bigWavesAt: 600,
+    shieldFrom: 60,
+    kamikazeFrom: 300,
+    creepCap: 18,
+    /** Creeps' guns hit for this share (they come in numbers). */
+    creepDamageMul: 0.35,
+    /** …but they are what breaks towers: against structures, this much more. */
+    creepStructureMul: 1.4,
+    /** The throne is built to last: everything does this share to it. */
+    throneMul: 0.6,
+    creepHp: 90,
+    shieldHp: 220,
+    kamikazeHp: 45,
+    /** Creeps see and shoot this far; kamikazes sprint from `kamikazeSprint`. */
+    creepAggro: 9,
+    kamikazeSprint: 8,
+    kamikazeRadius: 3.2,
+    kamikazeDamage: 70,
+    /** A shieldman's shield: hits from the front do this share. */
+    shieldFront: 0.15,
+    /** Income: per second per team; the side with fewer towers gets more. */
+    income: 2,
+    comebackMul: 1.3,
+    reward: { creep: 10, shieldman: 20, kamikaze: 15, kill: 60, bountyPer2: 20, truck: 150, tower: 200, throne: 0 },
+    /** Shop rules: off-role price, and each repeat buy of the same item within a minute. */
+    offRoleMul: 1.5,
+    repeatMul: 0.25,
+    repeatWindow: 60,
+    startBank: 150,
+    /** The truck: from the minute mark, every minute, 5 s alone in the circle. */
+    truckFirst: 60,
+    truckEvery: 60,
+    truckLife: 40,
+    truckRadius: 4,
+    truckHold: 5,
+    truckDecay: 0.5,
+    buffTime: 45,
+    /** Truck buff: towers reload this much faster, or a shield on every fighter. */
+    reloadMul: 0.8,
+    shieldPoints: 50,
+    /** A side this far behind in money earned gets the truck's buff doubled. */
+    behindBy: 400,
+    /** Taken alone by the saboteur: the enemy on the minimap for a moment. */
+    sabRadar: 3,
+    /** Electronic warfare: field radius, seconds until a drone in it drops, reveal pulse. */
+    ewRadius: 10,
+    ewJam: 2,
+    ewPulseEvery: 6,
+    ewReveal: 1.5,
+    maxEw: 2,
+    /** Operator: drone battery and its upgrade, how far drones and the mortar reach. */
+    droneBattery: 15,
+    droneExt: 10,
+    opRange: 70,
+    /** Mortar: the target must be marked by the team or seen by its drone this recently / near. */
+    markLife: 8,
+    markNear: 8,
+    droneSees: 12,
+    mortarCd: 25,
+    mortarDelay: 4,
+    /** Shells hit those caught in barbed wire harder. */
+    wireMortarMul: 1.3,
+    /** An operator this long near home is shown on the enemy minimap. */
+    campRadius: 15,
+    campTime: 20,
+    /** Barbed wire: coils carried, coils laid at once, the alarm's reach. */
+    maxWires: 3,
+    wireLen: 3,
+    wireAlarm: 25,
   },
 
   /** Team deathmatch: first team to the limit wins; the clock is dm.timeLimit. */

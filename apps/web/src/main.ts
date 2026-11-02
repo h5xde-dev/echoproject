@@ -77,6 +77,7 @@ const SOLO_DESC: Record<GameMode, string> = {
   extract: 'Вынести груз из-под охраны',
   vip: 'Довести VIP или устроить засаду, с ботами',
   zone: 'Одна жизнь против ботов, зона сжимается',
+  siege: '4 на 4: ваша команда ботов против ботов',
 };
 
 function selectMode(mode: GameMode): void {
@@ -89,11 +90,13 @@ function selectMode(mode: GameMode): void {
   });
   detailTitle.textContent = info.title;
   detailDesc.textContent = info.desc;
-  arenaBox.classList.toggle('hidden', !info.arena);
+  // «Осада» has its own map and is always four a side.
+  arenaBox.classList.toggle('hidden', !info.arena || mode === 'siege');
+  fightersRange.closest('.fighters')?.classList.toggle('hidden', mode === 'siege');
   // Waves bring their own guards: the head count does not apply.
   // Waves and extraction bring their own guards: the head count does not apply.
   const ownGuards = mode === 'waves' || mode === 'extract';
-  fightersRange.closest('.fighters')?.classList.toggle('hidden', ownGuards);
+  if (ownGuards) fightersRange.closest('.fighters')?.classList.add('hidden');
   document.querySelector('.room-bots')?.classList.toggle('hidden', ownGuards);
   btnSolo.querySelector('.btn-desc')!.textContent = SOLO_DESC[mode];
   btnQuick.querySelector('.btn-desc')!.textContent = `${info.title}: сразу в бой с людьми, боты добирают состав`;
