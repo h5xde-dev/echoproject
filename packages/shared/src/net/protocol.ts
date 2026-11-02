@@ -160,6 +160,8 @@ export interface SnapshotMsg {
   modeState?: ModeState;
   /** A map event under way: blackout, rain… and seconds left. */
   world?: { kind: string; t: number };
+  /** The hotspot circle of the matching map event. */
+  hotspot?: { x: number; z: number; holdT: number; by: number };
   bases?: { x: number; z: number }[];
   /** Co-op room tasks. */
   objectives?: RoomObjective[];

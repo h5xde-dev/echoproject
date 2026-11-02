@@ -392,6 +392,15 @@ export const CONFIG = {
     fastSpeed: 1.2,
   },
 
+  /**
+   * Wallbang: sniper and LMG rounds pass through one thin wall (an arena wall
+   * is 1.5 m; the 3 m co-op walls stop everything).
+   */
+  pierce: {
+    depth: 1.7,
+    damageMul: 0.5,
+  },
+
   /** Events on the map during a match. */
   world: {
     /** Seconds between events (random in this range). */
@@ -403,6 +412,10 @@ export const CONFIG = {
     rainSight: 0.75,
     rainSteps: 0.6,
     intercept: 6,
+    /** Hotspot (dm/tdm): hold the circle alone this long for a frag and armor. */
+    hotspot: 25,
+    hotspotRadius: 3.2,
+    hotspotHold: 3,
   },
 
   /** «Заражение»: people against the infected. */

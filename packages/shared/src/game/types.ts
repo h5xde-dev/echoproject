@@ -306,6 +306,9 @@ export interface AiState {
   hasLight: boolean;
   /** Current target actor id (-1 = none). */
   targetId: number;
+  /** Cached line-of-sight answer (recomputed every other tick, see updateAi). */
+  losClear: boolean;
+  losTarget: number;
   /** Navigation path (world points) and the index of the next waypoint. */
   path: { x: number; z: number }[];
   pathIndex: number;
@@ -508,6 +511,8 @@ export interface FlagState {
 }
 
 export interface Bullet {
+  /** Already punched through a thin wall (one per bullet, at reduced damage). */
+  pierced?: boolean;
   id: string;
   ownerId: number;
   ownerKind: ActorKind;

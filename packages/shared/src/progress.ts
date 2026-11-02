@@ -120,7 +120,7 @@ const bump = (s: MatchStats, key: string, n = 1) => {
 };
 
 /** Objectives of any kind (flag, bomb, terminal, cargo, VIP) also add up here, for awards. */
-const OBJECTIVE_KEYS = new Set(['objectives', 'captures', 'plants', 'defuses', 'cargo', 'vip_escaped']);
+const OBJECTIVE_KEYS = new Set(['objectives', 'captures', 'plants', 'defuses', 'cargo', 'vip_escaped', 'hotspots']);
 const bumpStat = (s: MatchStats, key: string) => {
   bump(s, key);
   if (OBJECTIVE_KEYS.has(key)) bump(s, 'objectives_any');
@@ -172,6 +172,9 @@ export function statEvent(s: MatchStats, e: GameEvent, playerId: number, hostile
       break;
     case 'throw':
       if (e.ownerId === playerId) bump(s, 'throws');
+      break;
+    case 'world':
+      if (e.id === 'hotspot' && e.text === 'captured' && e.ownerId === playerId) bumpStat(s, 'hotspots');
       break;
     default:
       break;

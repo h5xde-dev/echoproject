@@ -1,6 +1,8 @@
 export type WeaponId = 'pistol' | 'smg' | 'shotgun' | 'rifle' | 'sniper' | 'lmg' | 'silenced' | 'knife' | 'flamer';
 
 export interface WeaponDef {
+  /** Rounds pass through one thin wall at half damage (see CONFIG.pierce). */
+  pierce?: boolean;
   id: WeaponId;
   name: string;
   short: string;
@@ -134,6 +136,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   sniper: {
     id: 'sniper',
+    pierce: true,
     criticalChance: 0.22,
     criticalMul: 1.75,
     name: 'Снайперка «Стриж»',
@@ -157,6 +160,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
   lmg: {
     id: 'lmg',
+    pierce: true,
     name: 'Пулемёт «Рой»',
     short: 'Пулем.',
     damage: 21,

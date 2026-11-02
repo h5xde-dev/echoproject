@@ -1,6 +1,8 @@
-import { segCircleHit } from '../core/math';
+import { pointInRect, segCircleHit } from '../core/math';
+import { CONFIG } from './config';
 import { PhysicsWorld } from './physics';
 import type { Actor, Bullet, Drone, SimProp, StaticBody } from './types';
+import { WEAPONS } from './weapons';
 
 /** A drone is small: a bullet has to pass this close. */
 const DRONE_HIT_RADIUS = 0.45;
@@ -114,9 +116,29 @@ export function updateBullets(bullets: Bullet[], ctx: BulletCtx, dt: number): Bu
     const hx = b.x + dirX * bestT;
     const hz = b.z + dirZ * bestT;
 
-    // Bullets stop at walls: no ricochets.
+    // Bullets stop at walls: no ricochets. Heavy rounds (sniper, LMG) punch
+    // through one thin wall and keep going at half damage — arena walls are
+    // thin enough, the fat co-op walls are not.
     if (hitKind === 'static') {
       hits.push({ kind: 'static', x: hx, z: hz, nx: hitNx, nz: hitNz, bullet: b });
+      const P = CONFIG.pierce;
+      if (WEAPONS[b.weapon].pierce && !b.pierced) {
+        let exit = 0;
+        for (let s = 0.15; s <= P.depth; s += 0.15) {
+          if (!insideWall(ctx, hx + dirX * s, hz + dirZ * s)) {
+            exit = s;
+            break;
+          }
+        }
+        if (exit > 0) {
+          b.pierced = true;
+          b.damageMul *= P.damageMul;
+          b.x = hx + dirX * (exit + 0.05);
+          b.z = hz + dirZ * (exit + 0.05);
+          b.range += bestT + exit;
+          continue;
+        }
+      }
       bullets.splice(i, 1);
       continue;
     }
@@ -140,4 +162,15 @@ export function updateBullets(bullets: Bullet[], ctx: BulletCtx, dt: number): Bu
   }
 
   return hits;
+}
+
+/** Is this point inside a wall or a closed door? (how deep a pierce went). */
+function insideWall(ctx: BulletCtx, x: number, z: number): boolean {
+  for (const w of ctx.world.query(x - 0.1, z - 0.1, x + 0.1, z + 0.1, ctx.scratch)) {
+    if (pointInRect(x, z, w.cx, w.cz, w.hw, w.hh)) return true;
+  }
+  for (const d of ctx.world.doors) {
+    if (!d.open && pointInRect(x, z, d.cx, d.cz, d.hw, d.hh)) return true;
+  }
+  return false;
 }

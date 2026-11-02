@@ -30,6 +30,7 @@ export const DAILY_QUESTS: QuestDef[] = [
   { id: 'd_extract', text: 'Вынести 2 груза в «Эвакуации»', stat: 'cargo', goal: 2, xp: 200 },
   { id: 'd_zone', text: 'Сыграть в «Сужающуюся зону»', stat: 'play_zone', goal: 1, xp: 150 },
   { id: 'd_streak', text: 'Серия из 3 убийств', stat: 'streak3', goal: 1, xp: 150 },
+  { id: 'd_hotspot', text: 'Удержать 2 горячие точки', stat: 'hotspots', goal: 2, xp: 200 },
   { id: 'd_objective', text: 'Выполнить 2 цели (флаг, бомба, терминал, VIP)', stat: 'objectives_all', goal: 2, xp: 200 },
 ];
 

@@ -1235,7 +1235,32 @@ export class Renderer {
   private zoneNext: THREE.Mesh | null = null;
   private zoneKey = '';
 
-  syncModeMarks(state: ModeState | null): void {
+  private hotspotRing: THREE.Mesh | null = null;
+
+  syncModeMarks(state: ModeState | null, hotspot: { x: number; z: number; r: number; holdT: number } | null = null): void {
+    // The hotspot: an amber ring over the fog, pulsing until someone holds it.
+    if (hotspot) {
+      if (!this.hotspotRing) {
+        const geo = new THREE.RingGeometry(0.86, 1, 64).rotateX(-Math.PI / 2);
+        this.hotspotRing = new THREE.Mesh(
+          geo,
+          new THREE.MeshBasicMaterial({ color: 0xffb545, transparent: true, opacity: 0.85, depthTest: false, toneMapped: false, side: THREE.DoubleSide }),
+        );
+        this.hotspotRing.position.y = 0.07;
+        this.overlay.add(this.hotspotRing);
+      }
+      const pulse = 1 + Math.sin(this.time * 5) * 0.04;
+      this.hotspotRing.visible = true;
+      this.hotspotRing.position.set(hotspot.x, 0.07, hotspot.z);
+      this.hotspotRing.scale.setScalar(hotspot.r * pulse);
+      // Being held: the ring whitens and solidifies as the capture fills.
+      const k = Math.min(1, hotspot.holdT / CONFIG.world.hotspotHold);
+      const mat = this.hotspotRing.material as THREE.MeshBasicMaterial;
+      mat.color.setHex(0xffb545).lerp(_white, k * 0.8);
+      mat.opacity = 0.6 + k * 0.4;
+    } else if (this.hotspotRing) {
+      this.hotspotRing.visible = false;
+    }
     const points = state?.points ?? [];
     while (this.modeMarks.length < points.length) {
       const group = new THREE.Group();
@@ -2398,6 +2423,8 @@ function powerupVisual(kind: PowerupKind): THREE.Group {
   g.add(icon);
   return g;
 }
+
+const _white = new THREE.Color(0xffffff);
 
 const BEAM_MAT = new THREE.MeshBasicMaterial({
   color: 0xffe8b8,

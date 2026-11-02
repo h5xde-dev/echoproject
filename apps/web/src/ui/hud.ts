@@ -905,6 +905,10 @@ export class Hud {
     document.body.classList.remove('aiming');
   }
 
+  /** The unchanging part of the minimap, painted once per map (see drawMinimap). */
+  private minimapStatic = document.createElement('canvas');
+  private minimapStaticKey = '';
+
   drawMinimap(
     map: MapData,
     actors: { id: number; kind: string; x: number; z: number; ang: number; alive: boolean; ally?: boolean }[],
@@ -912,6 +916,7 @@ export class Hud {
     activeRoom: RoomDef | undefined,
     blips: { noise: { x: number; z: number; life: number }[]; marks: { x: number; z: number; life: number }[] } = { noise: [], marks: [] },
     modeState: ModeState | null = null,
+    hotspot: { x: number; z: number } | null = null,
   ): void {
     const ctx = this.minimapCtx;
     // Drawn in 184 CSS px; the backing store follows the screen density and
@@ -925,9 +930,6 @@ export class Hud {
       this.minimap.height = backing;
     }
     ctx.setTransform(backing / w, 0, 0, backing / h, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#080a0f';
-    ctx.fillRect(0, 0, w, h);
 
     const spanX = map.maxX - map.minX;
     const spanZ = map.maxZ - map.minZ;
@@ -937,7 +939,49 @@ export class Hud {
     const px = (x: number) => ox + (x - map.minX) * scale;
     const pz = (z: number) => oy + (z - map.minZ) * scale;
 
-    // New modes: the zone (edge, where it goes) and the marks.
+    // The map itself never changes mid-match: walls, trenches and bushes are
+    // painted once into an offscreen layer (thousands of fillRects otherwise
+    // repainted sixty times a second), and stamped here in one drawImage.
+    const staticKey = `${map.seed}:${map.name}:${backing}`;
+    if (this.minimapStaticKey !== staticKey) {
+      this.minimapStaticKey = staticKey;
+      this.minimapStatic.width = backing;
+      this.minimapStatic.height = backing;
+      const s = this.minimapStatic.getContext('2d')!;
+      s.setTransform(backing / w, 0, 0, backing / h, 0, 0);
+      s.fillStyle = '#080a0f';
+      s.fillRect(0, 0, w, h);
+      const tile = map.tile * scale;
+      for (let z = 0; z < map.gridH; z++) {
+        for (let x = 0; x < map.gridW; x++) {
+          const v = map.cells[z * map.gridW + x];
+          if (v === 1) s.fillStyle = '#1b2029';
+          else if (v === 2) s.fillStyle = '#39414f';
+          else continue;
+          s.fillRect(ox + x * tile, oy + z * tile, tile + 0.5, tile + 0.5);
+        }
+      }
+      // Trenches: dark cuts in the ground.
+      s.fillStyle = 'rgba(10, 8, 6, 0.85)';
+      for (const t of map.trenches ?? []) s.fillRect(px(t.x0), pz(t.z0), Math.max(1, (t.x1 - t.x0) * scale), Math.max(1, (t.z1 - t.z0) * scale));
+      // Bushes: where you can hide.
+      s.fillStyle = 'rgba(70, 120, 55, 0.45)';
+      for (const b of map.bushes ?? []) {
+        s.beginPath();
+        s.arc(px(b.x), pz(b.z), Math.max(1.5, b.r * scale), 0, Math.PI * 2);
+        s.fill();
+      }
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.minimapStatic, 0, 0);
+    ctx.setTransform(backing / w, 0, 0, backing / h, 0, 0);
+
+    if (activeRoom) {
+      ctx.fillStyle = 'rgba(255, 176, 102, 0.09)';
+      ctx.fillRect(px(activeRoom.minX), pz(activeRoom.minZ), (activeRoom.maxX - activeRoom.minX) * scale, (activeRoom.maxZ - activeRoom.minZ) * scale);
+    }
+
+    // New modes: the zone (edge, where it goes) and the marks — over the walls.
     if (modeState?.zone) {
       const z = modeState.zone;
       ctx.lineWidth = 1.5;
@@ -956,32 +1000,13 @@ export class Hud {
       ctx.fillRect(px(p.x) - r, pz(p.z) - r, r * 2, r * 2);
     }
 
-    if (activeRoom) {
-      ctx.fillStyle = 'rgba(255, 176, 102, 0.09)';
-      ctx.fillRect(px(activeRoom.minX), pz(activeRoom.minZ), (activeRoom.maxX - activeRoom.minX) * scale, (activeRoom.maxZ - activeRoom.minZ) * scale);
-    }
-
-    const tile = map.tile * scale;
-    for (let z = 0; z < map.gridH; z++) {
-      for (let x = 0; x < map.gridW; x++) {
-        const v = map.cells[z * map.gridW + x];
-        if (v === 1) ctx.fillStyle = '#1b2029';
-        else if (v === 2) ctx.fillStyle = '#39414f';
-        else continue;
-        ctx.fillRect(ox + x * tile, oy + z * tile, tile + 0.5, tile + 0.5);
-      }
-    }
-
-    // Trenches: dark cuts in the ground.
-    ctx.fillStyle = 'rgba(10, 8, 6, 0.85)';
-    for (const t of map.trenches ?? []) ctx.fillRect(px(t.x0), pz(t.z0), Math.max(1, (t.x1 - t.x0) * scale), Math.max(1, (t.z1 - t.z0) * scale));
-
-    // Bushes: where you can hide.
-    ctx.fillStyle = 'rgba(70, 120, 55, 0.45)';
-    for (const b of map.bushes ?? []) {
+    // The hotspot: an amber circle worth fighting over.
+    if (hotspot) {
+      ctx.strokeStyle = '#ffb545';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(px(b.x), pz(b.z), Math.max(1.5, b.r * scale), 0, Math.PI * 2);
-      ctx.fill();
+      ctx.arc(px(hotspot.x), pz(hotspot.z), 5, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     // Noise radar: unseen enemies' shots and steps; team markers.

@@ -17,8 +17,11 @@ if (throttle > 1) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle });
 }
-await page.goto(`${base}/play`);
+// The page keeps loading assets in the background: wait for the game, not for 'load'.
+await page.goto(`${base}/play`, { waitUntil: 'commit', timeout: 120000 });
 await page.waitForFunction(() => !document.querySelector('#btn-solo').disabled, null, { timeout: 120000 });
+// Solo lives on the "own game" tab of the main menu.
+await page.click('.menu-tab[data-tab="own"]');
 await page.click(`.mode-card[data-mode="${mode}"]`);
 if (mode !== 'coop') await page.click(`.arena-btn[data-arena="${arena}"]`);
 await page.evaluate(() => {

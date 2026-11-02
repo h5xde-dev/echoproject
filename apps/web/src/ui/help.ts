@@ -104,10 +104,10 @@ const RENDER: Record<Tab, () => string> = {
       .map((id) => {
         const w = WEAPONS[id];
         const melee = w.melee;
-        return `<tr><td>${esc(w.name)}</td><td>${w.damage}${w.pellets > 1 ? ` ×${w.pellets}` : ''}</td><td>${w.rpm}/мин</td><td>${melee ? '—' : w.mag}</td><td>${bar(dps(id), max)}</td><td>${melee ? 'вплотную' : bar(w.falloffStart, maxRange)}</td><td>${w.noise <= 0 ? 'бесшумно' : w.noise < 10 ? 'тихо' : w.noise < 25 ? 'средне' : 'громко'}</td></tr>`;
+        return `<tr><td>${esc(w.name)}${w.pierce ? ' <small>· пробивает тонкие стены</small>' : ''}</td><td>${w.damage}${w.pellets > 1 ? ` ×${w.pellets}` : ''}</td><td>${w.rpm}/мин</td><td>${melee ? '—' : w.mag}</td><td>${bar(dps(id), max)}</td><td>${melee ? 'вплотную' : bar(w.falloffStart, maxRange)}</td><td>${w.noise <= 0 ? 'бесшумно' : w.noise < 10 ? 'тихо' : w.noise < 25 ? 'средне' : 'громко'}</td></tr>`;
       })
       .join('')}</tbody></table>
-      <p class="help-lead">Пули летят с реальной скоростью, разброс растёт на бегу и падает в шаге и присяде. Урон снижается с расстоянием. Нож со спины убивает сразу.</p>`;
+      <p class="help-lead">Пули летят с реальной скоростью, разброс растёт на бегу и падает в шаге и присяде. Урон снижается с расстоянием. Нож со спины убивает сразу. Снайперка и пулемёт пробивают одну тонкую стену (арены) — за ней пуля бьёт вполсилы.</p>`;
   },
 
   bonuses: () =>

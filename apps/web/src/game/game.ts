@@ -100,6 +100,58 @@ interface SnapFrame {
   actors: Map<number, ActorState>;
 }
 
+/**
+ * Smooths server entities between snapshots (20 Hz) the way actors are
+ * smoothed: two keyframes per id, sampled at the render clock. Grenades,
+ * drones and pushed props visibly stepped before this.
+ */
+class EntityLerp {
+  private frames = new Map<number, { t0: number; x0: number; z0: number; y0: number; a0: number; t1: number; x1: number; z1: number; y1: number; a1: number }>();
+  private seen = new Set<number>();
+
+  /** A snapshot arrived: push a keyframe for this entity. */
+  push(id: number, time: number, x: number, z: number, y = 0, ang = 0): void {
+    this.seen.add(id);
+    const f = this.frames.get(id);
+    if (!f || time <= f.t1) {
+      this.frames.set(id, { t0: time, x0: x, z0: z, y0: y, a0: ang, t1: time, x1: x, z1: z, y1: y, a1: ang });
+      return;
+    }
+    f.t0 = f.t1;
+    f.x0 = f.x1;
+    f.z0 = f.z1;
+    f.y0 = f.y1;
+    f.a0 = f.a1;
+    f.t1 = time;
+    f.x1 = x;
+    f.z1 = z;
+    f.y1 = y;
+    f.a1 = ang;
+  }
+
+  /** Entities missing from this snapshot are gone. */
+  sweep(): void {
+    for (const id of this.frames.keys()) if (!this.seen.has(id)) this.frames.delete(id);
+    this.seen.clear();
+  }
+
+  /** The entity at the render clock (clamped to its two keyframes). */
+  sample(id: number, t: number): { x: number; z: number; y: number; ang: number } | null {
+    const f = this.frames.get(id);
+    if (!f) return null;
+    const span = f.t1 - f.t0;
+    const k = span > 1e-6 ? clamp((t - f.t0) / span, 0, 1.3) : 1;
+    // Teleports (a grenade bounce resets positions rarely; respawned ids) are not blended.
+    if (Math.hypot(f.x1 - f.x0, f.z1 - f.z0) > 6) return { x: f.x1, z: f.z1, y: f.y1, ang: f.a1 };
+    return {
+      x: f.x0 + (f.x1 - f.x0) * k,
+      z: f.z0 + (f.z1 - f.z0) * k,
+      y: f.y0 + (f.y1 - f.y0) * k,
+      ang: f.a0 + shortestAngle(f.a0, f.a1) * Math.min(1, k),
+    };
+  }
+}
+
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
 /** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
 const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a };
@@ -219,6 +271,8 @@ export class Game {
   private mirrorPrev = { x: 0, z: 0 };
   /** Client: visual offset left by a reconciliation correction; decays. */
   private correction = { x: 0, z: 0 };
+  /** Client: smooths grenades, drones and props between snapshots. */
+  private lerp = new EntityLerp();
 
   constructor(container: HTMLElement, hud: Hud, opts: { shadows?: boolean } = {}) {
     this.hud = hud;
@@ -573,6 +627,12 @@ export class Game {
     this.snapBuffer.push(frame);
     if (this.snapBuffer.length > 40) this.snapBuffer.shift();
 
+    // Keyframes for the in-between frames (grenades arc, drones bank, crates slide).
+    for (const g of msg.grenades ?? []) this.lerp.push(g.id, msg.time, g.x, g.z, g.y);
+    for (const d of msg.drones ?? []) this.lerp.push(1e6 + d.id, msg.time, d.x, d.z, 0, d.ang);
+    for (const p of msg.props) this.lerp.push(2e6 + p.id, msg.time, p.x, p.z);
+    this.lerp.sweep();
+
     this.sim.syncProps(msg.props);
     this.sim.syncDoors(msg.doors);
     this.sim.syncLamps(msg.lampsOut ?? []);
@@ -583,7 +643,7 @@ export class Game {
     this.droneSyncAt = performance.now();
     if (msg.flags) this.sim.syncFlags(msg.flags);
     this.sim.syncModeState(msg.modeState);
-    this.sim.syncWorld(msg.world);
+    this.sim.syncWorld(msg.world, msg.hotspot);
     if (msg.bases) this.sim.bases = msg.bases;
     if (msg.bomb !== undefined) this.sim.syncBomb(msg.bomb);
     if (msg.attackTeam !== undefined) this.sim.sidesSwapped = msg.attackTeam === 1;
@@ -898,12 +958,19 @@ export class Game {
           rain: ['ЛИВЕНЬ', 'Видно хуже, шагов почти не слышно'],
           armored: ['БРОНИРОВАННЫЙ СБРОС', 'Броня и пулемёт — кто первым вскроет'],
           intercept: ['РАДИОПЕРЕХВАТ', 'Враги на миникарте несколько секунд'],
+          hotspot: ['ГОРЯЧАЯ ТОЧКА', `Удержите круг в одиночку ${CONFIG.world.hotspotHold} с — фраг и броня`],
         };
         if (event.text === 'start') {
           const [title, sub] = lines[event.id ?? ''] ?? ['', ''];
           if (title) this.hud.banner(title, sub);
+        } else if (event.text === 'captured' && event.id === 'hotspot') {
+          const mine = event.ownerId === this.localId;
+          if (mine) this.hud.banner('ТОЧКА ВАША', '+фраг и полная броня');
+          else this.hud.message(`${this.nameOf(event.ownerId)} удержал горячую точку`, 'warn');
+          this.soundAt(event.x ?? 0, event.z ?? 0, () => this.audio.powerup());
         } else if (event.id === 'blackout') this.hud.message('Свет вернулся', 'info');
         else if (event.id === 'rain') this.hud.message('Ливень закончился', 'info');
+        else if (event.id === 'hotspot') this.hud.message('Горячая точка остыла', 'info');
         break;
       }
       case 'flare':
@@ -1534,10 +1601,23 @@ export class Game {
     this.renderer.syncTracers(
       src.map((b) => ({ x: b.x + b.vx * ahead, z: b.z + b.vz * ahead, vx: b.vx, vz: b.vz, color: b.color, flame: WEAPONS[b.weapon].flame })),
     );
-    this.renderer.syncProps(this.sim.props.map((p) => ({ id: p.id, x: p.x, z: p.z, alive: p.alive, hp: p.hp, kind: p.kind, hw: p.hw, hh: p.hh })));
+    this.renderer.syncProps(
+      this.sim.props.map((p) => {
+        const s = this.isAuthority ? null : this.lerp.sample(2e6 + p.id, this.renderTime);
+        return { id: p.id, x: s?.x ?? p.x, z: s?.z ?? p.z, alive: p.alive, hp: p.hp, kind: p.kind, hw: p.hw, hh: p.hh };
+      }),
+    );
     this.renderer.syncDoors(this.sim.doors.map((d) => ({ room: d.room, open: d.open, openT: d.openT })));
     this.renderer.syncItems(this.sim.pickups, this.sim.powerups);
-    this.renderer.syncGrenades(this.sim.grenades, this.isAuthority ? this.accumulator : 0);
+    this.renderer.syncGrenades(
+      this.isAuthority
+        ? this.sim.grenades
+        : this.sim.grenades.map((g) => {
+            const s = this.lerp.sample(g.id, this.renderTime);
+            return s ? { ...g, x: s.x, z: s.z, y: s.y } : g;
+          }),
+      this.isAuthority ? this.accumulator : 0,
+    );
     this.renderer.setSmokes(this.sim.smokes);
     this.renderer.setFires(this.sim.fires, dt);
     this.renderer.syncInteractables(this.sim.interactables);
@@ -1558,7 +1638,7 @@ export class Game {
     });
     this.renderer.syncFlags(flags, this.sim.bases);
     // New modes: marks on the ground and the zone; cargo being carried is not drawn on the floor.
-    this.renderer.syncModeMarks(this.sim.modeState.text ? this.sim.modeState : null);
+    this.renderer.syncModeMarks(this.sim.modeState.text ? this.sim.modeState : null, this.sim.hotspot ? { ...this.sim.hotspot, r: CONFIG.world.hotspotRadius } : null);
     // Rain: a darker, shorter view and streaks over the screen.
     this.renderer.weather = this.sim.worldEvent.kind;
     this.hud.setWeather(this.sim.worldEvent.kind === 'rain');
@@ -1719,16 +1799,21 @@ export class Game {
     return this.display.get(this.localId) ?? null;
   }
 
-  /** Drones as drawn: carried forward from the last tick / snapshot. */
+  /**
+   * Drones as drawn. The one the local player flies is carried forward from
+   * the last snapshot (it is the camera: the delay would be felt in the
+   * hands); everyone else's are interpolated like soldiers.
+   */
   private droneViews(): (Drone & { y: number })[] {
     const ahead = this.isAuthority ? this.accumulator : Math.min(0.12, (performance.now() - this.droneSyncAt) / 1000);
+    const piloting = this.localDisplay()?.piloting ?? -1;
     const D = CONFIG.drone;
-    return this.sim.drones.map((d) => ({
-      ...d,
-      x: d.x + d.vx * ahead,
-      z: d.z + d.vz * ahead,
-      y: d.down ? Math.max(0.1, 1.6 * (1 - d.downT / D.fallTime)) : 1.6,
-    }));
+    return this.sim.drones.map((d) => {
+      const y = d.down ? Math.max(0.1, 1.6 * (1 - d.downT / D.fallTime)) : 1.6;
+      const s = this.isAuthority || d.id === piloting ? null : this.lerp.sample(1e6 + d.id, this.renderTime);
+      if (s) return { ...d, x: s.x, z: s.z, ang: s.ang, y };
+      return { ...d, x: d.x + d.vx * ahead, z: d.z + d.vz * ahead, y };
+    });
   }
 
   /** The drone the local player is flying, as drawn. */
@@ -2123,7 +2208,7 @@ export class Game {
     this.hud.drawMinimap(this.map, known, this.localId, this.matchMode === 'coop' ? this.map.rooms[this.sim.roomIndex] : undefined, {
       noise: this.noiseBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 1500 })),
       marks: this.markBlips.map((b) => ({ x: b.x, z: b.z, life: 1 - (now - b.at) / 4000 })),
-    }, this.sim.modeState.text ? this.sim.modeState : null);
+    }, this.sim.modeState.text ? this.sim.modeState : null, this.sim.hotspot);
     this.updatePlates();
   }
 

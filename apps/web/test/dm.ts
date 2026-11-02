@@ -94,7 +94,8 @@ for (const info of ARENAS) {
     // of six seeds.
     let r = play(777);
     for (const seed of [778, 779, 780, 781, 782]) {
-      if ((mode === 'ctf' && r.flagsTaken === 0) || (mode === 'gun' && r.ladder < 2)) r = play(seed);
+      // A bomb defender camping his site can idle out one playout too.
+      if ((mode === 'ctf' && r.flagsTaken === 0) || (mode === 'gun' && r.ladder < 2) || r.maxStill >= 9) r = play(seed);
     }
     const { s, deaths, ended, maxStill, escaped, throws, ladder, plants, bombEnds, rounds, attackWins, defenceWins, flagsTaken, buys } = r;
     // Bomb rounds can end in a defuse with nobody down: one death a round will do.
@@ -1909,6 +1910,78 @@ for (const info of ARENAS) {
     const end = s.drainEvents().find((e) => e.type === 'victory');
     check(end?.ownerId === p.id, 'zone: the last one standing wins');
   }
+}
+
+// Wallbang: sniper and LMG rounds pass one thin wall at half damage.
+{
+  const dt = CONFIG.tickDt;
+  const base = buildArena('sklad', 9001, 'dm');
+  const wall = { cx: 20, cz: 10, hw: 0.75, hh: 3 };
+  const fire = (weapon: WeaponId) => {
+    const s = new Sim({ ...base, walls: [wall], props: [], lamps: [], bushes: [], pickups: [], powerups: [] });
+    const p = s.addPlayer('local', 'тест', 1);
+    const foe = s.addPlayer('foe', 'цель', 2);
+    p.x = 14;
+    p.z = 10;
+    foe.x = 24;
+    foe.z = 10;
+    foe.shield = 0;
+    foe.armor = 0;
+    const hp = foe.hp;
+    s.bullets.push({
+      id: 'wb', ownerId: p.id, ownerKind: 'player', x: p.x, z: p.z, vx: 60, vz: 0, speed: 60,
+      damage: WEAPONS[weapon].damage, damageMul: 1, life: 1, weapon, color: 0xffffff, range: 0,
+    });
+    for (let i = 0; i < 30; i++) s.step(dt);
+    return hp - foe.hp;
+  };
+  const sniper = fire('sniper');
+  const open = WEAPONS.sniper.damage;
+  check(sniper > 0 && sniper < open * 0.7, `a sniper round punches the wall at half damage (${sniper.toFixed(0)} of ${open})`);
+  check(fire('rifle') === 0, 'a rifle round stops at the wall');
+  // Two walls in a row stop even the sniper.
+  const dbl = (() => {
+    const s = new Sim({ ...base, walls: [wall, { cx: 22, cz: 10, hw: 0.75, hh: 3 }], props: [], lamps: [], bushes: [], pickups: [], powerups: [] });
+    const p = s.addPlayer('local', 'тест', 1);
+    const foe = s.addPlayer('foe', 'цель', 2);
+    p.x = 14; p.z = 10; foe.x = 26; foe.z = 10; foe.shield = 0; foe.armor = 0;
+    const hp = foe.hp;
+    s.bullets.push({ id: 'wb2', ownerId: p.id, ownerKind: 'player', x: p.x, z: p.z, vx: 60, vz: 0, speed: 60, damage: WEAPONS.sniper.damage, damageMul: 1, life: 1, weapon: 'sniper', color: 0xffffff, range: 0 });
+    for (let i = 0; i < 30; i++) s.step(dt);
+    return hp - foe.hp;
+  })();
+  check(dbl === 0, 'the second wall stops the pierced round');
+}
+
+// Hotspot: hold the amber circle alone for a frag and armor.
+{
+  const dt = CONFIG.tickDt;
+  const s = new Sim(buildArena('sklad', 9002, 'dm'));
+  const p = s.addPlayer('local', 'тест', 1);
+  const foe = s.addPlayer('foe', 'враг', 2);
+  foe.x = 50;
+  foe.z = 30;
+  const w = s as unknown as { worldT: number; rng: { int: (a: number, b: number) => number } };
+  const kinds = 4; // blackout/rain/armored/intercept precede the two hotspot entries
+  w.rng.int = (_a: number, b: number) => Math.min(b, kinds);
+  w.worldT = 0;
+  s.step(dt);
+  check(s.worldEvent.kind === 'hotspot' && !!s.hotspot, 'a hotspot opens in deathmatch');
+  const spot = s.hotspot!;
+  p.x = spot.x;
+  p.z = spot.z;
+  p.armor = 0;
+  s.drainEvents();
+  for (let i = 0; i < Math.ceil((CONFIG.world.hotspotHold + 0.2) / dt); i++) {
+    p.x = spot.x;
+    p.z = spot.z;
+    p.vx = p.vz = 0;
+    s.step(dt);
+  }
+  const captured = s.drainEvents().find((e) => e.type === 'world' && e.text === 'captured');
+  check(captured?.ownerId === p.id, 'holding it alone captures it');
+  check((s.scores.get(p.id)?.kills ?? 0) === 1 && p.armor === CONFIG.powerups.maxArmor, `the hold pays a frag and full armor (${s.scores.get(p.id)?.kills}, ${p.armor})`);
+  check(s.hotspot === null, 'the circle is gone after the capture');
 }
 
 // Mutators and map events.

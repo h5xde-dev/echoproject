@@ -201,6 +201,8 @@ export class Sim {
   /** Deathmatch: seconds left in the match. */
   timeLeft = 0;
   matchOver = false;
+  /** Fixed ticks stepped so far (staggers per-bot work deterministically). */
+  private frame = 0;
   /** New modes: status, marks and score for the HUD (authority builds it, snapshots carry it). */
   modeState: ModeState = { t: 0, text: '' };
   /** New modes' private state (authority only). */
@@ -219,6 +221,8 @@ export class Sim {
   private zonePulse = 0;
   /** Map event under way ('' none) and its clock; the next one's countdown. */
   worldEvent: { kind: string; t: number } = { kind: '', t: 0 };
+  /** Hotspot (a dm/tdm map event): hold the circle alone for a frag and armor. */
+  hotspot: { x: number; z: number; holdT: number; by: number } | null = null;
   private worldT: number = CONFIG.world.first;
   private lampsBeforeBlackout: boolean[] | null = null;
   private armoredDrop = false;
@@ -849,6 +853,7 @@ export class Sim {
   /** Host-side authoritative tick. */
   step(dt: number): void {
     this.time += dt;
+    this.frame++;
 
     for (const actor of this.actors.values()) {
       if (!actor.alive) {
@@ -1949,9 +1954,16 @@ export class Sim {
       const facing = Math.cos(toTarget - actor.ang);
       const inFov = facing > Math.cos(P.fovHalf) || d < P.nearSense;
       if (d < detectRange && inFov) {
-        inSight =
-          this.world.lineOfSight(actor.x, actor.z, nearest.x, nearest.z, this.scratch) &&
-          !this.smokeBlocks(actor.x, actor.z, nearest.x, nearest.z);
+        // Raycasts are the AI's main cost: each bot traces its line every
+        // other tick (staggered by id, still deterministic) and keeps the
+        // last answer in between. Awareness smooths over the half-tick lag.
+        if (ai.losTarget !== nearest.id || (this.frame + actor.id) % 2 === 0) {
+          ai.losTarget = nearest.id;
+          ai.losClear =
+            this.world.lineOfSight(actor.x, actor.z, nearest.x, nearest.z, this.scratch) &&
+            !this.smokeBlocks(actor.x, actor.z, nearest.x, nearest.z);
+        }
+        inSight = ai.losClear;
       }
     }
 
@@ -3474,6 +3486,7 @@ export class Sim {
     const ev = this.worldEvent;
     if (ev.kind) {
       ev.t -= dt;
+      if (ev.kind === 'hotspot') this.updateHotspot(dt);
       if (ev.t <= 0) this.endWorldEvent();
       return;
     }
@@ -3481,7 +3494,19 @@ export class Sim {
     if (this.worldT > 0) return;
     this.worldT = this.rng.range(W.every[0], W.every[1]);
     const kinds = ['blackout', 'rain', 'armored', 'intercept'].filter((k) => !(k === 'blackout' && (this.map.lamps.length === 0 || this.mut.has('night'))));
-    const kind = kinds[this.rng.int(0, kinds.length - 1)];
+    // The hotspot is a fight over ground: only where kills are the score.
+    if (this.mode === 'dm' || this.mode === 'tdm') kinds.push('hotspot', 'hotspot');
+    let kind = kinds[this.rng.int(0, kinds.length - 1)];
+    if (kind === 'hotspot') {
+      const spot = this.dropSpot();
+      if (spot) {
+        this.hotspot = { ...spot, holdT: 0, by: -1 };
+        this.worldEvent = { kind, t: W.hotspot };
+        this.events.push({ type: 'world', id: kind, text: 'start', x: spot.x, z: spot.z });
+        return;
+      }
+      kind = 'intercept';
+    }
     if (kind === 'blackout') {
       this.lampsBeforeBlackout = [...this.lampAlive];
       this.lampAlive = this.lampAlive.map(() => false);
@@ -3500,6 +3525,37 @@ export class Sim {
     this.events.push({ type: 'world', id: kind, text: 'start' });
   }
 
+  /** Exactly one living fighter inside the circle holds it; 3 s wins it. */
+  private updateHotspot(dt: number): void {
+    const spot = this.hotspot;
+    if (!spot) return;
+    const W = CONFIG.world;
+    let inside: Actor | null = null;
+    let crowded = false;
+    for (const a of this.actors.values()) {
+      if (!a.alive || a.downed || dist(a.x, a.z, spot.x, spot.z) > W.hotspotRadius) continue;
+      if (inside && (this.teams ? inside.team !== a.team : true)) crowded = true;
+      inside ??= a;
+    }
+    if (!inside || crowded) {
+      spot.holdT = 0;
+      spot.by = -1;
+      return;
+    }
+    if (spot.by !== inside.id) spot.holdT = 0;
+    spot.by = inside.id;
+    spot.holdT += dt;
+    if (spot.holdT < W.hotspotHold) return;
+    // Held: a frag on the board (and the team's score), armor topped up.
+    const score = this.scores.get(inside.id);
+    if (score) score.kills++;
+    if (this.teams && inside.team >= 0) this.teamScore[inside.team]++;
+    inside.armor = CONFIG.powerups.maxArmor;
+    this.events.push({ type: 'world', id: 'hotspot', text: 'captured', ownerId: inside.id, x: spot.x, z: spot.z });
+    this.hotspot = null;
+    this.worldEvent = { kind: '', t: 0 };
+  }
+
   private endWorldEvent(): void {
     const kind = this.worldEvent.kind;
     if (kind === 'blackout' && this.lampsBeforeBlackout) {
@@ -3507,13 +3563,15 @@ export class Sim {
       this.lampAlive = this.lampsBeforeBlackout.map((on, i) => on && !this.lampBroken[i]);
       this.lampsBeforeBlackout = null;
     }
+    this.hotspot = null;
     this.worldEvent = { kind: '', t: 0 };
-    if (kind === 'blackout' || kind === 'rain') this.events.push({ type: 'world', id: kind, text: 'end' });
+    if (kind === 'blackout' || kind === 'rain' || kind === 'hotspot') this.events.push({ type: 'world', id: kind, text: 'end' });
   }
 
   /** Client: the map event from a snapshot. */
-  syncWorld(world: { kind: string; t: number } | undefined): void {
+  syncWorld(world: { kind: string; t: number } | undefined, hotspot?: { x: number; z: number; holdT: number; by: number }): void {
     this.worldEvent = world ?? { kind: '', t: 0 };
+    this.hotspot = hotspot ?? null;
   }
 
   private finishTeamMatch(team: number | undefined, text: string): void {
@@ -4316,6 +4374,8 @@ function makeAi(): AiState {
     awareness: 0,
     aimT: 0,
     targetId: -1,
+    losClear: false,
+    losTarget: -1,
     path: [],
     pathIndex: 0,
     pathGoalX: 0,
