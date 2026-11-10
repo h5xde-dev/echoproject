@@ -71,7 +71,7 @@ export interface ActorState {
 
 /**
  * «Осада» lane creeps, many and simple: [id, role, team, x, z, ang, hp, maxHp, alive, gun, armor]
- * with role 0 creep, 1 shieldman; gun 0 pistol, 1 SMG (an upgraded wave) — see expandCreep.
+ * with role 0 creep, 1 shieldman, 2 a forest deserter (team -1); gun 0 pistol, 1 SMG, 2 shotgun — see expandCreep.
  */
 export type CreepState = [number, number, number, number, number, number, number, number, number, number, number];
 

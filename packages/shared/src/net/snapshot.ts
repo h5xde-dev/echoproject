@@ -33,7 +33,7 @@ export function buildSnapshot(sim: Sim, tick: number, ack: Record<string, number
   const creeps: CreepState[] = [];
   for (const a of sim.actors.values()) {
     if (isCreep(a)) {
-      creeps.push([a.id, CREEP_ROLES.indexOf(a.role), a.team, r3(a.x), r3(a.z), Math.round(a.ang * 100) / 100, Math.round(a.hp), a.maxHp, a.alive ? 1 : 0, a.weapon === 'smg' ? 1 : 0, Math.round(a.armor)]);
+      creeps.push([a.id, CREEP_ROLES.indexOf(a.role), a.team, r3(a.x), r3(a.z), Math.round(a.ang * 100) / 100, Math.round(a.hp), a.maxHp, a.alive ? 1 : 0, a.weapon === 'smg' ? 1 : a.weapon === 'shotgun' ? 2 : 0, Math.round(a.armor)]);
       continue;
     }
     actors.push({
@@ -165,12 +165,12 @@ export function roundStateOf(sim: Sim): RoundState | null {
   return { n: sim.round, phase: sim.roundPhase, t: Math.max(0, sim.roundT), canBuy: sim.canBuy };
 }
 
-const CREEP_ROLES: EnemyRole[] = ['creep', 'shieldman'];
+const CREEP_ROLES: EnemyRole[] = ['creep', 'shieldman', 'wild'];
 
 /** A packed creep back as an ordinary actor state (clients draw it like any other). */
 export function expandCreep(c: CreepState): ActorState {
   const [id, role, team, x, z, ang, hp, maxHp, alive, gun, armor] = c;
-  const weapon = gun === 1 ? 'smg' : 'pistol';
+  const weapon = gun === 1 ? 'smg' : gun === 2 ? 'shotgun' : 'pistol';
   return {
     id, kind: 'enemy', peerId: '', name: '', x, z, ang, hp, maxHp, armor, alive: alive === 1,
     weapon, weapons: [weapon],

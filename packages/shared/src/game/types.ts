@@ -4,13 +4,16 @@ import type { WeaponId } from './weapons';
  * coop — campaign rooms; dm — free-for-all; gun — gun game (kills climb a
  * weapon ladder); comp — competitive rounds with a CS-style economy.
  */
-export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb' | 'infect' | 'extract' | 'vip' | 'zone' | 'siege';
+export type GameMode = 'coop' | 'dm' | 'duel' | 'gun' | 'comp' | 'tdm' | 'waves' | 'ctf' | 'bomb' | 'infect' | 'extract' | 'vip' | 'zone' | 'siege' | 'convoy';
 
 /** «Осада»: what a fighter does for the team (see CONFIG.siege). */
 export type SiegeRole = 'line' | 'sab' | 'op';
 
-/** A tower's upgrade: none, machine gun, flamethrower, electronic warfare. */
-export type TowerUp = '' | 'mg' | 'flame' | 'ew';
+/**
+ * A tower's gun module: none, machine gun, flamethrower, electronic warfare,
+ * a marksman's rifle, air defence (armour, wire and repairs are extras).
+ */
+export type TowerUp = '' | 'mg' | 'flame' | 'ew' | 'sniper' | 'aa';
 
 /** «Осада»: a tower or throne as snapshots carry it (the body is a prop). */
 export interface TowerState {
@@ -23,6 +26,29 @@ export interface TowerState {
   /** The throne: open to damage only once a lane falls (or late in the match). */
   throne?: boolean;
   open?: boolean;
+  /** Armour plates bought: more hit points. */
+  armored?: boolean;
+}
+
+/** «Осада»: a forest outpost — whose it is, and the capture under way (0..1, by `cap`). */
+export interface OutpostState {
+  team: number;
+  cap: number;
+  k: number;
+}
+
+/** «Конвой»: the truck on its road. */
+export interface ConvoyState {
+  x: number;
+  z: number;
+  ang: number;
+  hp: number;
+  max: number;
+  /** Share of the road behind it (0..1), checkpoints passed. */
+  done: number;
+  cp: number;
+  /** 1 rolling, 0 standing (nobody escorting), -1 blocked by attackers. */
+  moving: number;
 }
 
 /**
@@ -47,6 +73,14 @@ export interface ModeState {
   buff?: [string, number, string, number];
   /** Upgrades bought for each team's next creep wave ('guns,armor,more'). */
   waveUp?: [string, string];
+  /** Forest outposts (map order), the hidden FPV caches still there (bit per cache), camps alive (bit per camp). */
+  outposts?: OutpostState[];
+  caches?: number;
+  camps?: number;
+  /** Enemy fighters each side's outposts see (ids, for that side's minimap). */
+  scouted?: [number[], number[]];
+  /** «Конвой»: the truck. */
+  convoy?: ConvoyState;
 }
 
 export interface StaticBody {
@@ -106,7 +140,10 @@ export type PropKind =
   | 'tower'
   | 'throne'
   /** «Осада»: an air-defence post a fighter puts down (V); shoots enemy drones and shells. */
-  | 'aa';
+  | 'aa'
+  /** «Осада»: a forest outpost (a watchtower to take); «Конвой»: the truck's body. */
+  | 'outpost'
+  | 'convoy';
 
 /** Things to use with E. */
 export type InteractKind = 'switch' | 'ammo' | 'med';
@@ -288,6 +325,16 @@ export interface MapData {
   craters?: CraterDef[];
   /** «Осада»: where the truck can turn up. */
   truckSpots?: { x: number; z: number }[];
+  /** Deep water: blocks the way, not shots or sight. Bridges cross it; fords are shallow (slow). */
+  water?: StaticBody[];
+  bridges?: TrenchDef[];
+  fords?: TrenchDef[];
+  /** «Осада» forest: neutral camps, outposts to take, hidden FPV caches. */
+  camps?: { x: number; z: number }[];
+  outposts?: { x: number; z: number }[];
+  caches?: { x: number; z: number }[];
+  /** «Конвой»: the truck's road, start to finish (world points). */
+  route?: { x: number; z: number }[];
   /** Deathmatch spawn points (empty for co-op levels). */
   spawns: { x: number; z: number }[];
   spawnX: number;
@@ -296,7 +343,7 @@ export interface MapData {
   minZ: number;
   maxX: number;
   maxZ: number;
-  /** Grids for the minimap: 1 = floor, 2 = wall. */
+  /** Grids for the minimap: 1 = floor, 2 = wall, 3 = deep water. */
   cells: Uint8Array;
 }
 
@@ -304,8 +351,8 @@ export type ActorKind = 'player' | 'enemy';
 
 /** Guard specialities in co-op and waves; arena bots are all 'grunt'. */
 /** zombie: the infected in «Заражение» — knife only, fast, tough, no light. */
-/** creep, shieldman: «Осада» lane creeps. */
-export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie' | 'creep' | 'shieldman';
+/** creep, shieldman: «Осада» lane creeps; wild: the forest's neutral camps (no team). */
+export type EnemyRole = 'grunt' | 'heavy' | 'sniper' | 'scout' | 'boss' | 'zombie' | 'creep' | 'shieldman' | 'wild';
 
 /** A player's speciality (bots have none). */
 export type PlayerClass = 'assault' | 'scout' | 'medic' | 'engineer';
@@ -491,6 +538,8 @@ export interface Actor {
   guns?: WeaponId[];
   aa?: number;
   atgm?: number;
+  /** «Осада»: the forest camp a neutral belongs to. */
+  camp?: number;
 }
 
 /** A kamikaze FPV drone: flown by a soldier who stands still meanwhile. */
@@ -622,7 +671,9 @@ export type ShopItem =
   /** «Осада»: the team shop. */
   | 'droneExt' | 'mortar' | 'wire' | 'tw_mg' | 'tw_flame' | 'tw_ew' | 'role_line' | 'role_sab' | 'role_op'
   /** Creeps of the team's next wave: guns, armour, two more per lane; an air-defence post. */
-  | 'cw_guns' | 'cw_armor' | 'cw_more' | 'aa';
+  | 'cw_guns' | 'cw_armor' | 'cw_more' | 'aa'
+  /** More for the towers: a marksman, air defence, armour plates, a wire perimeter, a repair. */
+  | 'tw_sniper' | 'tw_aa' | 'tw_armor' | 'tw_wire' | 'tw_repair';
 
 export interface NoiseEvent {
   x: number;

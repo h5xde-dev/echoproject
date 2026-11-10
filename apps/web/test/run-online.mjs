@@ -213,14 +213,27 @@ try {
     const actors = [...game.latestActors.values()];
     const me = game.latestActors.get(game.localId);
     return {
-      fighters: actors.filter((a) => !['creep', 'shieldman', 'kamikaze'].includes(a.role)).length,
+      fighters: actors.filter((a) => !['creep', 'shieldman', 'wild'].includes(a.role)).length,
       creeps: actors.filter((a) => a.role === 'creep').length,
       towers: game.sim.modeState.towers?.length ?? 0,
       bank: game.sim.modeState.bank,
       role: me?.srole,
     };
   });
-  check(sg.fighters === 8 && sg.creeps > 0 && sg.towers === 10 && !!sg.bank && sg.role === 'line', `siege via the server: ${sg.fighters} fighters, ${sg.creeps} creeps, ${sg.towers} structures, bank ${sg.bank}, role ${sg.role}`);
+  check(sg.fighters === 10 && sg.creeps > 0 && sg.towers === 14 && !!sg.bank && sg.role === 'line', `siege via the server: ${sg.fighters} fighters, ${sg.creeps} creeps, ${sg.towers} structures, bank ${sg.bank}, role ${sg.role}`);
+
+  // «Конвой» through the server: the truck in the mode state, four a side.
+  const h = await player('Хотел');
+  await h.page.click('.menu-tab[data-tab="online"]');
+  await h.page.click('.mode-card[data-mode="convoy"]');
+  await h.page.click('#btn-quick');
+  await inGame(h);
+  await h.page.waitForFunction(() => !!window.echo.game.sim.modeState.convoy, null, { timeout: 30000, polling: 500 });
+  const cv = await h.page.evaluate(() => {
+    const game = window.echo.game;
+    return { fighters: game.latestActors.size, convoy: game.sim.modeState.convoy, props: game.sim.props.some((p) => p.kind === 'convoy') };
+  });
+  check(cv.fighters === 8 && cv.convoy.max > 0 && cv.props, `convoy via the server: ${cv.fighters} fighters, truck ${cv.convoy.hp}/${cv.convoy.max}, body synced ${cv.props}`);
 
   // A wrong code: a clear message, back in the menu.
   const c = await player('Чарли');

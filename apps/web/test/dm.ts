@@ -9,7 +9,7 @@ import { statEvent, type MatchStats } from '@echo/shared/progress';
 import { ARENAS, buildArena } from '@echo/shared/game/arenas';
 import { CONFIG } from '@echo/shared/game/config';
 import { generateMap, pickPowerup } from '@echo/shared/game/levelgen';
-import { isCreep, Sim } from '@echo/shared/game/sim';
+import { isCreep, onFarSide, Sim } from '@echo/shared/game/sim';
 import { buildSnapshot, expandCreep } from '@echo/shared/net/snapshot';
 import { addMatch, levelOf, loadProgress, matchXp } from '../src/ui/progress';
 import { WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
@@ -2087,29 +2087,35 @@ for (const info of ARENAS) {
   };
   const dt = CONFIG.tickDt;
   const map = buildArena('sklad', 4040, 'siege');
-  check(map.name === 'Осада' && map.gridW === 61, `siege has its own wide map (${map.name}, ${map.gridW} cells)`);
+  check(map.name === 'Осада' && map.gridW === 83 && map.gridH === 49, `siege has its own big map (${map.name}, ${map.gridW}×${map.gridH} cells)`);
   const towerProps = map.props.filter((p) => p.kind === 'tower');
   const thrones = map.props.filter((p) => p.kind === 'throne');
-  check(towerProps.length === 8 && thrones.length === 2 && (map.truckSpots?.length ?? 0) >= 3, `8 towers, 2 thrones, ${map.truckSpots?.length} truck spots`);
+  check(towerProps.length === 12 && thrones.length === 2 && (map.truckSpots?.length ?? 0) >= 6, `12 towers on three lanes, 2 thrones, ${map.truckSpots?.length} truck spots`);
+  check((map.water?.length ?? 0) > 0 && map.bridges?.length === 3 && map.fords?.length === 2, `a river with three bridges and two fords (${map.bridges?.length}, ${map.fords?.length})`);
+  check((map.camps?.length ?? 0) === 6 && (map.outposts?.length ?? 0) === 2 && (map.caches?.length ?? 0) === 8, `forest: ${map.camps?.length} camps, ${map.outposts?.length} outposts, ${map.caches?.length} hidden FPVs`);
   const s = new Sim(map);
   const priv = s as unknown as Priv;
   const from = map.spawns[0];
-  const unreachable = [...thrones, ...(map.truckSpots ?? []), ...towerProps.map((t) => ({ x: t.x + 1.6, z: t.z }))].filter((t) => !s.nav.find(from.x, from.z, t.x, t.z));
-  check(unreachable.length === 0, `throne, towers and truck spots reachable (${unreachable.length} not)`);
+  const errands = [
+    ...thrones, ...(map.truckSpots ?? []), ...towerProps.map((t) => ({ x: t.x + 1.6, z: t.z })),
+    ...(map.camps ?? []), ...(map.caches ?? []), ...(map.outposts ?? []).map((o) => ({ x: o.x + 1.6, z: o.z })),
+  ];
+  const unreachable = errands.filter((t) => !s.nav.find(from.x, from.z, t.x, t.z));
+  check(unreachable.length === 0, `thrones, towers, truck spots, camps, caches, outposts reachable (${unreachable.length} not: ${unreachable.map((u) => `${u.x},${u.z}`).join(' ')})`);
   const p = s.addPlayer('p', 'Игрок', 1);
   s.fillBots();
   const fighters = [...s.actors.values()];
   check(fighters.length === CONFIG.siege.fighters, `four a side whatever the room asked for (${fighters.length})`);
-  check(p.siegeRole === 'line' && p.lane === 0, `a person gets the first seat: line, top lane (${p.siegeRole}${p.lane})`);
+  check(p.siegeRole === 'line' && p.lane === 1, `a person gets the first seat: line, middle lane (${p.siegeRole}${p.lane})`);
   check(p.weapons.join() === 'pistol,knife' && p.grenades === 0 && p.armor === 0, `everyone starts with a pistol (${p.weapons.join()}, ${p.grenades} grenades)`);
   const roles = [0, 1].map((t) => fighters.filter((a) => a.team === t).map((a) => `${a.siegeRole}${a.siegeRole === 'line' ? a.lane : ''}`).sort().join(','));
-  check(roles.every((r) => r === 'line0,line1,op,sab'), `each side: two lines, an operator, a saboteur (${roles.join(' | ')})`);
+  check(roles.every((r) => r === 'line0,line1,line2,op,sab'), `each side: three lines, an operator, a saboteur (${roles.join(' | ')})`);
 
   // Creeps come out and walk their lane.
   priv.siegeWaveT = 0;
   s.step(dt);
   const creeps = [...s.actors.values()].filter(isCreep);
-  check(creeps.length === 4 * CONFIG.siege.earlyCreeps, `an early wave is small: ${creeps.length} creeps on both lanes for both sides`);
+  check(creeps.length === 6 * CONFIG.siege.earlyCreeps, `an early wave is small: ${creeps.length} creeps on three lanes for both sides`);
   check(!creeps.some((c) => (c.role as string) === 'kamikaze'), 'no kamikazes among the creeps');
   const blue = creeps.find((c) => c.team === 0)!;
   const x0 = blue.x;
@@ -2238,16 +2244,16 @@ for (const info of ARENAS) {
 
   // Air defence: an enemy drone in reach is shot down.
   p.aa = 1;
-  p.x = 46;
-  p.z = 21.75;
+  p.x = 38.25;
+  p.z = 36.75;
   p.ang = 0;
   s.applyInput(p, { seq: 2, moveX: 0, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt, deploy: true });
   const post = s.props.find((x) => x.kind === 'aa' && x.alive);
   check(!!post && p.aa === 0, 'an air-defence post goes down where you look (V)');
   const pilot = [...s.actors.values()].find((a) => a.team === 1 && a.siegeRole === 'op')!;
   pilot.alive = true;
-  pilot.x = 60;
-  pilot.z = 21.75;
+  pilot.x = 51.75;
+  pilot.z = 36.75;
   pilot.drones = 1;
   s.applyInput(pilot, { seq: 1, moveX: 0, moveZ: 0, aim: Math.PI, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt, drone: true });
   const drone = s.drones.find((d) => d.ownerId === pilot.id);
@@ -2271,8 +2277,8 @@ for (const info of ARENAS) {
   const sab = [...s.actors.values()].find((a) => a.team === 1 && a.siegeRole === 'sab')!;
   sab.alive = true;
   sab.wires = 1;
-  sab.x = 46;
-  sab.z = 21.75;
+  sab.x = 38.25;
+  sab.z = 36.75;
   sab.ang = Math.PI;
   priv.placeWire(sab);
   const wire = s.props.find((x) => x.kind === 'wire' && x.ownerId === sab.id);
@@ -2285,6 +2291,255 @@ for (const info of ARENAS) {
     const alarm = s.drainEvents().find((e) => e.type === 'wire' && e.id === 'alarm');
     check(alarm?.team === 1 && alarm.ownerId === p.id, 'an enemy in it: the alarm rings for the wire’s side');
   }
+}
+
+// «Осада»: the river, the forest (camps, outposts, hidden FPVs), new tower upgrades, hearing over the river.
+{
+  type Tw = { prop: { id: number; x: number; z: number; hp: number; alive: boolean }; team: number; lane: number; throne: boolean; up: string; max: number; armored: boolean };
+  type Priv = { towers: Tw[]; camps: { x: number; z: number; ids: number[]; respawnT: number }[]; outposts: { team: number }[]; caches: { active: boolean }[]; siegeWaveT: number; truckT: number };
+  const dt = CONFIG.tickDt;
+  const map = buildArena('', 777, 'siege');
+  const s = new Sim(map);
+  const priv = s as unknown as Priv;
+  const p = s.addPlayer('p', 'Игрок', 1);
+  s.fillBots();
+  // Keep the rest out of the way: no bots, no creeps, no truck.
+  const park = () => {
+    for (const a of s.actors.values()) {
+      if (a === p || a.role === 'wild') continue;
+      if (isCreep(a)) s.removeActor(a.id);
+      else {
+        a.alive = false;
+        a.respawnT = 99;
+      }
+    }
+    priv.siegeWaveT = 99;
+    priv.truckT = 99;
+  };
+  park();
+  const run = (sec: number, each?: () => void) => {
+    for (let i = 0; i < Math.round(sec / dt); i++) {
+      each?.();
+      s.step(dt);
+    }
+  };
+  const water = map.water![0];
+  const mid = (map.minX + map.maxX) / 2;
+  // The river: no wading across in deep water; the bridge carries you; the ford slows.
+  p.x = mid - 5;
+  p.z = 12 * 1.5;
+  run(2.5, () => s.applyInput(p, { seq: 1, moveX: 1, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt }));
+  check(p.x < mid - 3.75 + p.radius + 0.01, `deep water stops you (${p.x.toFixed(2)}, bank at ${(mid - 3.75).toFixed(2)})`);
+  check(!!water && !s.nav.walkable(mid, 12 * 1.5), 'and bots do not path through it');
+  const bridge = map.bridges![1];
+  p.x = mid - 6;
+  p.z = (bridge.z0 + bridge.z1) / 2;
+  run(2.5, () => s.applyInput(p, { seq: 2, moveX: 1, moveZ: 0, aim: 0, fire: false, reload: false, interact: false, flashlight: false, slot: -1, dt }));
+  check(p.x > mid + 0.5, `a bridge takes you over (${p.x.toFixed(1)})`);
+  const ford = map.fords![0];
+  check(s.inFord((ford.x0 + ford.x1) / 2, (ford.z0 + ford.z1) / 2) && s.nav.walkable((ford.x0 + ford.x1) / 2, (ford.z0 + ford.z1) / 2), 'a ford is shallow: walkable, and slow');
+  // Bullets fly over the water.
+  check(s.world.lineOfSight(mid - 5, 18, mid + 5, 18, []), 'shots and sight go over the river');
+  // Hearing over the river.
+  check(onFarSide(map, 0, mid + 6) && !onFarSide(map, 0, mid - 6) && onFarSide(map, 1, mid - 6) && !onFarSide(map, 0, mid), 'the far bank is the enemy half past the river');
+
+  // Camps: deserters turn up, shoot back, pay when cleared.
+  run(CONFIG.siege.camp.firstAt + 0.2, park);
+  const wilds = [...s.actors.values()].filter((a) => a.role === 'wild');
+  check(wilds.length === 6 * CONFIG.siege.camp.count && wilds.every((w) => w.team === -1 && isCreep(w)), `camps fill with deserters (${wilds.length})`);
+  const camp = priv.camps[0];
+  const ids = [...camp.ids];
+  p.alive = true;
+  p.hp = p.maxHp;
+  p.x = camp.x + 4;
+  p.z = camp.z;
+  s.drainEvents();
+  let shot = false;
+  run(3, () => {
+    p.x = camp.x + 4;
+    p.z = camp.z;
+    p.hp = p.maxHp;
+    p.shield = 0;
+    shot ||= s.drainEvents().some((e) => e.type === 'hurt' && e.ownerId === p.id && ids.includes(e.by ?? -1));
+  });
+  check(shot, 'come close and the camp shoots');
+  const bank = s.bank[0];
+  const nades = p.grenades;
+  s.drainEvents();
+  for (const id of ids) {
+    const w = s.actors.get(id);
+    if (w?.alive) s.damageActor(w, 999, p.id);
+  }
+  const cleared = s.drainEvents().some((e) => e.type === 'siege' && e.id === 'camp' && e.text === 'cleared' && e.ownerId === p.id);
+  const paid = s.bank[0] - bank;
+  check(cleared && paid >= CONFIG.siege.reward.camp + ids.length * CONFIG.siege.reward.wild - 1 && p.grenades === nades + 1, `cleared: +${Math.round(paid)} to the bank and a grenade`);
+  check(camp.respawnT > CONFIG.siege.camp.respawn - 1 && camp.ids.length === 0, 'the camp comes back later');
+  for (const w of [...s.actors.values()]) if (w.role === 'wild') s.removeActor(w.id);
+  for (const c of priv.camps) c.respawnT = 999;
+
+  // Outposts: stand there alone to take one; then it pays.
+  const op = map.outposts![0];
+  const bank2 = s.bank[0];
+  let taken = false;
+  run(CONFIG.siege.outpost.capture + 0.5, () => {
+    p.x = op.x + 1.4;
+    p.z = op.z;
+    p.alive = true;
+    taken ||= s.drainEvents().some((e) => e.type === 'siege' && e.id === 'outpost' && e.team === 0);
+  });
+  check(taken && priv.outposts[0].team === 0, 'an outpost is taken by standing at it');
+  const ms0 = s.modeState;
+  check(!!ms0.outposts && ms0.outposts[0].team === 0, 'snapshots carry who holds it');
+  run(2, park);
+  check(s.bank[0] > bank2, 'a held outpost earns');
+  // It sees enemies around it for its side.
+  const foe = [...s.actors.values()].find((a) => a.team === 1 && !isCreep(a))!;
+  foe.alive = true;
+  foe.respawnT = 0;
+  foe.x = op.x + 6;
+  foe.z = op.z;
+  s.step(dt);
+  check(s.modeState.scouted?.[0].includes(foe.id) ?? false, 'enemies near it show on its side\'s minimap');
+  foe.alive = false;
+  foe.respawnT = 99;
+
+  // Hidden FPVs: walk over one to take a drone.
+  const cache = map.caches![0];
+  p.drones = 0;
+  p.x = cache.x;
+  p.z = cache.z;
+  s.drainEvents();
+  s.step(dt);
+  check(p.drones === 1 && !priv.caches[0].active && s.drainEvents().some((e) => e.type === 'siege' && e.id === 'cache'), 'a hidden FPV is found by walking over it');
+  check(((s.modeState.caches ?? 0) & 1) === 0, 'the cache is gone for everyone until it is back');
+
+  // More tower upgrades.
+  const own = priv.towers.filter((t) => !t.throne && t.team === 0);
+  s.bank[0] = 5000;
+  const at = (t: Tw) => {
+    p.x = t.prop.x - 2.2;
+    p.z = t.prop.z;
+  };
+  at(own[0]);
+  check(s.buy(p, 'tw_sniper') && own[0].up === 'sniper', 'a marksman on a tower');
+  const max0 = own[0].max;
+  check(s.buy(p, 'tw_armor') && own[0].armored && own[0].max === max0 + CONFIG.siege.armorHp, `armour on top of a module (${max0} → ${own[0].max})`);
+  check(!s.buy(p, 'tw_armor'), 'armour once per tower');
+  check(s.buy(p, 'tw_wire') && s.props.filter((x) => x.alive && x.kind === 'wire' && x.team === 0).length >= 3, 'a wire ring around the tower');
+  own[0].prop.hp -= 900;
+  const hp1 = own[0].prop.hp;
+  check(s.buy(p, 'tw_repair') && own[0].prop.hp === hp1 + CONFIG.siege.repairHp, `a repair (${hp1} → ${own[0].prop.hp})`);
+  // Tower air defence is on sale from the first minute on.
+  run(Math.max(0, 61 - s.time), park);
+  at(own[1]);
+  check(s.buy(p, 'tw_aa') && own[1].up === 'aa', 'air defence on a tower');
+  s.step(dt);
+  check(s.modeState.towers!.some((t) => t.id === own[0].prop.id && t.armored), 'snapshots carry the armour');
+  // The marksman picks a fighter over a creep and reaches further than a plain tower.
+  const enemy = [...s.actors.values()].find((a) => a.team === 1 && !isCreep(a))!;
+  // Out of the line of fire.
+  p.x = own[0].prop.x;
+  p.z = own[0].prop.z + 6;
+  enemy.alive = true;
+  enemy.hp = enemy.maxHp;
+  enemy.shield = 0;
+  enemy.x = own[0].prop.x + CONFIG.siege.towerRange + 4;
+  enemy.z = own[0].prop.z;
+  let sniped = false;
+  run(3, () => {
+    enemy.x = own[0].prop.x + CONFIG.siege.towerRange + 4;
+    enemy.z = own[0].prop.z;
+    enemy.alive = true;
+    sniped ||= s.drainEvents().some((e) => e.type === 'hurt' && e.ownerId === enemy.id && (e.by ?? 0) < 0);
+  });
+  check(sniped, 'the marksman tower hits beyond a plain tower\'s reach');
+  enemy.alive = false;
+  enemy.respawnT = 99;
+}
+
+// «Конвой»: the truck rolls with an escort, stops for an attacker, burns, checkpoints, the end.
+{
+  type Priv = { convoy: { prop: { x: number; z: number }; done: number; total: number; hp: number; cp: number; moving: number } | null };
+  const dt = CONFIG.tickDt;
+  const map = buildArena('', 31, 'convoy');
+  check(map.name === 'Конвой' && (map.route?.length ?? 0) >= 6, `convoy has its own map and road (${map.route?.length} points)`);
+  const s = new Sim(map);
+  const priv = s as unknown as Priv;
+  const unreachable = map.route!.filter((r) => !s.nav.find(map.route![0].x + 2, map.route![0].z, r.x, r.z));
+  check(unreachable.length === 0, `the whole road is walkable (${unreachable.length} not)`);
+  const p = s.addPlayer('p', 'Игрок', 1);
+  s.fillBots();
+  const fighters = [...s.actors.values()];
+  check(fighters.length === CONFIG.convoy.fighters && fighters.filter((a) => a.team === 0).length === 4, `four a side (${fighters.length})`);
+  const red = fighters.find((a) => a.team === 1)!;
+  check(red.atgm === 1 && (p.team === 0 ? p.armor >= 50 : p.atgm === 1), 'attackers carry a missile, escorts a vest');
+  const cv = priv.convoy!;
+  for (const a of fighters) {
+    if (a === p) continue;
+    a.alive = false;
+    a.respawnT = 99;
+  }
+  p.team = 0;
+  p.alive = true;
+  const x0 = cv.prop.x;
+  const keep = () => {
+    p.x = cv.prop.x - 3;
+    p.z = cv.prop.z + 2.5;
+    p.hp = p.maxHp;
+  };
+  for (let i = 0; i < Math.round(3 / dt); i++) {
+    keep();
+    s.step(dt);
+  }
+  check(cv.done > 3 && cv.prop.x !== x0 && cv.moving === 1, `with an escort it rolls (${cv.done.toFixed(1)} m)`);
+  const done = cv.done;
+  red.alive = true;
+  red.x = cv.prop.x + 3;
+  red.z = cv.prop.z - 2.5;
+  for (let i = 0; i < Math.round(2 / dt); i++) {
+    keep();
+    red.x = cv.prop.x + 3;
+    red.z = cv.prop.z - 2.5;
+    red.hp = red.maxHp;
+    s.step(dt);
+  }
+  check(cv.done === done && cv.moving === -1, 'an attacker beside it holds it');
+  red.alive = false;
+  red.respawnT = 99;
+  const hp = cv.hp;
+  s.explode(cv.prop.x, cv.prop.z, 3, 100, red.id, 'frag', 1);
+  check(cv.hp < hp, `attackers' blasts hurt it (${hp} → ${Math.round(cv.hp)})`);
+  const hp2 = cv.hp;
+  s.explode(cv.prop.x, cv.prop.z, 3, 100, p.id, 'frag', 0);
+  check(cv.hp === hp2, 'the escort cannot hurt it');
+  // Checkpoints add time; the end of the road wins.
+  const t0 = s.timeLeft;
+  let cp = false;
+  let won = '';
+  for (let i = 0; i < Math.round(400 / dt) && !won; i++) {
+    keep();
+    s.step(dt);
+    for (const e of s.drainEvents()) {
+      if (e.type === 'siege' && e.id === 'checkpoint') cp = true;
+      if (e.type === 'victory') won = `${e.team}:${e.text}`;
+    }
+  }
+  check(cp && s.timeLeft + 1 > 0 && t0 > 0, 'checkpoints passed on the way');
+  check(won.startsWith('0:'), `escorted to the end: blue wins (${won})`);
+}
+
+// «Конвой» bots only: someone wins.
+{
+  const s = new Sim(buildArena('', 32, 'convoy'));
+  s.fillBots();
+  const dt = CONFIG.tickDt;
+  let ended = '';
+  for (let t = 0; t < CONFIG.convoy.timeLimit + CONFIG.convoy.checkpointTime * 2 + 5 && !ended; t += dt) {
+    s.step(dt);
+    for (const e of s.drainEvents()) if (e.type === 'victory') ended = `${e.team}:${e.text}`;
+  }
+  const done = (s as unknown as { convoy: { done: number; total: number } }).convoy;
+  check(!!ended, `bots play convoy to the end: ${ended} (truck at ${Math.round((done.done / done.total) * 100)}%)`);
 }
 
 // «Осада» bots only: the match runs to an end with creeps, towers and trucks.

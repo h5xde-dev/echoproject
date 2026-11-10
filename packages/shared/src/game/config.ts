@@ -385,6 +385,8 @@ export const CONFIG = {
     /** «Осада» lane creeps (never rolled; hit points come from CONFIG.siege). */
     creep: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.78 },
     shieldman: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.62 },
+    /** «Осада»: neutral deserters of the forest camps (never rolled). */
+    wild: { base: 0, perLevel: 0, max: 0, hp: 1, armor: 0, speed: 0.85 },
   },
 
   /** Match mutators (the host picks them, or the week's playlist). */
@@ -542,11 +544,13 @@ export const CONFIG = {
   },
 
   /**
-   * «Осада» 4v4: two lanes of towers and a throne, creeps, a truck in the
-   * forest every minute, one bank per team. Money in plain units.
+   * «Осада» 5v5: three lanes of towers and a throne, a river with bridges,
+   * creeps, a forest with camps, outposts, hidden FPVs and a truck every
+   * minute, one bank per team. Money in plain units.
    */
   siege: {
-    fighters: 8,
+    /** Five a side: three on the lanes, the saboteur, the operator. */
+    fighters: 10,
     timeLimit: 900,
     respawn: 10,
     /** Respawn of the side with fewer towers standing. */
@@ -574,7 +578,8 @@ export const CONFIG = {
     /** After this many seconds a wave is half again as big. */
     bigWavesAt: 600,
     shieldFrom: 180,
-    creepCap: 18,
+    /** Live creeps a side can have (three lanes). */
+    creepCap: 27,
     /** Creeps' guns hit for this share (they come in numbers). */
     creepDamageMul: 0.35,
     /** …but they are what breaks towers: against structures, this much more. */
@@ -594,7 +599,7 @@ export const CONFIG = {
     /** Income: per second per team; the side with fewer towers gets more. */
     income: 2,
     comebackMul: 1.3,
-    reward: { creep: 10, shieldman: 20, kill: 60, bountyPer2: 20, truck: 150, tower: 200, throne: 0 },
+    reward: { creep: 10, shieldman: 20, kill: 60, bountyPer2: 20, truck: 150, tower: 200, throne: 0, wild: 18, camp: 60 },
     /** Shop rules: off-role price, and each repeat buy of the same item within a minute. */
     offRoleMul: 1.5,
     repeatMul: 0.25,
@@ -644,6 +649,50 @@ export const CONFIG = {
     maxWires: 3,
     wireLen: 3,
     wireAlarm: 25,
+    /** Tower extras: the marksman, air defence on the tower, armour plates, a repair, the wire ring. */
+    sniper: { range: 20, damage: 70, cd: 2.4 },
+    towerAa: { range: 14, cd: 0.5, droneDamage: 30, intercept: 12, interceptChance: 0.5 },
+    armorHp: 600,
+    repairHp: 350,
+    wireRing: 4,
+    /**
+     * Neutral camps in the forest: deserters who keep to their camp, shoot
+     * whoever comes close or hits them, and are back a while after the camp
+     * is cleared. Clearing it pays the bank and hands the one who did it a grenade.
+     */
+    camp: { count: 3, hp: 120, aggro: 7, leash: 12, respawn: 75, firstAt: 30, regen: 25 },
+    /** Outposts: stand by one with no enemy near to take it; held, it pays and lights up enemies around. */
+    outpost: { radius: 3.5, capture: 5, income: 1, reveal: 16, pulse: 4, revealT: 1.6 },
+    /** Hidden FPV drones in the undergrowth: seen only up close, one each, back after a while. */
+    cache: { seen: 6, take: 1.4, respawn: 90 },
+    /**
+     * On the enemy's side of the river you hear the enemy only close by (the
+     * rush of the water, a strange forest): their shots and steps carry this
+     * share of the usual distance.
+     */
+    farSideHearing: 0.4,
+  },
+
+  /**
+   * «Конвой» 4v4: blue escorts a truck down the road to the far end, red
+   * stops it. It rolls with an escort beside it and no attacker near; red
+   * can burn it down. Checkpoints add time.
+   */
+  convoy: {
+    fighters: 8,
+    timeLimit: 210,
+    checkpointTime: 75,
+    checkpoints: 2,
+    speed: 1.5,
+    /** An escort this near moves it; an attacker this near holds it. */
+    escort: 6,
+    hp: 2600,
+    /** Bullets do this share to it; blasts full; repairs while escorted and unopposed. */
+    bulletMul: 0.35,
+    repair: 12,
+    respawn: 6,
+    /** Attackers carry an anti-tank missile into every life: this much to the truck. */
+    atgmDamage: 320,
   },
 
   /** Team deathmatch: first team to the limit wins; the clock is dm.timeLimit. */

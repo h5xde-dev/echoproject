@@ -14,10 +14,10 @@ import { updateBullets, type BulletActor, type BulletCtx } from '@echo/shared/ga
 import { CONFIG, COLORS } from '@echo/shared/game/config';
 import { generateMap } from '@echo/shared/game/levelgen';
 import { GUN_LADDER, isArena, isCoopMode, isTeamMode, modeInfo, SHOP, SIEGE_ROLES, SIEGE_SHOP, siegePrice, TEAM_NAMES } from '@echo/shared/game/modes';
-import { ARENA_DOOR_BASE, isCreep, Sim, type PlayerInput } from '@echo/shared/game/sim';
+import { ARENA_DOOR_BASE, isCreep, onFarSide, Sim, type PlayerInput } from '@echo/shared/game/sim';
 import type { Mutator, Buffs, Bullet, Difficulty, Drone, EnemyRole, Gait, PlayerClass, GameEvent, GameMode as MatchMode, GrenadeKind, Interactable, MapData, PowerupKind, ShopItem, SiegeRole } from '@echo/shared/game/types';
 import { projectileLife, WEAPON_ORDER, WEAPONS, type WeaponId } from '@echo/shared/game/weapons';
-import type { Hud, HudPlate, HudScore, SiegeShopRow } from '../ui/hud';
+import type { Hud, HudPlate, HudScore, SiegeMinimap, SiegeShopRow } from '../ui/hud';
 import { addMatch, levelOf, loadProgress, type MatchTally } from '../ui/progress';
 import { newTally, tallyEvent } from '@echo/shared/progress';
 
@@ -162,7 +162,7 @@ class EntityLerp {
 
 const PLAYER_COLORS = [COLORS.player, COLORS.player2, 0x8fb6ff, 0xff7ad9];
 /** Guard types read at a glance: heavies dark red, snipers orange, scouts violet. */
-const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a, creep: COLORS.enemy, shieldman: 0x9a1420 };
+const ROLE_COLORS: Record<EnemyRole, number> = { grunt: COLORS.enemy, heavy: 0x9a1420, sniper: 0xff8a2a, scout: 0x9a7aff, boss: 0xffd23a, zombie: 0x7aff3a, creep: COLORS.enemy, shieldman: 0x9a1420, wild: 0xc8b25a };
 /** Team modes: blue and red, for humans and bots alike. */
 const TEAM_COLORS = [0x4aa8ff, 0xff5a4a];
 
@@ -773,11 +773,13 @@ export class Game {
         this.renderer.muzzleFlash(event.x ?? 0, event.z ?? 0, event.dirX ?? 0, event.dirZ ?? 0, size);
         // A silenced shot leaves no marker for those who cannot see the shooter.
         // Towers («Осада») fire as negative ids: no soldier to flash.
-        if (!def.silenced && owner >= 0) {
+        // «Осада»: across the river the enemy is heard only close by.
+        const muffled = this.enemyMuffled(owner, event.x ?? 0, event.z ?? 0, 45);
+        if (!def.silenced && owner >= 0 && !muffled) {
           this.renderer.shotFrom(owner, event.x ?? 0, event.z ?? 0);
           this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
         }
-        this.soundAt(event.x ?? 0, event.z ?? 0, (dist) => (def.flame ? this.audio.flame(dist) : this.audio.shot(size, dist)));
+        if (!muffled) this.soundAt(event.x ?? 0, event.z ?? 0, (dist) => (def.flame ? this.audio.flame(dist) : this.audio.shot(size, dist)));
         if (isLocalPlayer) {
           this.renderer.shake(def.shake);
           this.hud.kick(0.25 + def.shake * 0.5);
@@ -806,7 +808,7 @@ export class Game {
       case 'step': {
         // Own steps are played from local input (no network delay).
         const owner = event.ownerId ?? 0;
-        if (owner === this.localId) break;
+        if (owner === this.localId || this.enemyMuffled(owner, event.x ?? 0, event.z ?? 0, 16)) break;
         this.renderer.stepFrom(owner, event.x ?? 0, event.z ?? 0);
         this.noteNoise(owner, event.x ?? 0, event.z ?? 0);
         this.soundAt(event.x ?? 0, event.z ?? 0, (d) => {
@@ -1142,7 +1144,7 @@ export class Game {
         if (event.text === '1') this.hud.banner('КРИПЫ ПОШЛИ', 'Линейные — к своим линиям, диверсант — в лес');
         break;
       case 'tower': {
-        const lane = event.text === '0' ? 'верхней' : 'нижней';
+        const lane = event.text === '0' ? 'верхней' : event.text === '1' ? 'средней' : 'нижней';
         this.hud.banner(ours ? 'БАШНЯ ПОТЕРЯНА' : 'БАШНЯ РАЗРУШЕНА', `${ours ? 'Наша' : 'Вражеская'} башня на ${lane} линии · +${CONFIG.siege.reward.tower} в банк ${ours ? 'врагу' : 'команде'}`);
         this.audio.flashBang(25);
         break;
@@ -1184,9 +1186,54 @@ export class Game {
         this.soundAt(event.x ?? 0, event.z ?? 0, (d) => this.audio.whistle(d));
         if (event.ownerId === this.localId) this.hud.message('ПТУР пошёл', 'good');
         break;
+      case 'camp':
+        if (event.text === 'cleared') {
+          if (event.ownerId === this.localId) this.hud.message(`Лагерь зачищен: +${CONFIG.siege.reward.camp} в банк и граната`, 'good');
+          else if (ours) this.hud.message(`${this.nameOf(event.ownerId)} зачистил лагерь в лесу`, 'good');
+          if (ours) this.audio.powerup();
+        }
+        break;
+      case 'outpost':
+        this.hud.message(ours ? 'Вышка наша: доход и разведка вокруг неё' : 'Враг занял вышку в лесу', ours ? 'good' : 'warn');
+        if (ours) this.audio.powerup();
+        this.renderer.ewPulse(event.x ?? 0, event.z ?? 0, CONFIG.siege.outpost.reveal, ours);
+        break;
+      case 'cache':
+        if (event.ownerId === this.localId) {
+          this.hud.message('Найден спрятанный FPV-дрон — X', 'good');
+          this.audio.pickup();
+        }
+        break;
+      case 'towerUp': {
+        // Own purchases already got their line from the shop.
+        if (!ours || event.ownerId === this.localId) break;
+        const names: Record<string, string> = {
+          mg: 'пулемёт', flame: 'огнемёт', ew: 'РЭБ', sniper: 'снайпер', aa: 'ПВО', armor: 'броня', wire: 'колючий периметр', repair: 'ремонт',
+        };
+        this.hud.message(`${this.nameOf(event.ownerId)}: башня — ${names[event.text ?? ''] ?? event.text}`, 'good');
+        break;
+      }
+      case 'checkpoint':
+        this.hud.banner(`КОНТРОЛЬНАЯ ТОЧКА ${event.text ?? ''}`, `+${CONFIG.convoy.checkpointTime} с на часах`);
+        this.audio.powerup();
+        break;
       default:
         break;
     }
+  }
+
+  /**
+   * «Осада»: on the enemy's side of the river an enemy's shot or step is
+   * heard (and marked) only within a share of its usual reach.
+   */
+  private enemyMuffled(owner: number, x: number, z: number, reach: number): boolean {
+    if (this.matchMode !== 'siege') return false;
+    const self = this.localDisplay();
+    const team = this.localTeam();
+    if (!self || owner === this.localId) return false;
+    const src = this.display.get(owner)?.team ?? -1;
+    if (src < 0 || src === team || !onFarSide(this.sim.map, team, self.x)) return false;
+    return Math.hypot(self.x - x, self.z - z) > reach * CONFIG.siege.farSideHearing;
   }
 
   /** Banners and lines for the new modes' events. */
@@ -1765,7 +1812,16 @@ export class Game {
     this.renderer.syncFlags(flags, this.sim.bases);
     // New modes: marks on the ground and the zone; cargo being carried is not drawn on the floor.
     this.renderer.syncModeMarks(this.sim.modeState.text ? this.sim.modeState : null, this.sim.hotspot ? { ...this.sim.hotspot, r: CONFIG.world.hotspotRadius } : null);
-    if (this.matchMode === 'siege') this.renderer.syncSiege(this.sim.modeState.text ? this.sim.modeState : null);
+    if (this.matchMode === 'siege') {
+      const self = this.localDisplay();
+      this.renderer.syncSiege(this.sim.modeState.text ? this.sim.modeState : null, self && self.alive ? self : null, this.localTeam());
+      // Over the river for the first time: a word on what changes there.
+      const me = this.localDisplay();
+      const far = !!me && me.alive && onFarSide(this.sim.map, this.localTeam(), me.x);
+      if (far && !this.farSideTold) this.hud.message('Вражеский берег: врага слышно только вблизи', 'warn');
+      this.farSideTold ||= far;
+    }
+    if (this.matchMode === 'convoy') this.renderer.syncConvoy(this.sim.modeState.convoy ?? null);
     // Rain: a darker, shorter view and streaks over the screen.
     this.renderer.weather = this.sim.worldEvent.kind;
     this.hud.setWeather(this.sim.worldEvent.kind === 'rain');
@@ -1934,6 +1990,9 @@ export class Game {
     if (chosen >= 0) return chosen;
     return PLAYER_COLORS[(id - 1) % PLAYER_COLORS.length];
   }
+
+  /** «Осада»: told once about hearing on the enemy's side. */
+  private farSideTold = false;
 
   /** «Осада»: own purchases (the repeat rule raises the price for a minute). */
   private siegeBuys: { item: string; at: number }[] = [];
@@ -2358,7 +2417,7 @@ export class Game {
       tierKills: self.tierKills,
       round: this.localRoundState(),
       modeTitle: modeInfo(this.matchMode).title,
-      siege: this.matchMode === 'siege' ? { role: self.srole, lane: self.lane ?? 0, wires: self.wires ?? 0, mortarCd: self.mortarCd ?? 0, aa: self.aa ?? 0, atgm: self.atgm ?? 0 } : undefined,
+      siege: this.matchMode === 'siege' || this.matchMode === 'convoy' ? { role: self.srole, lane: self.lane ?? 0, wires: self.wires ?? 0, mortarCd: self.mortarCd ?? 0, aa: self.aa ?? 0, atgm: self.atgm ?? 0 } : undefined,
     });
 
     // Fog of war applies to the minimap too: only hostiles that are seen,
@@ -2378,7 +2437,7 @@ export class Game {
   }
 
   /** «Осада» on the minimap: every structure (whose, standing or not), and operators exposed for camping. */
-  private siegeMinimap(): { towers: { x: number; z: number; ally: boolean; alive: boolean; throne: boolean }[]; exposed: { x: number; z: number }[] } | null {
+  private siegeMinimap(): SiegeMinimap | null {
     const ms = this.sim.modeState;
     if (this.matchMode !== 'siege' || !ms.towers) return null;
     const team = this.localTeam();
@@ -2386,11 +2445,17 @@ export class Game {
       const p = this.sim.props.find((x) => x.id === t.id);
       return p ? [{ x: p.x, z: p.z, ally: t.team === team, alive: t.hp > 0, throne: !!t.throne }] : [];
     });
-    const exposed = (ms.exposed ?? []).flatMap((id) => {
+    // Operators camping at home, and enemies our outposts see.
+    const exposed = [...(ms.exposed ?? []), ...(ms.scouted?.[team] ?? [])].flatMap((id) => {
       const d = this.display.get(id);
       return d && d.alive && this.isHostile(id) ? [{ x: d.x, z: d.z }] : [];
     });
-    return { towers, exposed };
+    const outposts = (this.sim.map.outposts ?? []).map((o, i) => {
+      const st = ms.outposts?.[i];
+      return { x: o.x, z: o.z, side: !st || st.team < 0 ? 0 : st.team === team ? 1 : -1 };
+    });
+    const camps = (this.sim.map.camps ?? []).filter((_, i) => ((ms.camps ?? 0) >> i) & 1);
+    return { towers, exposed, outposts, camps };
   }
 
   private updatePlates(): void {

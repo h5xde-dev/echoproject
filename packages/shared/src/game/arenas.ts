@@ -35,7 +35,9 @@ import type { WeaponId } from './weapons';
 //   Y bush (no collision; hides whoever keeps quiet in it)
 //   = trench (slows you; crouched in it you are hidden, long shots from the open hit less)
 //   o shell crater (hides you crouched, like a trench)  W barbed wire (slows, cuts; E or a knife cuts it)
-//   & tower  ^ throne  * truck spot («Осада» only)
+//   & tower  ^ throne  * truck spot («Осада»; «Конвой»: the truck's start)
+//   ~ deep water (blocks the way, not shots)  H bridge  % ford (shallow, slow)
+//   ! neutral camp  $ outpost to take  ? hidden FPV cache («Осада» forest)
 
 export const CELL = 1.5;
 
@@ -49,6 +51,11 @@ export interface ArenaInfo {
    * left half plus centre to be mirrored.
    */
   mirror?: boolean;
+  /**
+   * «Конвой»: the truck's road as cells of the left half, from the start to
+   * the centre column; the mirror finishes it to the other end.
+   */
+  route?: [number, number][];
 }
 
 export const ARENAS: ArenaInfo[] = [
@@ -419,46 +426,112 @@ export const ARENAS: ArenaInfo[] = [
 ];
 
 /**
- * «Осада»: the one map of the mode, wider than the rest (left half 30 cells).
- * Blue holds the left, red the right: a base with the throne, two lanes with
- * two towers each along the top and bottom, the forest between them with the
- * truck's spots.
+ * «Осада»: the one map of the mode, the biggest of them all (83 × 49 cells).
+ * Blue holds the left, red the right. Three lanes — top, middle, bottom — with
+ * two towers a side each run from base to base; a river runs down the middle,
+ * crossed by a bridge on every lane and a ford in each forest. The forests
+ * between the lanes hold the truck's spots, neutral camps, outposts to take
+ * and FPV drones hidden in the undergrowth.
  */
 export const SIEGE_ARENA: ArenaInfo = {
   id: 'osada',
   name: 'Осада',
   theme: 'forest',
   rows: [
+    '##########################################',
+    '#..........L.K..........L...........K..~~~',
+    '#..........................o...........HHH',
+    '#...L..............&...........&.......HHH',
+    '#..............o..................o....HHH',
+    '#........................K..........L..~~~',
+    '#........#####..##########..#######..##~~~',
+    '#........#..............L..............~~~',
+    '#.S......#.##....Y............Y......?.~~~',
+    '#........#..........##..o.Y......Y.....~~~',
+    '#........#.Y....!...##............##...~~~',
+    '#........#...Y......##......Y.....##.Y.~~~',
+    '#.....S..#..L.....Y......*..........Y..~~~',
+    '#.....................Y......Y.o.......%%%',
+    '#.............##........Y.......Y...K..%%%',
+    '#........#....##...Y.......###.......Y.~~~',
+    '#.S......#.Y...........Y...###.....Y...~~~',
+    '#........#........o.....$..............~~~',
+    '#....L...#..?..Y......O..............Y.~~~',
+    '#........#..........Y.....Y...*........~~~',
+    '#.+...S..#......Y......................~~~',
+    '#........###..#########..########..####~~~',
+    '#.....K.......K.............L......K...~~~',
+    '#......................o...............HHH',
+    '#...^..L...........&...........&.......HHH',
+    '#................................o.....HHH',
+    '#.....K.....L.............K.......o..L.~~~',
+    '#........####..#########..########..###~~~',
+    '#.O...S..#.............................~~~',
+    '#........#.Y...........##......Y....?..~~~',
+    '#....L...#......Y...L........##........~~~',
+    '#........#...!.....Y.....Y...##......Y.~~~',
+    '#.S......#............*..........Y.....~~~',
+    '#........#.......##.................Y..~~~',
+    '#...........Y....##....Y...Y...o...Y...%%%',
+    '#.............L..##.................K..%%%',
+    '#.....S..#.##........o.......Y.......Y.~~~',
+    '#........#.##..Y........Y........###...~~~',
+    '#........#..........Y......!.....###...~~~',
+    '#........#Y...o..............Y.........~~~',
+    '#.S......#.?......O...Y.........*....Y.~~~',
+    '#........#......Y.........Y...L...Y....~~~',
+    '#........######..#########..#######..##~~~',
+    '#........................K........o.L..~~~',
+    '#...........................o..........HHH',
+    '#...L..............&...........&.......HHH',
+    '#...............o......................HHH',
+    '#..........L.K..........L...........K..~~~',
+    '##########################################',
+  ],
+};
+
+/**
+ * «Конвой»: a town on a winding road. Blue escorts the truck from the left
+ * end to the right; red holds the right and tries to stop or burn it.
+ */
+export const CONVOY_ARENA: ArenaInfo = {
+  id: 'konvoy',
+  name: 'Конвой',
+  theme: 'yard',
+  rows: [
     '###############################',
-    '#S.............................',
-    '#.................K............',
-    '#..L.......&....L....&....L...L',
-    '#.................K............',
-    '#S.............................',
-    '#......#####..####..#####..###.',
-    '#......#..Y......##......Y.....',
-    '#.L....#.Y.Y..#.......Y.....#.Y',
-    '#......#......#...*....Y.Y..#..',
-    '#......#..##.....Y........#....',
-    '#......#..#..o...Y...##........',
-    '#.+....#.......Y.........Y..Y..',
-    '#......#.Y....###...o....Y...Y.',
-    '#..^.....Y........Y...........*',
-    '#......#.Y....###...o....Y...Y.',
-    '#.O....#.......Y.........Y..Y..',
-    '#......#..#..o...Y...##........',
-    '#......#..##.....Y........#....',
-    '#......#......#...*....Y.Y..#..',
-    '#.L....#.Y.Y..#.......Y.....#.Y',
-    '#......#..Y......##......Y.....',
-    '#......#####..####..#####..###.',
-    '#S.............................',
-    '#.................K............',
-    '#..L.......&....L....&....L...L',
-    '#.................K............',
-    '#S.............................',
+    '#..............................',
+    '#.######............Y......####',
+    '#.######..C....K...........####',
+    '#.######.......................',
+    '#.######........Y..............',
+    '#..............................',
+    '#..............................',
+    '#...Y.........L.......L........',
+    '#....####.o....#######.....###.',
+    '#....####......#######.....###.',
+    '#....####......#######.....###.',
+    '#.S.O...K......#######.....###.',
+    '#S....L........###.###....Y###.',
+    '#..........................###.',
+    '#S.*..........C.....K.Y....###.',
+    '#..........................###.',
+    '#S.............###.###.....###.',
+    '#.S.V....K.....#######.....###.',
+    '#...+..........#######.....###.',
+    '#.......###....#######....K....',
+    '#.....Y.###....#######.....K...',
+    '#..L....###Y..........L.....L..',
+    '#.......###..==....V...........',
+    '#.......#.#..==................',
+    '#.#########..==...o............',
+    '#.#########.....######....C....',
+    '#.#########.....######.......Y.',
+    '#.######.....Y..######.........',
+    '#..............................',
     '###############################',
   ],
+  route: [[3, 15], [12, 15], [12, 6], [24, 6], [24, 24], [30, 24]],
 };
 
 const PROP_CHARS: Record<string, PropKind> = {
@@ -485,7 +558,7 @@ export function arenaGrid(info: ArenaInfo): string[] {
 }
 
 export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): MapData {
-  const info = mode === 'siege' ? SIEGE_ARENA : ARENAS.find((a) => a.id === id) ?? ARENAS[0];
+  const info = mode === 'siege' ? SIEGE_ARENA : mode === 'convoy' ? CONVOY_ARENA : ARENAS.find((a) => a.id === id) ?? ARENAS[0];
   const grid = arenaGrid(info);
   const gw = grid[0].length;
   const gh = grid.length;
@@ -495,15 +568,24 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
   const wallCells = new Set<number>();
   const floorCells = new Set<number>();
   const trenchCells = new Set<number>();
+  const waterCells = new Set<number>();
+  const bridgeCells = new Set<number>();
+  const fordCells = new Set<number>();
   const cells = new Uint8Array(gw * gh);
   for (let z = 0; z < gh; z++) {
     for (let x = 0; x < gw; x++) {
-      if (at(x, z) === '#') {
+      const ch = at(x, z);
+      if (ch === '#') {
         wallCells.add(z * gw + x);
         cells[z * gw + x] = 2;
+      } else if (ch === '~') {
+        waterCells.add(z * gw + x);
+        cells[z * gw + x] = 3;
       } else {
         floorCells.add(z * gw + x);
-        if (at(x, z) === '=') trenchCells.add(z * gw + x);
+        if (ch === '=') trenchCells.add(z * gw + x);
+        if (ch === 'H') bridgeCells.add(z * gw + x);
+        if (ch === '%') fordCells.add(z * gw + x);
         cells[z * gw + x] = 1;
       }
     }
@@ -520,6 +602,9 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
   const arenaDoors: ArenaDoorDef[] = [];
   const craters: CraterDef[] = [];
   const truckSpots: { x: number; z: number }[] = [];
+  const camps: { x: number; z: number }[] = [];
+  const outposts: { x: number; z: number }[] = [];
+  const caches: { x: number; z: number }[] = [];
   const seen = new Uint8Array(gw * gh);
 
   for (let z = 0; z < gh; z++) {
@@ -533,6 +618,13 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
       else if (ch === '|' || ch === '-') arenaDoors.push({ ...p, vertical: ch === '|' });
       else if (ch === 'o') craters.push({ ...p, r: 1.25 });
       else if (ch === '*') truckSpots.push(p);
+      else if (ch === '!') camps.push(p);
+      else if (ch === '?') caches.push(p);
+      else if (ch === '$') {
+        outposts.push(p);
+        const def = PROP_TABLE.outpost;
+        props.push({ id: props.length + 1, kind: 'outpost', ...p, hw: def.hw, hh: def.hh, explosive: false, fixed: true, hp: def.hp, room: 0 });
+      }
       else if (ch === '&' || ch === '^') {
         const kind: PropKind = ch === '&' ? 'tower' : 'throne';
         const def = PROP_TABLE[kind];
@@ -607,12 +699,21 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
     theme: info.theme,
   }));
 
-  const trenches: TrenchDef[] = mergeWallCells(trenchCells, gw, gh, CELL).map((b) => ({
-    x0: b.cx - b.hw,
-    z0: b.cz - b.hh,
-    x1: b.cx + b.hw,
-    z1: b.cz + b.hh,
-  }));
+  const rects = (set: Set<number>): TrenchDef[] =>
+    mergeWallCells(set, gw, gh, CELL).map((b) => ({ x0: b.cx - b.hw, z0: b.cz - b.hh, x1: b.cx + b.hw, z1: b.cz + b.hh }));
+  const trenches = rects(trenchCells);
+  const water = waterCells.size ? mergeWallCells(waterCells, gw, gh, CELL) : undefined;
+
+  // «Конвой»: the road from the left half's cells, mirrored to the far end.
+  let route: { x: number; z: number }[] | undefined;
+  if (info.route) {
+    const half = info.route.map(([x, z]) => centre(x, z));
+    const back = info.route
+      .slice(0, -1)
+      .reverse()
+      .map(([x, z]) => centre(gw - 1 - x, z));
+    route = [...half, ...back];
+  }
 
   const maxX = gw * CELL;
   const maxZ = gh * CELL;
@@ -658,6 +759,13 @@ export function buildArena(id: string, seed: number, mode: GameMode = 'dm'): Map
     arenaDoors,
     craters,
     truckSpots: truckSpots.length ? truckSpots : undefined,
+    water,
+    bridges: bridgeCells.size ? rects(bridgeCells) : undefined,
+    fords: fordCells.size ? rects(fordCells) : undefined,
+    camps: camps.length ? camps : undefined,
+    outposts: outposts.length ? outposts : undefined,
+    caches: caches.length ? caches : undefined,
+    route,
     spawns,
     spawnX: spawns[0]?.x ?? maxX / 2,
     spawnZ: spawns[0]?.z ?? maxZ / 2,

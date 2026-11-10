@@ -77,7 +77,8 @@ const SOLO_DESC: Record<GameMode, string> = {
   extract: 'Вынести груз из-под охраны',
   vip: 'Довести VIP или устроить засаду, с ботами',
   zone: 'Одна жизнь против ботов, зона сжимается',
-  siege: '4 на 4: ваша команда ботов против ботов',
+  siege: '5 на 5: ваша команда ботов против ботов',
+  convoy: '4 на 4: эскорт грузовика с ботами против засады',
 };
 
 function selectMode(mode: GameMode): void {
@@ -90,9 +91,10 @@ function selectMode(mode: GameMode): void {
   });
   detailTitle.textContent = info.title;
   detailDesc.textContent = info.desc;
-  // «Осада» has its own map and is always four a side.
-  arenaBox.classList.toggle('hidden', !info.arena || mode === 'siege');
-  fightersRange.closest('.fighters')?.classList.toggle('hidden', mode === 'siege');
+  // «Осада» and «Конвой» have their own maps and fixed sides.
+  const ownMap = mode === 'siege' || mode === 'convoy';
+  arenaBox.classList.toggle('hidden', !info.arena || ownMap);
+  fightersRange.closest('.fighters')?.classList.toggle('hidden', ownMap);
   // Waves bring their own guards: the head count does not apply.
   // Waves and extraction bring their own guards: the head count does not apply.
   const ownGuards = mode === 'waves' || mode === 'extract';

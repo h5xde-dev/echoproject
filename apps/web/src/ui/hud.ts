@@ -591,6 +591,8 @@ export class Hud {
         else if (this.mode === 'vip') me = state.isVip ? ' · ВЫ — VIP: К ТОЧКЕ!' : state.team >= 0 ? ` · ВЫ — ${TEAM_NAMES[state.team]}` : '';
         else if (this.mode === 'extract' && state.carrying >= 0) me = ' · ГРУЗ У ВАС — К ТОЧКЕ';
         else if (this.mode === 'siege' && state.siege?.role) me = siegeLine(state, ms);
+        else if (this.mode === 'convoy' && state.team >= 0)
+          me = state.team === 0 ? ' · ВЫ — ЭСКОРТ: БУДЬТЕ РЯДОМ С ГРУЗОВИКОМ' : ` · ВЫ — ЗАСАДА: НЕ ДАЙТЕ ЕМУ ЕХАТЬ${state.siege?.atgm ? ' · ПТУР (H)' : ''}`;
         this.objectiveEl.textContent = `${ms.text}${ms.t > 0 ? ` ${clock(ms.t)}` : ''}${me}`;
       } else if (this.mode === 'bomb') {
         const r = state.round;
@@ -970,7 +972,7 @@ export class Hud {
     blips: { noise: { x: number; z: number; life: number }[]; marks: { x: number; z: number; life: number }[] } = { noise: [], marks: [] },
     modeState: ModeState | null = null,
     hotspot: { x: number; z: number } | null = null,
-    siege: { towers: { x: number; z: number; ally: boolean; alive: boolean; throne: boolean }[]; exposed: { x: number; z: number }[] } | null = null,
+    siege: SiegeMinimap | null = null,
   ): void {
     const ctx = this.minimapCtx;
     // Drawn in 184 CSS px; the backing store follows the screen density and
@@ -1011,9 +1013,23 @@ export class Hud {
           const v = map.cells[z * map.gridW + x];
           if (v === 1) s.fillStyle = '#1b2029';
           else if (v === 2) s.fillStyle = '#39414f';
+          else if (v === 3) s.fillStyle = '#163a55';
           else continue;
           s.fillRect(ox + x * tile, oy + z * tile, tile + 0.5, tile + 0.5);
         }
+      }
+      // Bridges and fords over the river.
+      s.fillStyle = '#6b5236';
+      for (const t of map.bridges ?? []) s.fillRect(px(t.x0), pz(t.z0), (t.x1 - t.x0) * scale, (t.z1 - t.z0) * scale);
+      s.fillStyle = '#2a5d78';
+      for (const t of map.fords ?? []) s.fillRect(px(t.x0), pz(t.z0), (t.x1 - t.x0) * scale, (t.z1 - t.z0) * scale);
+      // «Конвой»: the road the truck takes.
+      if (map.route && map.route.length > 1) {
+        s.strokeStyle = 'rgba(255, 181, 69, 0.35)';
+        s.lineWidth = 2;
+        s.beginPath();
+        map.route.forEach((p, i) => (i ? s.lineTo(px(p.x), pz(p.z)) : s.moveTo(px(p.x), pz(p.z))));
+        s.stroke();
       }
       // Trenches: dark cuts in the ground.
       s.fillStyle = 'rgba(10, 8, 6, 0.85)';
@@ -1080,6 +1096,22 @@ export class Hud {
         ctx.lineTo(px(tr.x), pz(tr.z) + 5);
         ctx.lineTo(px(tr.x) - 5, pz(tr.z));
         ctx.closePath();
+        ctx.fill();
+      }
+      // Outposts: a triangle in the colour of whoever holds them; camps: a small amber dot.
+      for (const o of siege.outposts) {
+        ctx.fillStyle = o.side > 0 ? '#3fd6c8' : o.side < 0 ? '#e05268' : '#a8a8a8';
+        ctx.beginPath();
+        ctx.moveTo(px(o.x), pz(o.z) - 4);
+        ctx.lineTo(px(o.x) + 3.5, pz(o.z) + 3);
+        ctx.lineTo(px(o.x) - 3.5, pz(o.z) + 3);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(200, 178, 90, 0.85)';
+      for (const c of siege.camps) {
+        ctx.beginPath();
+        ctx.arc(px(c.x), pz(c.z), 2.2, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.strokeStyle = '#ff3a4a';
@@ -1163,14 +1195,23 @@ function must(root: HTMLElement, selector: string): HTMLElement {
 }
 
 /** «Осада»: the local fighter's part of the status line: role, bank, the role's tools. */
+/** «Осада» on the minimap: structures, enemies spotted, outposts (1 ours, -1 theirs, 0 nobody's), camps standing. */
+export interface SiegeMinimap {
+  towers: { x: number; z: number; ally: boolean; alive: boolean; throne: boolean }[];
+  exposed: { x: number; z: number }[];
+  outposts: { x: number; z: number; side: number }[];
+  camps: { x: number; z: number }[];
+}
+
 function siegeLine(state: HudState, ms: ModeState): string {
   const sg = state.siege!;
   const role = sg.role ? SIEGE_ROLES[sg.role].short : '';
   const bank = ms.bank?.[state.team] ?? 0;
-  const lane = sg.role === 'line' ? (sg.lane === 0 ? ' ВЕРХ' : ' НИЗ') : '';
+  const lane = sg.role === 'line' ? (sg.lane === 0 ? ' ВЕРХ' : sg.lane === 1 ? ' ЦЕНТР' : ' НИЗ') : '';
   let tools = '';
   if (sg.role === 'sab') tools = ` · ПРОВОЛОКА ${sg.wires} (N)`;
   if (sg.role === 'op') tools = ` · ДРОНЫ ${state.drones} (X) · МИНОМЁТ ${state.strikes ? (sg.mortarCd > 0 ? `${sg.mortarCd} С` : 'T') : '— (B)'}`;
+  if (sg.role !== 'op' && state.drones > 0) tools += ` · FPV ${state.drones} (X)`;
   if (sg.aa > 0) tools += ' · ПВО (V)';
   if (sg.atgm > 0) tools += ' · ПТУР (H)';
   const buff = ms.buff && state.team >= 0 && ms.buff[state.team * 2] ? ` · ${ms.buff[state.team * 2] === 'reload' ? 'БАШНИ БЫСТРЕЕ' : 'ЩИТ'} ${ms.buff[state.team * 2 + 1]} С` : '';

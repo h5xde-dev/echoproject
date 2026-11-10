@@ -102,7 +102,14 @@ export const MODES: ModeInfo[] = [
     id: 'siege',
     title: 'Осада',
     short: 'ОСАДА',
-    desc: '4 на 4. Две линии башен и Трон, между ними лес. Линейные ведут крипов и ломают башни, диверсант охотится в лесу и берёт грузовик, оператор работает дронами и миномётом. Общий банк команды, магазин — B. Сломайте вражеский Трон.',
+    desc: '5 на 5. Три линии башен и Трон, посередине река с мостами, между линиями лес: лагеря дезертиров, вышки, спрятанные FPV и грузовик. Линейные ведут крипов и ломают башни, диверсант охотится в лесу, оператор работает дронами и миномётом. За рекой врага слышно только вблизи. Общий банк команды, магазин — B. Сломайте вражеский Трон.',
+    arena: true,
+  },
+  {
+    id: 'convoy',
+    title: 'Конвой',
+    short: 'КОНВОЙ',
+    desc: '4 на 4. Синие ведут грузовик по дороге через город: он едет, пока рядом свой и нет врага. Красные держат дорогу и жгут его — у каждого ПТУР (H). Контрольные точки добавляют время. Довезите — или остановите.',
     arena: true,
   },
   {
@@ -132,7 +139,7 @@ export function isCoopMode(mode: GameMode): boolean {
 
 /** Modes fought in two teams. */
 export function isTeamMode(mode: GameMode): boolean {
-  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb' || mode === 'infect' || mode === 'vip' || mode === 'siege';
+  return mode === 'tdm' || mode === 'ctf' || mode === 'bomb' || mode === 'infect' || mode === 'vip' || mode === 'siege' || mode === 'convoy';
 }
 
 /** Modes played in rounds with a freeze, a buy window and money. */
@@ -208,6 +215,11 @@ export const SIEGE_SHOP: SiegeShopEntry[] = [
   { item: 'tw_mg', name: 'Башня: пулемёт', price: 200, role: 'line', note: 'ближайшая своя башня', group: 'team' },
   { item: 'tw_flame', name: 'Башня: огнемёт', price: 250, role: 'line', note: 'ближняя, поджигает', group: 'team' },
   { item: 'tw_ew', name: 'Башня: РЭБ', price: 300, role: 'line', note: 'глушит дроны, подсвечивает лес', group: 'team' },
+  { item: 'tw_sniper', name: 'Башня: снайпер', price: 230, role: 'line', note: 'далеко и больно, сперва по бойцам', group: 'team' },
+  { item: 'tw_aa', name: 'Башня: ПВО', price: 200, role: 'line', note: 'сбивает дроны и мины рядом', group: 'team', from: 60 },
+  { item: 'tw_armor', name: 'Башня: броня', price: 260, role: 'line', note: `+${CONFIG.siege.armorHp} прочности, к любому модулю`, group: 'team' },
+  { item: 'tw_wire', name: 'Башня: колючий периметр', price: 90, note: 'кольцо проволоки вокруг', group: 'team' },
+  { item: 'tw_repair', name: 'Башня: ремонт', price: 160, note: `+${CONFIG.siege.repairHp} ближайшей своей`, group: 'team' },
   { item: 'aa', name: 'Пост ПВО', price: 180, note: 'V: сбивает дроны и мины миномёта', group: 'team', from: 60 },
   { item: 'drone', name: 'FPV-дрон', price: 80, role: 'op', note: 'X, до 2 в запасе', group: 'team', from: 60 },
   { item: 'droneExt', name: 'Батарея дрона +10 с', price: 120, role: 'op', note: '15 → 25 с полёта', group: 'team', from: 60 },

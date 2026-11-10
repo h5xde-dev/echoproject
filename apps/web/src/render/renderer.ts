@@ -6,7 +6,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG, COLORS, TILE } from '@echo/shared/game/config';
-import type { CraterDef, FireZone, FlagState, Flare, FloorRect, GrenadeKind, Interactable, InteractDef, MapData, ModeState, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, StrikeShell, SupplyDrop, TrenchDef } from '@echo/shared/game/types';
+import type { ConvoyState, CraterDef, FireZone, FlagState, Flare, FloorRect, GrenadeKind, Interactable, InteractDef, MapData, ModeState, PowerupKind, PropKind, RoomTheme, SmokeCloud, StaticBody, StrikeShell, SupplyDrop, TrenchDef } from '@echo/shared/game/types';
 import { smokeRadius } from '@echo/shared/game/sim';
 import type { WeaponId } from '@echo/shared/game/weapons';
 import { ActorVisual } from './actors';
@@ -467,6 +467,19 @@ export class Renderer {
     });
 
     if (map.trenches?.length) g.add(trenchMesh(map.trenches));
+    // The river: deep water, bridges on the lanes, shallow fords.
+    if (map.water?.length) g.add(waterVisual(map.water, map.bridges ?? [], map.fords ?? []));
+    // «Конвой»: the road the truck drives.
+    if (map.route && map.route.length > 1) g.add(roadVisual(map.route));
+    // «Осада» forest: the deserters' camps, and FPVs hidden in the undergrowth.
+    for (const c of map.camps ?? []) g.add(campVisual(c.x, c.z));
+    this.cacheVisuals = (map.caches ?? []).map((c) => {
+      const v = cacheVisual();
+      v.position.set(c.x, 0, c.z);
+      v.visible = false;
+      g.add(v);
+      return v;
+    });
 
     // Props: asset models fitted to the collision boxes, primitives otherwise.
     for (const p of map.props) this.addPropVisual(p);
@@ -850,6 +863,13 @@ export class Renderer {
       this.truckGroup = null;
     }
     this.siegeKey = '';
+    this.cacheVisuals = [];
+    this.outpostVisuals.clear();
+    for (const r of this.outpostRings) this.overlay.remove(r);
+    this.outpostRings = [];
+    this.convoyVisual = null;
+    if (this.convoyRing) this.overlay.remove(this.convoyRing);
+    this.convoyRing = null;
     this.ghosts.clear();
     this.propVisuals = [];
     this.doorVisuals = [];
@@ -1261,6 +1281,13 @@ export class Renderer {
 
   /** «Осада»: EW fields around towers, and the truck with its capture circle. */
   private ewRings = new Map<number, THREE.Mesh>();
+  /** «Осада» forest: hidden FPV caches (map order), outposts by position, their capture rings. */
+  private cacheVisuals: THREE.Group[] = [];
+  private outpostVisuals = new Map<string, THREE.Group>();
+  private outpostRings: THREE.Mesh[] = [];
+  /** «Конвой»: the truck's body and the ring of its escort reach. */
+  private convoyVisual: THREE.Group | null = null;
+  private convoyRing: THREE.Mesh | null = null;
   private truckGroup: THREE.Group | null = null;
   private siegeKey = '';
 
@@ -1268,19 +1295,32 @@ export class Renderer {
    * «Осада» each frame: tower heads by their upgrade, EW fields, the throne's
    * shield while it is closed, and the truck with its capture filling up.
    */
-  syncSiege(state: ModeState | null): void {
+  syncSiege(state: ModeState | null, me: { x: number; z: number } | null = null, team = 0): void {
+    this.syncForest(state, me, team);
     const towers = state?.towers ?? [];
-    const key = towers.map((t) => `${t.id}${t.up}${t.hp > 0 ? 1 : 0}${t.open ? 1 : 0}`).join(',');
+    const key = towers.map((t) => `${t.id}${t.up}${t.hp > 0 ? 1 : 0}${t.open ? 1 : 0}${t.armored ? 1 : 0}`).join(',');
     if (key !== this.siegeKey) {
       this.siegeKey = key;
       for (const t of towers) {
         const pv = this.propVisuals.find((v) => v.id === t.id);
         const head = pv?.group.getObjectByName('head') as THREE.Mesh | undefined;
-        if (head) (head.material as THREE.MeshStandardMaterial).color.setHex(t.up === 'mg' ? 0x30353c : t.up === 'flame' ? 0xd2541c : t.up === 'ew' ? 0xd8dde4 : 0x5a5f66);
+        if (head)
+          (head.material as THREE.MeshStandardMaterial).color.setHex(
+            t.up === 'mg' ? 0x30353c : t.up === 'flame' ? 0xd2541c : t.up === 'ew' ? 0xd8dde4 : t.up === 'sniper' ? 0x3e4a32 : t.up === 'aa' ? 0x6a6f4a : 0x5a5f66,
+          );
         const barrel = pv?.group.getObjectByName('barrel');
-        if (barrel) barrel.scale.set(t.up === 'mg' ? 1.5 : t.up === 'flame' ? 0.7 : 1, t.up === 'flame' ? 1.8 : 1, t.up === 'flame' ? 1.8 : 1);
+        if (barrel) {
+          const sx = t.up === 'mg' ? 1.5 : t.up === 'flame' ? 0.7 : t.up === 'sniper' ? 2.1 : 1;
+          const sr = t.up === 'flame' ? 1.8 : t.up === 'sniper' ? 0.6 : 1;
+          barrel.scale.set(sx, sr, sr);
+          barrel.visible = t.up !== 'aa';
+        }
         const antenna = pv?.group.getObjectByName('antenna');
         if (antenna) antenna.visible = t.up === 'ew';
+        const aaGuns = pv?.group.getObjectByName('aaGuns');
+        if (aaGuns) aaGuns.visible = t.up === 'aa';
+        const plates = pv?.group.getObjectByName('plates');
+        if (plates) plates.visible = !!t.armored && t.hp > 0;
         const dome = pv?.group.getObjectByName('dome');
         if (dome) dome.visible = !!t.throne && !t.open && t.hp > 0;
         // The EW field: a faint circle in the tower's colour.
@@ -1308,16 +1348,7 @@ export class Renderer {
     }
     if (!this.truckGroup) {
       const g = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.5, 1.6), new THREE.MeshStandardMaterial({ color: 0x4f5a3a, roughness: 0.85 }));
-      body.position.set(-0.4, 1.0, 0);
-      const cab = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.2, 1.5), new THREE.MeshStandardMaterial({ color: 0x3d4630, roughness: 0.8 }));
-      cab.position.set(1.75, 0.85, 0);
-      const cross = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.3), new THREE.MeshBasicMaterial({ color: 0xe8e8e8, toneMapped: false }));
-      cross.position.set(-0.4, 1.77, 0);
-      const cross2 = cross.clone();
-      cross2.rotation.y = Math.PI / 2;
-      for (const m of [body, cab]) m.castShadow = true;
-      g.add(body, cab, cross, cross2);
+      g.add(truckModel(0x4f5a3a));
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(CONFIG.siege.truckRadius - 0.15, CONFIG.siege.truckRadius, 64).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({ color: 0xffb545, transparent: true, opacity: 0.8, depthTest: false, toneMapped: false }),
@@ -1344,6 +1375,63 @@ export class Renderer {
     (ring.material as THREE.MeshBasicMaterial).color.setHex(color);
     (fill.material as THREE.MeshBasicMaterial).color.setHex(color);
     fill.scale.setScalar(Math.max(0.02, k));
+  }
+
+  /**
+   * «Осада» forest: an outpost's flag in its holder's colour and the capture
+   * ring filling up; hidden FPV caches show only to someone right next to them.
+   */
+  private syncForest(state: ModeState | null, me: { x: number; z: number } | null, team: number): void {
+    const map = this.map;
+    if (!map) return;
+    const seen = CONFIG.siege.cache.seen;
+    this.cacheVisuals.forEach((v, i) => {
+      const there = (((state?.caches ?? 0) >> i) & 1) === 1;
+      v.visible = there && !!me && Math.hypot(me.x - v.position.x, me.z - v.position.z) < seen;
+      if (v.visible) v.rotation.y = this.time * 0.6;
+    });
+    (map.outposts ?? []).forEach((o, i) => {
+      const st = state?.outposts?.[i];
+      const group = this.outpostVisuals.get(`${o.x.toFixed(2)},${o.z.toFixed(2)}`);
+      const flag = group?.getObjectByName('flag') as THREE.Mesh | undefined;
+      const color = !st || st.team < 0 ? 0xcfcfcf : STRUCTURE_COLORS[st.team];
+      if (flag) {
+        (flag.material as THREE.MeshBasicMaterial).color.setHex(color);
+        flag.rotation.y = Math.sin(this.time * 2 + i) * 0.25;
+      }
+      let ring = this.outpostRings[i];
+      if (!ring) {
+        ring = new THREE.Mesh(
+          new THREE.RingGeometry(CONFIG.siege.outpost.radius - 0.12, CONFIG.siege.outpost.radius, 48).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthTest: false, toneMapped: false }),
+        );
+        ring.position.set(o.x, 0.06, o.z);
+        this.overlay.add(ring);
+        this.outpostRings[i] = ring;
+      }
+      // Being taken: the ring in the taker's colour, brighter as it fills.
+      const taking = !!st && st.cap >= 0 && st.k > 0;
+      const mat = ring.material as THREE.MeshBasicMaterial;
+      mat.color.setHex(taking ? STRUCTURE_COLORS[st!.cap] : color);
+      mat.opacity = taking ? 0.35 + st!.k * 0.6 : st && st.team === team ? 0.35 : 0.25;
+    });
+  }
+
+  /** «Конвой»: the truck turned along its road, and the reach of its escort in the colour of what it is doing. */
+  syncConvoy(state: ConvoyState | null): void {
+    const v = this.convoyVisual;
+    if (!v || !state) return;
+    const truck = v.getObjectByName('truck');
+    if (truck) truck.rotation.y = -state.ang;
+    if (!this.convoyRing) {
+      this.convoyRing = new THREE.Mesh(
+        new THREE.RingGeometry(CONFIG.convoy.escort - 0.12, CONFIG.convoy.escort, 64).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: 0xffb545, transparent: true, opacity: 0.45, depthTest: false, toneMapped: false }),
+      );
+      this.overlay.add(this.convoyRing);
+    }
+    this.convoyRing.position.set(state.x, 0.06, state.z);
+    (this.convoyRing.material as THREE.MeshBasicMaterial).color.setHex(state.moving > 0 ? STRUCTURE_COLORS[0] : state.moving < 0 ? STRUCTURE_COLORS[1] : 0xffb545);
   }
 
   /** An EW pulse sweeping out of a tower. */
@@ -1578,6 +1666,14 @@ export class Renderer {
       group.add(wireVisual(p.hw, p.hh));
     } else if (p.kind === 'aa') {
       group.add(airDefenceVisual());
+    } else if (p.kind === 'outpost') {
+      group.add(outpostVisual());
+      this.outpostVisuals.set(`${p.x.toFixed(2)},${p.z.toFixed(2)}`, group);
+    } else if (p.kind === 'convoy') {
+      const truck = truckModel(0x56603e);
+      truck.name = 'truck';
+      group.add(truck);
+      this.convoyVisual = group;
     } else if (p.kind === 'tower' || p.kind === 'throne') {
       const m = this.map;
       const team = m && p.x > (m.minX + m.maxX) / 2 ? 1 : 0;
@@ -2742,11 +2838,27 @@ function structureVisual(kind: 'tower' | 'throne', team: number): THREE.Group {
     antenna.name = 'antenna';
     antenna.position.set(0, 3.6, 0);
     antenna.visible = false;
-    for (const m of [column, head]) {
+    // Air defence: twin barrels pointing at the sky.
+    const aaGuns = new THREE.Group();
+    aaGuns.name = 'aaGuns';
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x24272b, metalness: 0.6, roughness: 0.4 });
+    for (const side of [-0.14, 0.14]) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.2, 8), gunMat);
+      b.rotation.z = team === 1 ? 0.7 : -0.7;
+      b.position.set(team === 1 ? -0.3 : 0.3, 3.2, side);
+      aaGuns.add(b);
+    }
+    aaGuns.visible = false;
+    // Armour plates: a dark steel sleeve around the column.
+    const plates = new THREE.Mesh(new THREE.CylinderGeometry(0.98, 1.06, 1.5, 8), new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.5, metalness: 0.6 }));
+    plates.name = 'plates';
+    plates.position.y = 0.85;
+    plates.visible = false;
+    for (const m of [column, head, plates]) {
       m.castShadow = true;
       m.receiveShadow = true;
     }
-    g.add(column, band, head, barrel, antenna);
+    g.add(column, band, head, barrel, antenna, aaGuns, plates);
   } else {
     const plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.5, 1.3, 8), concrete);
     plinth.position.y = 0.65;
@@ -2779,5 +2891,194 @@ function airDefenceVisual(): THREE.Group {
     g.add(barrel);
   }
   g.traverse((o) => ((o as THREE.Mesh).castShadow = true));
+  return g;
+}
+
+/** An army truck, nose along +x: a covered body, the cab, a white cross on the roof. */
+function truckModel(color: number): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.5, 1.6), new THREE.MeshStandardMaterial({ color, roughness: 0.85 }));
+  body.position.set(-0.4, 1.0, 0);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.2, 1.5), new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.8), roughness: 0.8 }));
+  cab.position.set(1.75, 0.85, 0);
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x8fb4c8, roughness: 0.2, metalness: 0.5 }));
+  glass.position.set(2.31, 1.1, 0);
+  const cross = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.04, 0.3), new THREE.MeshBasicMaterial({ color: 0xe8e8e8, toneMapped: false }));
+  cross.position.set(-0.4, 1.77, 0);
+  const cross2 = cross.clone();
+  cross2.rotation.y = Math.PI / 2;
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x1b1c1e, roughness: 0.9 });
+  const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.3, 12).rotateX(Math.PI / 2);
+  for (const x of [-1.4, 0, 1.75]) {
+    for (const z of [-0.8, 0.8]) {
+      const w = new THREE.Mesh(wheelGeo, wheelMat);
+      w.position.set(x, 0.38, z);
+      g.add(w);
+    }
+  }
+  for (const m of [body, cab]) m.castShadow = true;
+  g.add(body, cab, glass, cross, cross2);
+  return g;
+}
+
+/**
+ * The river: deep water over every water strip, plank bridges with rails
+ * across it on the lanes, and pale shallows at the fords.
+ */
+function waterVisual(water: StaticBody[], bridges: TrenchDef[], fords: TrenchDef[]): THREE.Group {
+  const g = new THREE.Group();
+  const deep: THREE.BufferGeometry[] = [];
+  for (const w of water) {
+    const geo = new THREE.PlaneGeometry(w.hw * 2, w.hh * 2).rotateX(-Math.PI / 2);
+    geo.translate(w.cx, -0.04, w.cz);
+    deep.push(geo);
+  }
+  // Under the bridges and the fords the water goes on.
+  for (const b of [...bridges, ...fords]) {
+    const geo = new THREE.PlaneGeometry(b.x1 - b.x0, b.z1 - b.z0).rotateX(-Math.PI / 2);
+    geo.translate((b.x0 + b.x1) / 2, -0.04, (b.z0 + b.z1) / 2);
+    deep.push(geo);
+  }
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x1d4a66, roughness: 0.12, metalness: 0.35, emissive: 0x06141e });
+  const river = new THREE.Mesh(mergeGeometries(deep), waterMat);
+  river.receiveShadow = true;
+  g.add(river);
+  const wood = new THREE.MeshStandardMaterial({ color: 0x7a5a38, roughness: 0.85 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x4a3622, roughness: 0.9 });
+  for (const b of bridges) {
+    const w = b.x1 - b.x0;
+    const d = b.z1 - b.z0;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.14, d), wood);
+    deck.position.set((b.x0 + b.x1) / 2, 0.03, (b.z0 + b.z1) / 2);
+    deck.receiveShadow = true;
+    g.add(deck);
+    // Planks across, rails along both edges, posts every couple of metres.
+    for (let x = b.x0 + 0.25; x < b.x1; x += 0.5) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, d - 0.1), dark);
+      plank.position.set(x, 0.11, (b.z0 + b.z1) / 2);
+      g.add(plank);
+    }
+    for (const z of [b.z0 + 0.08, b.z1 - 0.08]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.08, 0.1), dark);
+      rail.position.set((b.x0 + b.x1) / 2, 0.85, z);
+      rail.castShadow = true;
+      g.add(rail);
+      for (let x = b.x0 - 0.2; x <= b.x1 + 0.25; x += 1.9) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), dark);
+        post.position.set(x, 0.45, z);
+        post.castShadow = true;
+        g.add(post);
+      }
+    }
+  }
+  const shallow = new THREE.MeshStandardMaterial({ color: 0x4b8aa6, roughness: 0.2, metalness: 0.2, transparent: true, opacity: 0.55, depthWrite: false });
+  const stone = new THREE.MeshStandardMaterial({ color: 0x77736a, roughness: 0.95 });
+  for (const f of fords) {
+    const geo = new THREE.PlaneGeometry(f.x1 - f.x0, f.z1 - f.z0).rotateX(-Math.PI / 2);
+    const m = new THREE.Mesh(geo, shallow);
+    m.position.set((f.x0 + f.x1) / 2, 0.035, (f.z0 + f.z1) / 2);
+    g.add(m);
+    // Stones break the surface here and there.
+    for (let k = 0; k < 6; k++) {
+      const r = 0.15 + ((k * 37) % 10) * 0.02;
+      const st = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), stone);
+      st.position.set(f.x0 + ((k * 0.61 + 0.2) % 1) * (f.x1 - f.x0), 0.05, f.z0 + ((k * 0.37 + 0.15) % 1) * (f.z1 - f.z0));
+      g.add(st);
+    }
+  }
+  return g;
+}
+
+/** «Конвой»: a dirt road along the truck's route. */
+function roadVisual(route: { x: number; z: number }[]): THREE.Mesh {
+  const parts: THREE.BufferGeometry[] = [];
+  const W = 3.2;
+  for (let i = 1; i < route.length; i++) {
+    const a = route[i - 1];
+    const b = route[i];
+    const len = Math.hypot(b.x - a.x, b.z - a.z);
+    const geo = new THREE.PlaneGeometry(len + W, W).rotateX(-Math.PI / 2);
+    geo.rotateY(-Math.atan2(b.z - a.z, b.x - a.x));
+    geo.translate((a.x + b.x) / 2, 0.012, (a.z + b.z) / 2);
+    parts.push(geo);
+  }
+  const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ color: 0x5a4a36, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }));
+  m.receiveShadow = true;
+  return m;
+}
+
+/** A deserters' camp: a fire that never quite goes out, two tents, a few crates. */
+function campVisual(x: number, z: number): THREE.Group {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+  const logMat = new THREE.MeshStandardMaterial({ color: 0x4a3420, roughness: 0.95 });
+  for (let k = 0; k < 3; k++) {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.8, 6), logMat);
+    log.rotation.z = Math.PI / 2;
+    log.rotation.y = (k / 3) * Math.PI;
+    log.position.y = 0.08;
+    g.add(log);
+  }
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.55, 7), new THREE.MeshBasicMaterial({ color: 0xff8a2a, toneMapped: false }));
+  flame.position.y = 0.32;
+  g.add(flame);
+  const tentMat = new THREE.MeshStandardMaterial({ color: 0x5d6142, roughness: 0.95, side: THREE.DoubleSide });
+  for (const [tx, tz, ry] of [[-2.2, -1.1, 0.4], [1.9, 1.5, -0.6]]) {
+    const tent = new THREE.Mesh(new THREE.ConeGeometry(1.1, 1.4, 4, 1, true), tentMat);
+    tent.position.set(tx, 0.7, tz);
+    tent.rotation.y = ry;
+    tent.castShadow = true;
+    g.add(tent);
+  }
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0x6b5a3a, roughness: 0.85 });
+  for (const [cx, cz] of [[1.6, -1.6], [-1.4, 1.8]]) {
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.45, 0.5), crateMat);
+    crate.position.set(cx, 0.22, cz);
+    crate.castShadow = true;
+    g.add(crate);
+  }
+  return g;
+}
+
+/** A hidden FPV: a camouflaged case with a quadcopter on the lid. */
+function cacheVisual(): THREE.Group {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.45), new THREE.MeshStandardMaterial({ color: 0x3f4a2c, roughness: 0.9 }));
+  box.position.y = 0.15;
+  const frame = new THREE.MeshStandardMaterial({ color: 0x1e2022, roughness: 0.5, metalness: 0.5 });
+  const arms = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.05), frame);
+  arms.position.y = 0.34;
+  arms.rotation.y = Math.PI / 4;
+  const arms2 = arms.clone();
+  arms2.rotation.y = -Math.PI / 4;
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 4), new THREE.MeshBasicMaterial({ color: 0x6af0ff, toneMapped: false }));
+  led.position.y = 0.38;
+  g.add(box, arms, arms2, led);
+  return g;
+}
+
+/** «Осада»: a wooden watchtower — four legs, a platform, a roof and a flag in the holder's colour. */
+function outpostVisual(): THREE.Group {
+  const g = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x6b4c2e, roughness: 0.9 });
+  for (const [x, z] of [[-0.6, -0.6], [0.6, -0.6], [-0.6, 0.6], [0.6, 0.6]]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.2, 0.14), wood);
+    leg.position.set(x, 1.6, z);
+    leg.castShadow = true;
+    g.add(leg);
+  }
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.12, 1.6), wood);
+  deck.position.y = 2.6;
+  deck.castShadow = true;
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(1.25, 0.7, 4), new THREE.MeshStandardMaterial({ color: 0x3e3226, roughness: 0.9 }));
+  roof.position.y = 3.55;
+  roof.rotation.y = Math.PI / 4;
+  roof.castShadow = true;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.2, 6), wood);
+  pole.position.set(0, 4.3, 0);
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.4).translate(0.35, 0, 0), new THREE.MeshBasicMaterial({ color: 0xcfcfcf, side: THREE.DoubleSide, toneMapped: false }));
+  flag.name = 'flag';
+  flag.position.set(0, 4.65, 0);
+  g.add(deck, roof, pole, flag);
   return g;
 }

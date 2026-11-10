@@ -63,6 +63,9 @@ export const PROP_TABLE: Record<PropKind, PropSpec> = {
   tower: { hw: 0.9, hh: 0.9, hp: 1600, explosive: false, fixed: true },
   throne: { hw: 1.5, hh: 1.5, hp: 3000, explosive: false, fixed: true },
   aa: { hw: 0.55, hh: 0.55, hp: 250, explosive: false, fixed: true },
+  // «Осада»: a wooden watchtower in the forest; «Конвой»: the truck (moved by the sim).
+  outpost: { hw: 0.8, hh: 0.8, hp: 999, explosive: false, fixed: true },
+  convoy: { hw: 1.3, hh: 1.3, hp: 999, explosive: false, fixed: true },
 };
 
 /** Prop mix per theme: [kind, min, max]. */
