@@ -7,7 +7,7 @@ import type { Difficulty, PlayerClass } from '@echo/shared/game/types';
 export interface Settings {
   /** Master volume, 0..1. */
   volume: number;
-  /** Low: pixel density 1 and no shadows, for weaker machines. */
+  /** Low: pixel density 1, no shadows, no bloom and fewer lights, for weaker machines. */
   quality: 'high' | 'low';
   /** Camera shake on shots and blasts. */
   shake: boolean;

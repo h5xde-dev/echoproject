@@ -173,6 +173,9 @@ export class Hud {
   private lobbyHint: HTMLElement;
   private fps = 60;
   private latency = -1;
+  /** Online: spread of snapshot arrival (ms) and stalls over the last 10 s; -1 offline. */
+  private jitter = -1;
+  private stalls = 0;
   private statsT = 0;
   private flashOverlay: HTMLElement;
   /** Crosshair size from stance and movement, before shot bloom. */
@@ -544,6 +547,11 @@ export class Hud {
     this.statsEl.classList.toggle('hidden', !on);
   }
 
+  setNetJitter(ms: number, stalls: number): void {
+    this.jitter = ms;
+    this.stalls = stalls;
+  }
+
   setLatency(ms: number, via = ''): void {
     this.latency = ms;
     this.latencyEl.textContent = via ? `${ms} мс · ${via}` : `${ms} мс`;
@@ -805,7 +813,10 @@ export class Hud {
     this.statsT -= dt;
     if (this.statsT <= 0) {
       this.statsT = 0.4;
-      this.statsEl.textContent = `${Math.round(this.fps)} FPS${this.latency >= 0 ? ` · ${this.latency} МС` : ''}`;
+      // FPS low: the machine. Ping fine but jitter or stalls high: the connection.
+      const net = this.jitter >= 0 ? ` · ±${this.jitter} МС${this.stalls > 0 ? ` · РЫВКИ ${this.stalls}` : ''}` : '';
+      this.statsEl.textContent = `${Math.round(this.fps)} FPS${this.latency >= 0 ? ` · ${this.latency} МС` : ''}${net}`;
+      this.statsEl.classList.toggle('bad', this.fps < 45 || this.stalls > 2);
     }
     if (this.bannerT > 0) {
       this.bannerT -= dt;

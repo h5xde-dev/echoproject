@@ -126,6 +126,13 @@ export class Renderer {
   private spotlights: { light: THREE.SpotLight; target: THREE.Object3D }[] = [];
   private flashLights: { light: THREE.PointLight; life: number; max: number; peak: number }[] = [];
   private boomLights: { light: THREE.PointLight; life: number; max: number; peak: number }[] = [];
+  /** The pools above at full size; on low quality they use only the first few (see setQuality). */
+  private allLights!: {
+    flash: Renderer['flashLights'];
+    boom: Renderer['boomLights'];
+    lamp: THREE.PointLight[];
+    fire: THREE.PointLight[];
+  };
   private actorVisuals = new Map<number, ActorVisual>();
   private reveal = new Map<number, number>();
   private selfLight: THREE.PointLight;
@@ -211,6 +218,7 @@ export class Renderer {
       this.scene.add(light);
       this.fireLights.push(light);
     }
+    this.allLights = { flash: this.flashLights, boom: this.boomLights, lamp: this.lampPool, fire: this.fireLights };
     for (let i = 0; i < 2; i++) {
       const light = new THREE.SpotLight(0xfff0d6, 0, 34, 0.62, 0.6, 1.2);
       // Both beams need shadows: without one the teammate's light shines
@@ -1855,7 +1863,26 @@ export class Renderer {
 
   setQuality(quality: 'high' | 'low'): void {
     const high = quality === 'high';
-    this.prCap = high ? 1.75 : 1;
+    // Low never raises the density: the slow-frame watch may have set it below 1.
+    this.prCap = high ? 1.75 : Math.min(this.prCap, 1);
+    // Low: no bloom (several full-screen blur passes) and fewer lights. three.js
+    // shades every light on every lit pixel, so each one costs a weak GPU the
+    // whole screen. Hidden lights are not counted; changing the count rebuilds
+    // the shaders once, here, not mid-fight (see the constructor).
+    this.bloom.enabled = high;
+    const all = this.allLights;
+    const keep = <T>(pool: T[], n: number): T[] => (high ? pool : pool.slice(0, n));
+    this.flashLights = keep(all.flash, 1);
+    this.boomLights = keep(all.boom, 1);
+    this.lampPool = keep(all.lamp, 2);
+    this.fireLights = keep(all.fire, 1);
+    const on = new Set<THREE.Light>([...this.flashLights.map((f) => f.light), ...this.boomLights.map((b) => b.light), ...this.lampPool, ...this.fireLights]);
+    for (const light of [...all.flash.map((f) => f.light), ...all.boom.map((b) => b.light), ...all.lamp, ...all.fire]) {
+      light.visible = on.has(light);
+      if (!light.visible) light.intensity = 0;
+    }
+    // A lamp held by a light that is now off is free for the others.
+    for (let k = this.lampPool.length; k < this.lampUsed.length; k++) this.lampUsed[k] = -1;
     if (this.shadowsEnabled !== high) {
       this.shadowsEnabled = high;
       this.renderer.shadowMap.enabled = high;

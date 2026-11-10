@@ -612,6 +612,29 @@ export class Game {
     }
   }
 
+  /** Snapshot timing for the stats counter: spread of arrival times, and stalls. */
+  private jitterMs = 0;
+  private stallTimes: number[] = [];
+  /** Seconds the last frame took (`lastTime` is when it started, in ms). */
+  private lastRaw = 0;
+
+  /**
+   * `lateMs`: how much later than the smoothed clock expects this snapshot
+   * came (negative: early). A stall is one later than the interpolation
+   * buffer: remote players freeze, then jump.
+   *
+   * A snapshot read right after a long frame of ours waited for that frame,
+   * not for the network: not counted, the low FPS already says it.
+   */
+  private noteSnapshotDelay(lateMs: number, nowSec: number): void {
+    if (Math.abs(lateMs) > 500) return; // a resync, not jitter
+    if (this.lastRaw > 0.05 || performance.now() - this.lastTime > 50) return;
+    this.jitterMs += (Math.abs(lateMs) - this.jitterMs) * 0.1;
+    if (lateMs > CONFIG.interpDelayMs) this.stallTimes.push(nowSec);
+    while (this.stallTimes.length && nowSec - this.stallTimes[0] > 10) this.stallTimes.shift();
+    this.hud.setNetJitter(Math.round(this.jitterMs), this.stallTimes.length);
+  }
+
   private onSnapshot(msg: SnapshotMsg): void {
     // «Осада»: creeps come packed; from here on they are actors like the rest.
     if (msg.creeps) for (const c of msg.creeps) msg.actors.push(expandCreep(c));
@@ -622,6 +645,7 @@ export class Game {
     // new samples slowly, so jittery packets do not make remote players jump.
     const nowSec = performance.now() / 1000;
     const sample = msg.time - nowSec;
+    if (this.clockReady) this.noteSnapshotDelay((this.clockOffset - sample) * 1000, nowSec);
     if (!this.clockReady) {
       this.clockOffset = sample;
       this.clockReady = true;
@@ -1342,6 +1366,7 @@ export class Game {
     const raw = (now - this.lastTime) / 1000;
     const dt = Math.min(0.1, raw);
     this.lastTime = now;
+    this.lastRaw = raw;
     this.watchFrameRate(raw);
 
     // While paused the world is frozen: the player reads the menu instead of

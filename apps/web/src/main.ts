@@ -294,7 +294,7 @@ game.onSlowFrames = () => {
     setQuality.value = 'low';
     game.renderer.setQuality('low');
     saveSettings(settings);
-    hud.message('Игра тормозит — тени выключены (вернуть: пауза → Графика)', 'warn');
+    hud.message('Игра тормозит — графика снижена: без теней и свечения (вернуть: пауза → Графика)', 'warn');
   }
 };
 

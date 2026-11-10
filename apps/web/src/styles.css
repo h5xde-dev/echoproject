@@ -1166,6 +1166,7 @@ tr.team-1 > td:nth-child(2) { color: #ff7a6a; }
 
 /* FPS / ping counter under the minimap. */
 .stats-tag { margin-top: 3px; font-size: 9px; letter-spacing: 0.18em; text-align: center; color: var(--ink-dim); font-family: var(--mono); }
+.stats-tag.bad { color: var(--accent-warm); }
 
 /* While dead: who the camera is following. */
 .spectate { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); padding: 6px 14px; font-size: 12px; letter-spacing: 0.22em; color: var(--ink); background: rgba(6, 9, 14, 0.7); border: 1px solid rgba(120, 190, 220, 0.2); opacity: 0; transition: opacity 200ms; pointer-events: none; }
